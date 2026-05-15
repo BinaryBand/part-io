@@ -6,8 +6,8 @@ import math
 from pathlib import Path
 
 from part_io.adapters.audio.matcher import (
-    AudioMatch,
     _HAS_NUMPY,
+    AudioMatch,
     _build_spectral_profile,
     _suppress_overlapping,
     find_audio_sample_matches,

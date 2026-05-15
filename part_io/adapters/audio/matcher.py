@@ -153,7 +153,9 @@ def _normalized_correlation(reference: list[float], window: list[float]) -> floa
     win_norm = _z_normalize(window)
     if not ref_norm or not win_norm:
         return -1.0
-    return sum(left * right for left, right in zip(ref_norm, win_norm, strict=False)) / len(ref_norm)
+    return sum(left * right for left, right in zip(ref_norm, win_norm, strict=False)) / len(
+        ref_norm
+    )
 
 
 def _flatten_features(vectors: list[list[float]]) -> list[float]:

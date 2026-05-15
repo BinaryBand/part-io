@@ -11,7 +11,7 @@ from part_io.adapters.audio.evaluation import evaluate_match_manifest, load_matc
 
 def _write_manifest(manifest_path: Path, indices: list[int]) -> None:
     with manifest_path.open("w", newline="", encoding="utf-8") as manifest_file:
-        writer = DictWriter(manifest_file, fieldnames=["index", "score"]) 
+        writer = DictWriter(manifest_file, fieldnames=["index", "score"])
         writer.writeheader()
         for index in indices:
             writer.writerow({"index": index, "score": 0.9})
