@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from os import getenv
 from pathlib import Path
 from typing import Any, Iterable, cast
 
@@ -29,6 +30,15 @@ def resolve_executable(name: str) -> str:
 
     path = shutil.which(name)
     if not path:
+        if os.name == "nt":
+            win_get_links = Path(getenv("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links"
+            candidate = win_get_links / f"{name}.exe"
+            if candidate.exists():
+                return str(candidate)
+            win_get_root = Path(getenv("LOCALAPPDATA", "")) / "Microsoft" / "WinGet"
+            for found in win_get_root.rglob(f"{name}.exe"):
+                if found.is_file():
+                    return str(found)
         raise FileNotFoundError(f"Executable not found in PATH: {name}")
     return path
 
