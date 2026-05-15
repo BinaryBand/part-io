@@ -115,5 +115,3 @@ rules:
         - /tests/unit/utils/**/*.py
         - "**/tests/unit/utils/**/*.py"
     pattern-regex: ^\s*(from|import|def|class|@|[A-Za-z_][\w]*\s*=)
-
-
