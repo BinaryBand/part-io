@@ -2,8 +2,8 @@
 
 The detector converts both inputs to mono PCM data and compares normalized
 feature sequences over fixed windows. When numpy is available, features are
-multi-band spectral energies; otherwise, it falls back to a scalar energy
-profile while preserving the same API.
+8-band spectral-energy vectors over a 16 kHz analysis stream; otherwise, it
+falls back to a scalar energy profile while preserving the same API.
 """
 
 from __future__ import annotations
@@ -24,9 +24,9 @@ except Exception:  # pragma: no cover - environment dependent import
     _HAS_NUMPY = False
 
 
-_ANALYSIS_RATE = 4000
-_FRAME_SIZE = 1024
-_HOP_SIZE = 512
+_ANALYSIS_RATE = 16000
+_FRAME_SIZE = 2048
+_HOP_SIZE = 1024
 _BAND_COUNT = 8
 
 
@@ -91,7 +91,6 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
 
     This path requires numpy and computes log-spaced bands over each frame.
     """
-    _ = sample_rate
     if not _HAS_NUMPY:
         return _build_scalar_profile(samples, _FRAME_SIZE, _HOP_SIZE)
     if len(samples) < _FRAME_SIZE:
@@ -99,9 +98,9 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
 
     sample_array = np.asarray(samples, dtype=np.float32)
     window = np.hanning(_FRAME_SIZE).astype(np.float32)
-    nyquist = _ANALYSIS_RATE / 2
+    nyquist = sample_rate / 2
     band_edges_hz = np.geomspace(20.0, nyquist, _BAND_COUNT + 1)
-    freq_hz = np.fft.rfftfreq(_FRAME_SIZE, d=1.0 / _ANALYSIS_RATE)
+    freq_hz = np.fft.rfftfreq(_FRAME_SIZE, d=1.0 / sample_rate)
 
     bands: list[np.ndarray] = []
     for left, right in zip(band_edges_hz[:-1], band_edges_hz[1:]):
@@ -114,8 +113,10 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
     profile: list[list[float]] = []
     for index in range(0, len(sample_array) - _FRAME_SIZE + 1, _HOP_SIZE):
         frame = sample_array[index : index + _FRAME_SIZE] * window
-        spectrum = np.abs(np.fft.rfft(frame))
-        vector = [float(np.mean(spectrum[band])) for band in bands]
+        spectrum = np.abs(np.fft.rfft(frame)) ** 2
+        vector = [float(np.log1p(np.mean(spectrum[band]))) for band in bands]
+        norm = float(np.linalg.norm(vector)) or 1.0
+        vector = [value / norm for value in vector]
         profile.append(vector)
 
     return profile
