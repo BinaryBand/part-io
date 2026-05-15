@@ -2,8 +2,9 @@
 
 The detector converts both inputs to mono PCM data and compares normalized
 feature sequences over fixed windows. When numpy is available, features are
-8-band spectral-energy vectors over a 16 kHz analysis stream; otherwise, it
-falls back to a scalar energy profile while preserving the same API.
+32-band spectral-energy vectors concatenated with first-order delta features
+(64 dimensions total) over a 16 kHz analysis stream; otherwise, it falls back
+to a scalar energy profile while preserving the same API.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ except Exception:  # pragma: no cover - environment dependent import
 _ANALYSIS_RATE = 16000
 _FRAME_SIZE = 2048
 _HOP_SIZE = 1024
-_BAND_COUNT = 8
+_BAND_COUNT = 32
 
 
 @dataclass(frozen=True)
@@ -110,15 +111,22 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
             mask = np.array([nearest])
         bands.append(mask)
 
-    profile: list[list[float]] = []
+    raw_bands: list[np.ndarray] = []
     for index in range(0, len(sample_array) - _FRAME_SIZE + 1, _HOP_SIZE):
         frame = sample_array[index : index + _FRAME_SIZE] * window
         spectrum = np.abs(np.fft.rfft(frame)) ** 2
-        vector = [float(np.log1p(np.mean(spectrum[band]))) for band in bands]
+        vector = np.array([np.log1p(np.mean(spectrum[band])) for band in bands], dtype=np.float32)
         norm = float(np.linalg.norm(vector)) or 1.0
-        vector = [value / norm for value in vector]
-        profile.append(vector)
+        raw_bands.append(vector / norm)
 
+    if not raw_bands:
+        return []
+
+    band_matrix = np.stack(raw_bands)  # shape: (n_frames, _BAND_COUNT)
+    deltas = np.diff(band_matrix, axis=0, prepend=band_matrix[:1])
+    features = np.concatenate([band_matrix, deltas], axis=1)  # shape: (n_frames, 2 * _BAND_COUNT)
+
+    profile: list[list[float]] = [row.tolist() for row in features]
     return profile
 
 

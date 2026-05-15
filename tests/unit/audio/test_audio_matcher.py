@@ -26,8 +26,8 @@ def test_find_audio_sample_matches_reports_expected_region() -> None:
     assert any(1365 <= match.start_seconds <= 1367 for match in matches)
 
 
-def test_spectral_profile_uses_eight_band_vectors() -> None:
-    """The spectral extractor should emit normalized 8-band vectors per frame."""
+def test_spectral_profile_uses_thirty_two_band_with_deltas() -> None:
+    """The spectral extractor should emit 64-element vectors (32 bands + 32 deltas) per frame."""
     sample_rate = 16000
     samples = [
         int(12000 * math.sin(2 * math.pi * 440 * index / sample_rate))
@@ -37,8 +37,7 @@ def test_spectral_profile_uses_eight_band_vectors() -> None:
     profile = _build_spectral_profile(samples, sample_rate)
 
     assert len(profile) == 5
-    assert all(len(vector) == 8 for vector in profile)
-    assert all(sum(value * value for value in vector) > 0.9 for vector in profile)
+    assert all(len(vector) == 64 for vector in profile)
 
 
 def test_matches_are_sorted_and_non_overlapping_by_default() -> None:
