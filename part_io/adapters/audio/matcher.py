@@ -1,37 +1,26 @@
 """Audio sample matching helpers built around ffmpeg exports.
 
 The detector converts both inputs to mono PCM data and compares normalized
-feature sequences over fixed windows. When numpy is available, features are
-16-band spectral-energy vectors concatenated with first-order delta features
-(32 dimensions total) over a 16 kHz analysis stream; otherwise, it falls back
-to a scalar energy profile while preserving the same API.
+feature sequences over fixed windows. Features are 32-band spectral-energy
+vectors concatenated with first-order delta features (64 dimensions total)
+over a 16 kHz analysis stream.
 """
 
 from __future__ import annotations
 
-import math
 from array import array
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
-from typing import Any
+
+import numpy as np
 
 from part_io.adapters.process.runner import run_resolved
-
-np: Any
-try:
-    import numpy as _np
-
-    np = _np
-    _HAS_NUMPY = True
-except Exception:  # pragma: no cover - environment dependent import
-    np = None
-    _HAS_NUMPY = False
-
 
 _ANALYSIS_RATE = 16000
 _FRAME_SIZE = 2048
 _HOP_SIZE = 1024
-_BAND_COUNT = 16
+_BAND_COUNT = 32
 
 
 @dataclass(frozen=True)
@@ -76,18 +65,33 @@ def _decode_pcm_mono_16k(source: Path) -> list[int]:
     return list(samples)
 
 
-def _build_scalar_profile(samples: list[int], block_size: int, hop_size: int) -> list[list[float]]:
-    """Build a fallback scalar-energy feature profile."""
-    if block_size <= 0 or hop_size <= 0:
-        raise ValueError("block_size and hop_size must be positive")
-    if len(samples) < block_size:
-        return []
+@cache
+def _build_filterbank_matrix(
+    sample_rate: int,
+    frame_size: int = _FRAME_SIZE,
+    band_count: int = _BAND_COUNT,
+) -> np.ndarray:
+    """Build a cached rectangular filterbank for the analysis FFT bins."""
+    if sample_rate <= 0:
+        raise ValueError("sample_rate must be positive")
 
-    profile: list[list[float]] = []
-    for index in range(0, len(samples) - block_size + 1, hop_size):
-        block = samples[index : index + block_size]
-        profile.append([sum(abs(value) for value in block) / block_size])
-    return profile
+    nyquist = sample_rate / 2
+    band_edges_hz = np.geomspace(20.0, nyquist, band_count + 1)
+    freq_hz = np.fft.rfftfreq(frame_size, d=1.0 / sample_rate)
+
+    filterbank = np.zeros((len(freq_hz), band_count), dtype=np.float32)
+    for band_index, (left, right) in enumerate(
+        zip(band_edges_hz[:-1], band_edges_hz[1:], strict=False)
+    ):
+        band_bins = np.where((freq_hz >= left) & (freq_hz < right))[0]
+        if band_bins.size == 0:
+            nearest = int(np.argmin(np.abs(freq_hz - (left + right) / 2)))
+            filterbank[nearest, band_index] = 1.0
+            continue
+
+        filterbank[band_bins, band_index] = 1.0 / band_bins.size
+
+    return filterbank
 
 
 def _stack_temporal_deltas(base_features: np.ndarray) -> np.ndarray:
@@ -98,32 +102,20 @@ def _stack_temporal_deltas(base_features: np.ndarray) -> np.ndarray:
 def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[float]]:
     """Build a multi-band spectral-energy feature profile.
 
-    This path requires numpy and computes log-spaced bands over each frame.
+    This path computes cached band energies plus first-order deltas.
     """
-    if not _HAS_NUMPY:
-        return _build_scalar_profile(samples, _FRAME_SIZE, _HOP_SIZE)
     if len(samples) < _FRAME_SIZE:
         return []
 
     sample_array = np.asarray(samples, dtype=np.float32)
     window = np.hanning(_FRAME_SIZE).astype(np.float32)
-    nyquist = sample_rate / 2
-    band_edges_hz = np.geomspace(20.0, nyquist, _BAND_COUNT + 1)
-    freq_hz = np.fft.rfftfreq(_FRAME_SIZE, d=1.0 / sample_rate)
-
-    bands: list[np.ndarray] = []
-    for left, right in zip(band_edges_hz[:-1], band_edges_hz[1:], strict=False):
-        mask = np.where((freq_hz >= left) & (freq_hz < right))[0]
-        if mask.size == 0:
-            nearest = int(np.argmin(np.abs(freq_hz - (left + right) / 2)))
-            mask = np.array([nearest])
-        bands.append(mask)
+    filterbank = _build_filterbank_matrix(sample_rate)
 
     raw_bands: list[np.ndarray] = []
     for index in range(0, len(sample_array) - _FRAME_SIZE + 1, _HOP_SIZE):
         frame = sample_array[index : index + _FRAME_SIZE] * window
         spectrum = np.abs(np.fft.rfft(frame)) ** 2
-        vector = np.array([np.log1p(np.mean(spectrum[band])) for band in bands], dtype=np.float32)
+        vector = np.log1p(spectrum @ filterbank).astype(np.float32)
         norm = float(np.linalg.norm(vector)) or 1.0
         raw_bands.append(vector / norm)
 
@@ -137,38 +129,11 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
     return profile
 
 
-def _z_normalize(values: list[float]) -> list[float]:
-    if not values:
-        return []
-    mean = sum(values) / len(values)
-    variance = sum((value - mean) ** 2 for value in values) / len(values)
-    stddev = math.sqrt(variance) or 1.0
-    return [(value - mean) / stddev for value in values]
-
-
-def _normalized_correlation(reference: list[float], window: list[float]) -> float:
-    if not reference or not window or len(reference) != len(window):
+def _normalized_similarity(reference: np.ndarray, window: np.ndarray) -> float:
+    """Compute the mean frame-wise cosine similarity between two feature windows."""
+    if reference.ndim != 2 or window.ndim != 2 or reference.shape != window.shape:
         return -1.0
-    ref_norm = _z_normalize(reference)
-    win_norm = _z_normalize(window)
-    if not ref_norm or not win_norm:
-        return -1.0
-    return sum(left * right for left, right in zip(ref_norm, win_norm, strict=False)) / len(
-        ref_norm
-    )
-
-
-def _flatten_features(vectors: list[list[float]]) -> list[float]:
-    return [value for vector in vectors for value in vector]
-
-
-def _normalized_similarity(reference: list[list[float]], window: list[list[float]]) -> float:
-    """Compute normalized cosine-like similarity on flattened feature sequences."""
-    if not reference or not window or len(reference) != len(window):
-        return -1.0
-    flat_ref = _flatten_features(reference)
-    flat_win = _flatten_features(window)
-    return _normalized_correlation(flat_ref, flat_win)
+    return float(np.mean(np.sum(reference * window, axis=1)))
 
 
 def _overlap_ratio(left: AudioMatch, right: AudioMatch) -> float:
@@ -219,12 +184,14 @@ def find_audio_sample_matches(
     sample_samples = _decode_pcm_mono_16k(sample_path)
 
     sample_rate = _ANALYSIS_RATE
-    reference = _build_spectral_profile(sample_samples, sample_rate)
-    if not reference:
+    reference = np.asarray(_build_spectral_profile(sample_samples, sample_rate), dtype=np.float32)
+    if reference.size == 0:
         return []
 
-    source_profile = _build_spectral_profile(source_samples, sample_rate)
-    if not source_profile:
+    source_profile = np.asarray(
+        _build_spectral_profile(source_samples, sample_rate), dtype=np.float32
+    )
+    if source_profile.size == 0 or source_profile.shape[0] < reference.shape[0]:
         return []
 
     frame_hop_seconds = _HOP_SIZE / sample_rate
@@ -232,19 +199,25 @@ def find_audio_sample_matches(
     matches: list[AudioMatch] = []
     sample_duration = len(sample_samples) / sample_rate
 
-    for start_index in range(0, len(source_profile) - len(reference) + 1, hop):
-        window = source_profile[start_index : start_index + len(reference)]
-        score = _normalized_similarity(reference, window)
+    windowed_profiles = np.lib.stride_tricks.sliding_window_view(
+        source_profile,
+        window_shape=reference.shape[0],
+        axis=0,
+    )
+    windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
+    scores = np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
+
+    for start_index, score in enumerate(scores):
         if score < score_threshold:
             continue
 
-        start_seconds = start_index * frame_hop_seconds
+        start_seconds = start_index * hop * frame_hop_seconds
         matches.append(
             AudioMatch(
                 start_seconds=round(start_seconds, 3),
                 end_seconds=round(start_seconds + sample_duration, 3),
                 duration_seconds=round(sample_duration, 3),
-                score=round(score, 4),
+                score=round(float(score), 4),
             )
         )
 
