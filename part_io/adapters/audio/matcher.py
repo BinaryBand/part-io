@@ -2,8 +2,8 @@
 
 The detector converts both inputs to mono PCM data and compares normalized
 feature sequences over fixed windows. When numpy is available, features are
-32-band spectral-energy vectors concatenated with first-order delta features
-(64 dimensions total) over a 16 kHz analysis stream; otherwise, it falls back
+16-band spectral-energy vectors concatenated with first-order delta features
+(32 dimensions total) over a 16 kHz analysis stream; otherwise, it falls back
 to a scalar energy profile while preserving the same API.
 """
 
@@ -13,12 +13,15 @@ import math
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from part_io.adapters.process.runner import run_resolved
 
+np: Any
 try:
-    import numpy as np
+    import numpy as _np
 
+    np = _np
     _HAS_NUMPY = True
 except Exception:  # pragma: no cover - environment dependent import
     np = None
@@ -28,7 +31,7 @@ except Exception:  # pragma: no cover - environment dependent import
 _ANALYSIS_RATE = 16000
 _FRAME_SIZE = 2048
 _HOP_SIZE = 1024
-_BAND_COUNT = 32
+_BAND_COUNT = 16
 
 
 @dataclass(frozen=True)
@@ -150,7 +153,7 @@ def _normalized_correlation(reference: list[float], window: list[float]) -> floa
     win_norm = _z_normalize(window)
     if not ref_norm or not win_norm:
         return -1.0
-    return sum(left * right for left, right in zip(ref_norm, win_norm)) / len(ref_norm)
+    return sum(left * right for left, right in zip(ref_norm, win_norm, strict=False)) / len(ref_norm)
 
 
 def _flatten_features(vectors: list[list[float]]) -> list[float]:
@@ -193,7 +196,7 @@ def find_audio_sample_matches(
     source_path: Path,
     sample_path: Path,
     score_threshold: float = 0.8,
-    step_seconds: float = 0.05,
+    step_seconds: float = 0.1,
     dedupe_overlap: float = 0.5,
 ) -> list[AudioMatch]:
     """Find likely occurrences of *sample_path* inside *source_path*.

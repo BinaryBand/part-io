@@ -2,47 +2,71 @@
 
 from __future__ import annotations
 
+import json
+from csv import DictWriter
 from pathlib import Path
 
 from part_io.adapters.audio.evaluation import evaluate_match_manifest, load_match_labels
 
-ROOT = Path(__file__).resolve().parents[3]
-_REVIEW = ROOT / "downloads" / "snippets" / "review" / "ep_dorothy_arnold_pt1"
+
+def _write_manifest(manifest_path: Path, indices: list[int]) -> None:
+    with manifest_path.open("w", newline="", encoding="utf-8") as manifest_file:
+        writer = DictWriter(manifest_file, fieldnames=["index", "score"]) 
+        writer.writeheader()
+        for index in indices:
+            writer.writerow({"index": index, "score": 0.9})
 
 
-def test_evaluate_match_manifest_scores_labeled_close_bundle() -> None:
-    """The close bundle should reflect two true positives and nine false positives."""
-    bundle = _REVIEW / "close_high_points"
-    labels = load_match_labels(bundle / "close_high_points_labels.json")
+def _write_labels(label_path: Path, true_indices: list[int]) -> None:
+    label_path.write_text(
+        json.dumps({"true_positive_indices": true_indices}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_evaluate_match_manifest_scores_expected_sets(tmp_path: Path) -> None:
+    """Evaluator should compute TP/FP/FN and precision/recall/f1 from label files."""
+    manifest_path = tmp_path / "matches_manifest.csv"
+    labels_path = tmp_path / "match_labels.json"
+
+    _write_manifest(manifest_path, indices=[1, 2, 3, 4, 5])
+    _write_labels(labels_path, true_indices=[2, 5, 6])
+
+    labels = load_match_labels(labels_path)
     result = evaluate_match_manifest(
-        manifest_path=bundle / "close_high_points_manifest.csv",
+        manifest_path=manifest_path,
         true_positive_indices=labels,
     )
 
-    assert labels == frozenset({1, 2})
-    assert result.predicted_indices == frozenset(range(1, 12))
-    assert result.true_positive_indices == frozenset({1, 2})
-    assert result.false_positive_indices == frozenset({3, 4, 5, 6, 7, 8, 9, 10, 11})
-    assert result.false_negative_indices == frozenset()
-    assert result.precision == 2 / 11
-    assert result.recall == 1.0
-    assert result.f1 == 4 / 13
+    assert labels == frozenset({2, 5, 6})
+    assert result.predicted_indices == frozenset({1, 2, 3, 4, 5})
+    assert result.true_positive_indices == frozenset({2, 5})
+    assert result.false_positive_indices == frozenset({1, 3, 4})
+    assert result.false_negative_indices == frozenset({6})
+    assert result.precision == 2 / 5
+    assert result.recall == 2 / 3
+    assert result.f1 == 4 / 7
 
 
-def test_evaluate_match_manifest_scores_labeled_open_bundle() -> None:
-    """The open bundle should reflect four true positives and four false positives."""
-    bundle = _REVIEW / "open_high_points"
-    labels = load_match_labels(bundle / "open_high_points_labels.json")
+def test_evaluate_match_manifest_handles_empty_predictions(tmp_path: Path) -> None:
+    """Evaluator should return zero precision/recall/f1 when there are no predictions."""
+    manifest_path = tmp_path / "matches_manifest.csv"
+    labels_path = tmp_path / "match_labels.json"
+
+    _write_manifest(manifest_path, indices=[])
+    _write_labels(labels_path, true_indices=[1, 3])
+
+    labels = load_match_labels(labels_path)
     result = evaluate_match_manifest(
-        manifest_path=bundle / "open_high_points_manifest.csv",
+        manifest_path=manifest_path,
         true_positive_indices=labels,
     )
 
-    assert labels == frozenset({1, 2, 6, 7})
-    assert result.predicted_indices == frozenset({1, 2, 3, 4, 5, 6, 7, 8})
-    assert result.true_positive_indices == frozenset({1, 2, 6, 7})
-    assert result.false_positive_indices == frozenset({3, 4, 5, 8})
-    assert result.false_negative_indices == frozenset()
-    assert result.precision == 0.5
-    assert result.recall == 1.0
-    assert result.f1 == 2 / 3
+    assert labels == frozenset({1, 3})
+    assert result.predicted_indices == frozenset()
+    assert result.true_positive_indices == frozenset()
+    assert result.false_positive_indices == frozenset()
+    assert result.false_negative_indices == frozenset({1, 3})
+    assert result.precision == 0.0
+    assert result.recall == 0.0
+    assert result.f1 == 0.0

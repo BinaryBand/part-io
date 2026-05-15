@@ -86,7 +86,9 @@ def _write_manifest(*, bundle_dir: Path, source_path: Path, matches: list[AudioM
     return manifest_path
 
 
-def _write_labels_template(*, bundle_dir: Path, source_path: Path, sample_path: Path, threshold: float) -> Path:
+def _write_labels_template(
+    *, bundle_dir: Path, source_path: Path, sample_path: Path, threshold: float
+) -> Path:
     labels_path = bundle_dir / "match_labels.json"
     payload = {
         "source_path": str(source_path),
@@ -100,7 +102,9 @@ def _write_labels_template(*, bundle_dir: Path, source_path: Path, sample_path: 
     return labels_path
 
 
-def _resolve_bundle_dir(*, output_root: Path, source_path: Path, sample_path: Path, bundle_name: str | None) -> Path:
+def _resolve_bundle_dir(
+    *, output_root: Path, source_path: Path, sample_path: Path, bundle_name: str | None
+) -> Path:
     if bundle_name:
         return output_root / bundle_name
     return output_root / source_path.stem / sample_path.stem
@@ -108,11 +112,15 @@ def _resolve_bundle_dir(*, output_root: Path, source_path: Path, sample_path: Pa
 
 def main() -> None:
     """Generate review clips + manifest for manual labeling."""
-    parser = argparse.ArgumentParser(description="Generate manual review material for audio matches.")
+    parser = argparse.ArgumentParser(
+        description="Generate manual review material for audio matches."
+    )
     parser.add_argument("source", type=Path, help="Longer audio file to scan")
     parser.add_argument("sample", type=Path, help="Reference sample to search for")
     parser.add_argument("--threshold", type=float, default=0.8, help="Match score threshold")
-    parser.add_argument("--step-seconds", type=float, default=0.05, help="Sliding-window step in seconds")
+    parser.add_argument(
+        "--step-seconds", type=float, default=0.1, help="Sliding-window step in seconds"
+    )
     parser.add_argument(
         "--dedupe-overlap",
         type=float,
