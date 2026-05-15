@@ -41,5 +41,3 @@ def test_registry() -> TaskRegistry:
         "ci": ("lint.beta",),
     }
     return TaskRegistry(tasks=tasks, profiles=profiles, default_profile="strict")
-
-

@@ -17,5 +17,3 @@ def _build_cmd(cfg: dict) -> list[str]:
 def main() -> None:
     """Run ruff check or format with settings from config/lint.toml."""
     sys.exit(run_single_tool_entrypoint(run_registered_tool, "ruff"))
-
-

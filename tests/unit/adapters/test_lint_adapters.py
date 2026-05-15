@@ -136,5 +136,3 @@ def test_unified_adapter_handles_command_errors(monkeypatch, tmp_path) -> None:
 
     with pytest.raises(LintProcessError, match="Error running demo"):
         adapter_module.run_linter_adapter("demo", lambda _cfg: ["demo"], config_section="demo")
-
-

@@ -31,5 +31,3 @@ def test_run_registered_tool_maps_boundary_errors_to_two(monkeypatch) -> None:
     )
 
     assert lint_execution.run_registered_tool("ty") == 2
-
-

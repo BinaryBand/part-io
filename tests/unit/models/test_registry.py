@@ -71,5 +71,3 @@ def test_select_tasks_rejects_unknown_task_ids() -> None:
 
     with pytest.raises(ValueError, match="Unknown lint task"):
         select_tasks(registry, ["lint.missing"])
-
-

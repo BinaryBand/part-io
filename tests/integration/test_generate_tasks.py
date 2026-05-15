@@ -109,5 +109,3 @@ def test_main_writes_output(monkeypatch, tmp_path: Path) -> None:
 
     assert output.exists()
     assert "lint.alpha" in output.read_text(encoding="utf-8")
-
-

@@ -8,5 +8,3 @@ from __future__ import annotations
 from part_io.utils.exec import resolve_executable, run_resolved
 
 __all__ = ["resolve_executable", "run_resolved"]
-
-

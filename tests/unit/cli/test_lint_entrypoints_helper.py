@@ -22,5 +22,3 @@ def test_run_multi_tool_entrypoint_stops_on_first_failure() -> None:
 
     assert rc == 3
     assert calls == ["first", "second"]
-
-

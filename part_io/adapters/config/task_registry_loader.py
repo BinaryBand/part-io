@@ -131,5 +131,3 @@ def select_tasks(registry: TaskRegistry, task_ids: list[str]) -> list[TaskSpec]:
 
 
 __all__ = ["DEFAULT_REGISTRY_PATH", "load_registry", "tasks_for_profile", "select_tasks"]
-
-

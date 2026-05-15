@@ -34,5 +34,3 @@ def load_lint_config(
 
 
 __all__ = ["DEFAULT_LINT_CONFIG_PATH", "load_lint_config"]
-
-

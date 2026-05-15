@@ -12,5 +12,3 @@ TasksForProfileFn = Callable[[TaskRegistry, str | None], list[TaskSpec]]
 
 
 __all__ = ["LoadRegistryFn", "SelectTasksFn", "TasksForProfileFn"]
-
-

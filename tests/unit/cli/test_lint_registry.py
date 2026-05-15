@@ -36,5 +36,3 @@ def test_build_tool_cmd_unknown_key_fails_closed() -> None:
 def test_build_tool_cmd_is_still_registry_owned() -> None:
     """Registry should continue to own tool command builders."""
     assert lint_registry.build_tool_cmd("ty", {}) == ["ty", "check"]
-
-

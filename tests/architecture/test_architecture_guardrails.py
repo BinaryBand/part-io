@@ -70,5 +70,3 @@ def test_non_entrypoints_do_not_call_print_or_sys_exit() -> None:
                 and node.func.value.id == "sys"
             ):
                 raise AssertionError(f"{path} calls sys.exit() outside an entrypoint")
-
-

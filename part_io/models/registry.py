@@ -44,5 +44,3 @@ class TaskRegistry(BaseModel):
             if value not in profiles:
                 raise ValueError(f"Unknown default_profile '{value}'")
         return value
-
-

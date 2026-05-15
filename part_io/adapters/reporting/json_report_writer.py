@@ -35,5 +35,3 @@ def write_lint_report(report_path: Path, report: LintRunReport) -> None:
 
 
 __all__ = ["write_lint_report"]
-
-

@@ -245,5 +245,3 @@ def test_clean_removes_common_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert not pytest_cache.exists()
     assert not dist.exists()
     assert not coverage_file.exists()
-
-

@@ -36,5 +36,3 @@ def run_linter_adapter(
     cfg = load_lint_config(tool_name, config_section, config_path=_CONFIG)
     cmd = build_cmd(cfg)
     return run_linter_command(tool_name, cmd)
-
-

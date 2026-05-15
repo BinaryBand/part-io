@@ -11,5 +11,3 @@ WriteLintReportFn = Callable[[Path, LintRunReport], None]
 
 
 __all__ = ["WriteLintReportFn"]
-
-

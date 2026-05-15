@@ -56,5 +56,3 @@ poetry run python -m part_io.cli.lint.cpd
 ## License
 
 MIT. See `LICENSE`.
-
-

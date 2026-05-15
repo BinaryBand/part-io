@@ -84,5 +84,3 @@ def test_run_resolved_builds_command_and_handles_empty(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="empty command"):
         exec_utils.run_resolved([])
-
-

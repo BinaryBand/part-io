@@ -38,5 +38,3 @@ def test_lint_main_wrappers_exit_with_registered_tool_code(
 
     assert exc.value.code == code
     assert seen == expected_keys
-
-

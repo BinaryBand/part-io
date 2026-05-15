@@ -134,5 +134,3 @@ class TestCpd:
             errors="replace",
         )
         assert result.returncode == 0, result.stdout + result.stderr
-
-

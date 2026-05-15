@@ -93,5 +93,3 @@ def write_lint_report_if_requested(
             exit_code=exit_code,
         ),
     )
-
-
