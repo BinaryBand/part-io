@@ -1,0 +1,116 @@
+rules:
+  - id: part_io-root-scaffold-only
+    message: >-
+      Only these top-level packages are allowed directly under part_io/: adapters, cli,
+      models, services, utils. Move this module or update the scaffold policy.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /part_io/**/*.py
+      exclude:
+        - /part_io/adapters/**/*.py
+        - /part_io/cli/**/*.py
+        - /part_io/models/**/*.py
+        - /part_io/services/**/*.py
+        - /part_io/utils/**/*.py
+        - /part_io/__init__.py
+    pattern-regex: ^\s*(from|import|def|class|@|[A-Za-z_][\w]*\s*=)
+
+  - id: part_io-adapters-shape
+    message: >-
+      Keep part_io.adapters limited to the current stable shape: config, lint,
+      process, reporting, errors.py, and package init files.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /part_io/adapters/**/*.py
+      exclude:
+        - /part_io/adapters/__init__.py
+        - /part_io/adapters/errors.py
+        - /part_io/adapters/config/**/*.py
+        - /part_io/adapters/lint/**/*.py
+        - /part_io/adapters/process/**/*.py
+        - /part_io/adapters/reporting/**/*.py
+    pattern-regex: ^\s*(from|import|def|class|@|[A-Za-z_][\w]*\s*=)
+
+  - id: part_io-models-shape
+    message: >-
+      Keep part_io.models limited to the current stable shape: lint.py, registry.py,
+      results.py, ports/, and package init files.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /part_io/models/**/*.py
+      exclude:
+        - /part_io/models/__init__.py
+        - /part_io/models/lint.py
+        - /part_io/models/registry.py
+        - /part_io/models/results.py
+        - /part_io/models/ports/**/*.py
+    pattern-regex: ^\s*(from|import|def|class|@|[A-Za-z_][\w]*\s*=)
+
+  - id: part_io-cli-lint-shape
+    message: >-
+      Keep part_io.cli.lint limited to the current wrapper set plus execution,
+      entrypoints, and registry. Add new tools deliberately.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /part_io/cli/lint/**/*.py
+      exclude:
+        - /part_io/cli/lint/__init__.py
+        - /part_io/cli/lint/cpd.py
+        - /part_io/cli/lint/entrypoints.py
+        - /part_io/cli/lint/execution.py
+        - /part_io/cli/lint/registry.py
+        - /part_io/cli/lint/coverage.py
+        - /part_io/cli/lint/lizard.py
+        - /part_io/cli/lint/ruff.py
+        - /part_io/cli/lint/semgrep.py
+        - /part_io/cli/lint/ty.py
+        - /part_io/cli/lint/vulture.py
+    pattern-regex: ^\s*(from|import|def|class|@|[A-Za-z_][\w]*\s*=)
+
+  - id: part_io-services-shape
+    message: >-
+      Keep part_io.services focused on orchestration modules only; each service
+      should remain a single obvious module path for its concern.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /part_io/services/**/*.py
+      exclude:
+        - /part_io/services/__init__.py
+        - /part_io/services/lint_orchestrator.py
+    pattern-regex: ^\s*(from|import|def|class|@|[A-Za-z_][\w]*\s*=)
+
+  - id: tests-unit-mirror-part_io-top-level-shape
+    message: >-
+      Keep tests/unit aligned with part_io top-level layers only: adapters, cli,
+      models, services, utils. Add a new part_io layer first, then mirror it in
+      tests/unit deliberately.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /tests/unit/**/*.py
+        - "**/tests/unit/**/*.py"
+      exclude:
+        - /tests/unit/adapters/**/*.py
+        - "**/tests/unit/adapters/**/*.py"
+        - /tests/unit/cli/**/*.py
+        - "**/tests/unit/cli/**/*.py"
+        - /tests/unit/models/**/*.py
+        - "**/tests/unit/models/**/*.py"
+        - /tests/unit/services/**/*.py
+        - "**/tests/unit/services/**/*.py"
+        - /tests/unit/utils/**/*.py
+        - "**/tests/unit/utils/**/*.py"
+    pattern-regex: ^\s*(from|import|def|class|@|[A-Za-z_][\w]*\s*=)
+
+

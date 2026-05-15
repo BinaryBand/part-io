@@ -1,0 +1,69 @@
+rules:
+  - id: models-internal-import-boundary
+    message: >-
+      models may only import internal modules from part_io.models.*
+      (external/stdlib imports are ignored by this rule).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /part_io/models/**/*.py
+    patterns:
+      - pattern-regex: ^\s*(from\s+part_io\.|import\s+part_io\.)
+      - pattern-not-regex: ^\s*(from\s+part_io\.models(\.[A-Za-z_][\w]*)*\s+import|import\s+part_io\.models(\.[A-Za-z_][\w]*)*)
+
+  - id: services-internal-import-boundary
+    message: >-
+      services may only import internal modules from part_io.services.* and part_io.models.*
+      (external/stdlib imports are ignored by this rule).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /part_io/services/**/*.py
+    patterns:
+      - pattern-regex: ^\s*(from\s+part_io\.|import\s+part_io\.)
+      - pattern-not-regex: ^\s*(from\s+part_io\.(services|models)(\.[A-Za-z_][\w]*)*\s+import|import\s+part_io\.(services|models)(\.[A-Za-z_][\w]*)*)
+
+  - id: adapters-internal-import-boundary
+    message: >-
+      adapters may only import internal modules from part_io.adapters.*, part_io.models.*, and part_io.utils.*
+      (external/stdlib imports are ignored by this rule).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /part_io/adapters/**/*.py
+    patterns:
+      - pattern-regex: ^\s*(from\s+part_io\.|import\s+part_io\.)
+      - pattern-not-regex: ^\s*(from\s+part_io\.(adapters|models|utils)(\.[A-Za-z_][\w]*)*\s+import|import\s+part_io\.(adapters|models|utils)(\.[A-Za-z_][\w]*)*)
+
+  - id: utils-internal-import-boundary
+    message: >-
+      utils may only import internal modules from part_io.utils.*
+      (external/stdlib imports are ignored by this rule).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /part_io/utils/**/*.py
+    patterns:
+      - pattern-regex: ^\s*(from\s+part_io\.|import\s+part_io\.)
+      - pattern-not-regex: ^\s*(from\s+part_io\.utils(\.[A-Za-z_][\w]*)*\s+import|import\s+part_io\.utils(\.[A-Za-z_][\w]*)*)
+
+  - id: tests-must-not-import-cli-outside-dedicated-cli-tests
+    message: >-
+      Keep part_io.cli imports out of unrelated tests. CLI imports should stay in
+      dedicated CLI-focused test files.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - /tests/**/*.py
+      exclude:
+        - /tests/integration/**/*.py
+        - /tests/unit/cli/**/*.py
+    patterns:
+      - pattern-regex: ^\s*(from\s+part_io\.cli|import\s+part_io\.cli)
+
+

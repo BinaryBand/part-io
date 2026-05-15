@@ -1,0 +1,56 @@
+default_profile = "strict"
+
+[[tasks]]
+target = "lint.coverage"
+module = "part_io.cli.lint.coverage"
+description = "Run pytest --cov with the floor defined in config/lint.toml"
+required = true
+
+[[tasks]]
+target = "lint.cpd"
+module = "part_io.cli.lint.cpd"
+description = "Run jscpd duplicate-code checks against config/jscpd.json"
+required = true
+
+[[tasks]]
+target = "lint.lizard"
+module = "part_io.cli.lint.lizard"
+description = "Run lizard with settings from config/lint.toml"
+required = true
+
+[[tasks]]
+target = "lint.semgrep"
+module = "part_io.cli.lint.semgrep"
+description = "Run semgrep architecture and correctness policies"
+required = true
+
+[[tasks]]
+target = "lint.ty"
+module = "part_io.cli.lint.ty"
+description = "Run ty check and propagate exit code"
+required = true
+
+[[tasks]]
+target = "lint.vulture"
+module = "part_io.cli.lint.vulture"
+description = "Run vulture with settings from config/lint.toml"
+required = true
+
+[[tasks]]
+target = "lint.ruff"
+module = "part_io.cli.lint.ruff"
+description = "Run ruff check or format with settings from config/lint.toml"
+required = true
+
+[profiles]
+strict = [
+    "lint.coverage",
+    "lint.cpd",
+    "lint.lizard",
+    "lint.semgrep",
+    "lint.ty",
+    "lint.vulture",
+    "lint.ruff",
+]
+
+

@@ -1,0 +1,97 @@
+rules:
+  - id: no-direct-subprocess-import-except-in-utils
+    message: >-
+      Direct subprocess imports bypass the safety wrapper. Use part_io.utils.exec
+      or part_io.adapters.process.runner instead.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - "**/*.py"
+      exclude:
+        - "/part_io/utils/exec.py"
+        - "/.venv/**"
+        - "/tests/**"
+    patterns:
+      - pattern-either:
+          - pattern: import subprocess
+          - pattern: from subprocess import $X
+
+  - id: no-eval-exec-compile
+    message: >-
+      eval() / exec() / compile() run arbitrary Python code and are a common
+      injection vector. Replace with a data-driven approach or safe expression
+      parser (e.g. ast.literal_eval for simple data).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - "**/*.py"
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+      - pattern: compile(...)
+      - pattern: __import__(...)
+
+  - id: no-dynamic-importlib
+    message: >-
+      importlib.import_module() with a runtime-constructed name can load
+      arbitrary modules. Prefer a plugin registry with an explicit allowlist of
+      permitted module names.
+    severity: WARNING
+    languages: [python]
+    paths:
+      include:
+        - "**/*.py"
+    pattern: importlib.import_module($NAME)
+
+  - id: no-yaml-load-unsafe
+    message: >-
+      yaml.load() with no explicit SafeLoader allows arbitrary code execution via
+      YAML tags. Use yaml.safe_load() or yaml.load(..., Loader=yaml.SafeLoader).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - "**/*.py"
+    patterns:
+      - pattern: yaml.load($DATA)
+      - pattern-not: yaml.load($DATA, Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load($DATA, Loader=yaml.CSafeLoader)
+
+  - id: no-pickle-unsafe
+    message: >-
+      pickle / marshal / shelve deserialise arbitrary bytecode. Use a safe
+      format (json, tomllib, msgpack) with explicit schema validation instead.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - "**/*.py"
+    pattern-either:
+      - pattern: import pickle
+      - pattern: import marshal
+      - pattern: import shelve
+      - pattern: from pickle import $X
+      - pattern: from marshal import $X
+      - pattern: from shelve import $X
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: marshal.loads(...)
+      - pattern: marshal.load(...)
+
+  - id: no-sys-exit-in-libraries
+    message: >-
+      sys.exit() should only be in CLI entrypoints, not in libraries. Return
+      integer exit codes instead and let entrypoints handle the exit.
+    severity: WARNING
+    languages: [python]
+    paths:
+      include:
+        - "/part_io/models/**/*.py"
+        - "/part_io/services/**/*.py"
+        - "/part_io/adapters/**/*.py"
+        - "/part_io/utils/**/*.py"
+    pattern: sys.exit(...)
+
+
