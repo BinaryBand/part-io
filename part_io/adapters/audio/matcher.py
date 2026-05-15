@@ -129,6 +129,40 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
     return profile
 
 
+def _build_match_candidates(
+    *,
+    reference: np.ndarray,
+    source_profile: np.ndarray,
+    sample_duration: float,
+    frame_hop_seconds: float,
+    hop: int,
+    score_threshold: float,
+) -> list[AudioMatch]:
+    windowed_profiles = np.lib.stride_tricks.sliding_window_view(
+        source_profile,
+        window_shape=reference.shape[0],
+        axis=0,
+    )
+    windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
+    scores = np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
+
+    matches: list[AudioMatch] = []
+    for start_index, score in enumerate(scores):
+        if score < score_threshold:
+            continue
+
+        start_seconds = start_index * hop * frame_hop_seconds
+        matches.append(
+            AudioMatch(
+                start_seconds=round(start_seconds, 3),
+                end_seconds=round(start_seconds + sample_duration, 3),
+                duration_seconds=round(sample_duration, 3),
+                score=round(float(score), 4),
+            )
+        )
+    return matches
+
+
 def _normalized_similarity(reference: np.ndarray, window: np.ndarray) -> float:
     """Compute the mean frame-wise cosine similarity between two feature windows."""
     if reference.ndim != 2 or window.ndim != 2 or reference.shape != window.shape:
@@ -196,30 +230,15 @@ def find_audio_sample_matches(
 
     frame_hop_seconds = _HOP_SIZE / sample_rate
     hop = max(1, int(step_seconds / frame_hop_seconds))
-    matches: list[AudioMatch] = []
     sample_duration = len(sample_samples) / sample_rate
-
-    windowed_profiles = np.lib.stride_tricks.sliding_window_view(
-        source_profile,
-        window_shape=reference.shape[0],
-        axis=0,
+    matches = _build_match_candidates(
+        reference=reference,
+        source_profile=source_profile,
+        sample_duration=sample_duration,
+        frame_hop_seconds=frame_hop_seconds,
+        hop=hop,
+        score_threshold=score_threshold,
     )
-    windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
-    scores = np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
-
-    for start_index, score in enumerate(scores):
-        if score < score_threshold:
-            continue
-
-        start_seconds = start_index * hop * frame_hop_seconds
-        matches.append(
-            AudioMatch(
-                start_seconds=round(start_seconds, 3),
-                end_seconds=round(start_seconds + sample_duration, 3),
-                duration_seconds=round(sample_duration, 3),
-                score=round(float(score), 4),
-            )
-        )
 
     return _suppress_overlapping(matches, min_overlap=dedupe_overlap)
 

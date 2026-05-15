@@ -14,8 +14,7 @@ def test_adapter_coverage_build_cmd() -> None:
     cfg = {"floor": 90}
     cmd = coverage._build_cmd(cfg)
 
-    assert cmd[0] == "poetry"
-    assert "pytest" in cmd
+    assert cmd[:3] == ["python", "-m", "pytest"]
     assert "--cov-fail-under=90" in cmd
 
 

@@ -26,8 +26,8 @@ def get_tool_builder(tool_key: str) -> Builder:
 def _build_coverage_cmd(cfg: dict) -> list[str]:
     floor = cfg.get("floor", 80)
     return [
-        "poetry",
-        "run",
+        "python",
+        "-m",
         "pytest",
         "-q",
         "tests/",

@@ -110,8 +110,7 @@ def _resolve_bundle_dir(
     return output_root / source_path.stem / sample_path.stem
 
 
-def main() -> None:
-    """Generate review clips + manifest for manual labeling."""
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate manual review material for audio matches."
     )
@@ -150,62 +149,94 @@ def main() -> None:
         action="store_true",
         help="Allow writing into an existing bundle directory",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def _validate_args(args: argparse.Namespace) -> None:
     if not args.source.exists():
-        print(f"Source not found: {args.source}", file=sys.stderr)
-        sys.exit(2)
+        raise FileNotFoundError(f"Source not found: {args.source}")
     if not args.sample.exists():
-        print(f"Sample not found: {args.sample}", file=sys.stderr)
-        sys.exit(2)
+        raise FileNotFoundError(f"Sample not found: {args.sample}")
     if args.max_clips < 0:
-        print("--max-clips must be >= 0", file=sys.stderr)
-        sys.exit(2)
+        raise ValueError("--max-clips must be >= 0")
+
+
+def _generate_bundle(
+    *,
+    source_path: Path,
+    sample_path: Path,
+    threshold: float,
+    step_seconds: float,
+    dedupe_overlap: float,
+    max_clips: int,
+    output_root: Path,
+    bundle_name: str | None,
+    overwrite: bool,
+) -> tuple[Path, Path, Path, int, int]:
+    _validate_args(
+        argparse.Namespace(
+            source=source_path,
+            sample=sample_path,
+            max_clips=max_clips,
+        )
+    )
 
     bundle_dir = _resolve_bundle_dir(
-        output_root=args.output_root,
-        source_path=args.source,
-        sample_path=args.sample,
-        bundle_name=args.bundle_name,
+        output_root=output_root,
+        source_path=source_path,
+        sample_path=sample_path,
+        bundle_name=bundle_name,
     )
-    if bundle_dir.exists() and not args.overwrite:
-        print(f"Bundle already exists: {bundle_dir} (use --overwrite)", file=sys.stderr)
-        sys.exit(2)
+    if bundle_dir.exists() and not overwrite:
+        raise ValueError(f"Bundle already exists: {bundle_dir} (use --overwrite)")
 
     bundle_dir.mkdir(parents=True, exist_ok=True)
+    matches = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=threshold,
+        step_seconds=step_seconds,
+        dedupe_overlap=dedupe_overlap,
+    )
+    selected_matches = matches if max_clips == 0 else matches[:max_clips]
+    manifest_path = _write_manifest(
+        bundle_dir=bundle_dir,
+        source_path=source_path,
+        matches=selected_matches,
+    )
+    labels_path = _write_labels_template(
+        bundle_dir=bundle_dir,
+        source_path=source_path,
+        sample_path=sample_path,
+        threshold=threshold,
+    )
+    return bundle_dir, manifest_path, labels_path, len(matches), len(selected_matches)
+
+
+def main() -> None:
+    """Generate review clips + manifest for manual labeling."""
+    parser = _build_parser()
+    args = parser.parse_args()
 
     try:
-        matches = find_audio_sample_matches(
+        _validate_args(args)
+        bundle_dir, manifest_path, labels_path, total_matches, selected_count = _generate_bundle(
             source_path=args.source,
             sample_path=args.sample,
-            score_threshold=args.threshold,
+            threshold=args.threshold,
             step_seconds=args.step_seconds,
             dedupe_overlap=args.dedupe_overlap,
+            max_clips=args.max_clips,
+            output_root=args.output_root,
+            bundle_name=args.bundle_name,
+            overwrite=args.overwrite,
         )
     except (FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(2)
 
-    selected_matches = matches if args.max_clips == 0 else matches[: args.max_clips]
-
-    try:
-        manifest_path = _write_manifest(
-            bundle_dir=bundle_dir,
-            source_path=args.source,
-            matches=selected_matches,
-        )
-        labels_path = _write_labels_template(
-            bundle_dir=bundle_dir,
-            source_path=args.source,
-            sample_path=args.sample,
-            threshold=args.threshold,
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        sys.exit(2)
-
     print(f"Bundle: {bundle_dir}")
-    print(f"Exported clips: {len(selected_matches)} (from {len(matches)} total matches)")
+    print(f"Exported clips: {selected_count} (from {total_matches} total matches)")
     print(f"Manifest: {manifest_path}")
     print(f"Labels template: {labels_path}")
 

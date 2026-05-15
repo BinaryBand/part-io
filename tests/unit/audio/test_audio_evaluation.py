@@ -45,7 +45,7 @@ def test_evaluate_match_manifest_scores_expected_sets(tmp_path: Path) -> None:
     assert result.false_negative_indices == frozenset({6})
     assert result.precision == 2 / 5
     assert result.recall == 2 / 3
-    assert result.f1 == 4 / 7
+    assert result.f1 == 0.5
 
 
 def test_evaluate_match_manifest_handles_empty_predictions(tmp_path: Path) -> None:

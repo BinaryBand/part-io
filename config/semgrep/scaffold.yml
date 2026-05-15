@@ -20,7 +20,7 @@ rules:
   - id: part_io-adapters-shape
     message: >-
       Keep part_io.adapters limited to the current stable shape: config, lint,
-      process, reporting, errors.py, and package init files.
+      process, reporting, audio, errors.py, and package init files.
     severity: ERROR
     languages: [python]
     paths:
@@ -29,6 +29,7 @@ rules:
       exclude:
         - /part_io/adapters/__init__.py
         - /part_io/adapters/errors.py
+        - /part_io/adapters/audio/**/*.py
         - /part_io/adapters/config/**/*.py
         - /part_io/adapters/lint/**/*.py
         - /part_io/adapters/process/**/*.py
@@ -92,8 +93,8 @@ rules:
   - id: tests-unit-mirror-part_io-top-level-shape
     message: >-
       Keep tests/unit aligned with part_io top-level layers only: adapters, cli,
-      models, services, utils. Add a new part_io layer first, then mirror it in
-      tests/unit deliberately.
+      models, services, utils, and the audio adapter test slice. Add a new
+      part_io layer first, then mirror it in tests/unit deliberately.
     severity: ERROR
     languages: [python]
     paths:
@@ -103,6 +104,8 @@ rules:
       exclude:
         - /tests/unit/adapters/**/*.py
         - "**/tests/unit/adapters/**/*.py"
+        - /tests/unit/audio/**/*.py
+        - "**/tests/unit/audio/**/*.py"
         - /tests/unit/cli/**/*.py
         - "**/tests/unit/cli/**/*.py"
         - /tests/unit/models/**/*.py
