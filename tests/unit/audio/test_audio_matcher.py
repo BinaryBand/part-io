@@ -49,7 +49,7 @@ def test_matches_are_sorted_and_non_overlapping_by_default() -> None:
 
     starts = [match.start_seconds for match in matches]
     assert starts == sorted(starts)
-    for left, right in zip(matches, matches[1:]):
+    for left, right in zip(matches, matches[1:], strict=False):
         assert right.start_seconds >= left.end_seconds or left.end_seconds - right.start_seconds < (
             0.5 * min(left.duration_seconds, right.duration_seconds)
         )

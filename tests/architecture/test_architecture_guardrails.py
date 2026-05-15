@@ -10,6 +10,7 @@ ENTRYPOINT_PATHS = {
     ROOT / "part_io" / "cli" / "tasks.py",
     ROOT / "part_io" / "cli" / "generate" / "tasks.py",
     ROOT / "part_io" / "cli" / "audio_search.py",
+    ROOT / "part_io" / "cli" / "audio_review.py",
 }
 ENTRYPOINT_DIRS = {
     ROOT / "part_io" / "cli" / "lint",

@@ -87,6 +87,11 @@ def _build_scalar_profile(samples: list[int], block_size: int, hop_size: int) ->
     return profile
 
 
+def _stack_temporal_deltas(base_features: np.ndarray) -> np.ndarray:
+    deltas = np.diff(base_features, axis=0, prepend=base_features[:1])
+    return np.concatenate([base_features, deltas], axis=1)
+
+
 def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[float]]:
     """Build a multi-band spectral-energy feature profile.
 
@@ -104,7 +109,7 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
     freq_hz = np.fft.rfftfreq(_FRAME_SIZE, d=1.0 / sample_rate)
 
     bands: list[np.ndarray] = []
-    for left, right in zip(band_edges_hz[:-1], band_edges_hz[1:]):
+    for left, right in zip(band_edges_hz[:-1], band_edges_hz[1:], strict=False):
         mask = np.where((freq_hz >= left) & (freq_hz < right))[0]
         if mask.size == 0:
             nearest = int(np.argmin(np.abs(freq_hz - (left + right) / 2)))
@@ -122,9 +127,8 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
     if not raw_bands:
         return []
 
-    band_matrix = np.stack(raw_bands)  # shape: (n_frames, _BAND_COUNT)
-    deltas = np.diff(band_matrix, axis=0, prepend=band_matrix[:1])
-    features = np.concatenate([band_matrix, deltas], axis=1)  # shape: (n_frames, 2 * _BAND_COUNT)
+    band_matrix = np.stack(raw_bands)
+    features = _stack_temporal_deltas(band_matrix)
 
     profile: list[list[float]] = [row.tolist() for row in features]
     return profile
