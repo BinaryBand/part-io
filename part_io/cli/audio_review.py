@@ -10,11 +10,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import sys
 from pathlib import Path
 
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 from part_io.adapters.process.runner import run_resolved
+from part_io.utils.cli import (
+    add_audio_sample_arguments,
+    add_review_export_arguments,
+)
 
 
 def _format_clip_name(index: int, match: AudioMatch) -> str:
@@ -114,9 +117,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate manual review material for audio matches."
     )
-    parser.add_argument("source", type=Path, help="Longer audio file to scan")
-    parser.add_argument("sample", type=Path, help="Reference sample to search for")
-    parser.add_argument("--threshold", type=float, default=0.8, help="Match score threshold")
+    add_audio_sample_arguments(parser)
     parser.add_argument(
         "--step-seconds", type=float, default=0.1, help="Sliding-window step in seconds"
     )
@@ -126,28 +127,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0.5,
         help="Suppress overlapping matches above this ratio",
     )
-    parser.add_argument(
-        "--max-clips",
-        type=int,
-        default=25,
-        help="Maximum number of top-scored matches to export (0 means all)",
-    )
-    parser.add_argument(
-        "--output-root",
-        type=Path,
-        default=Path("downloads") / "review",
-        help="Root folder where review bundles are written",
-    )
+    add_review_export_arguments(parser)
     parser.add_argument(
         "--bundle-name",
         type=str,
         default=None,
         help="Optional bundle directory name under output root",
-    )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Allow writing into an existing bundle directory",
     )
     return parser
 
@@ -232,8 +217,7 @@ def main() -> None:
             overwrite=args.overwrite,
         )
     except (FileNotFoundError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        sys.exit(2)
+        parser.exit(2, f"{exc}\n")
 
     print(f"Bundle: {bundle_dir}")
     print(f"Exported clips: {selected_count} (from {total_matches} total matches)")

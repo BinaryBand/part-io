@@ -178,6 +178,39 @@ def test_main_dispatches_run_cmd(monkeypatch, argv: list[str], expected: list[st
     assert seen == [expected]
 
 
+def test_main_dispatches_audio_review_batch_with_passthrough_args(monkeypatch) -> None:
+    """Audio review batch command should forward remaining args to batch module."""
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str]) -> int:
+        seen.append(cmd)
+        return 0
+
+    monkeypatch.setattr(tasks_cli, "_run_cmd", fake_run)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "part_io-tasks",
+            "audio-review-batch",
+            "--threshold",
+            "0.9",
+            "--overwrite",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        tasks_cli.main()
+
+    assert exc.value.code == 0
+    assert len(seen) == 1
+    assert seen[0][:3] == [
+        tasks_cli.sys.executable,
+        "-m",
+        "part_io.cli.audio_review_batch",
+    ]
+    assert seen[0][3:] == ["--threshold", "0.9", "--overwrite"]
+
+
 def test_main_help_command(monkeypatch) -> None:
     """Help command should print help and return normally."""
     called = {"help": False}

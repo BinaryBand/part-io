@@ -48,6 +48,7 @@ def _print_help() -> None:
     print("  help            Show this message")
     print("  install         Install development dependencies via poetry")
     print("  test            Run pytest")
+    print("  audio-review-batch  Run batch audio review generation")
     print("  generate-tasks  Regenerate config/generated.mk")
     print("  check-tasks     Verify config/generated.mk is current")
     print("  lint            Run declared lint tasks")
@@ -155,6 +156,7 @@ def main() -> None:
     sub.add_parser("help")
     sub.add_parser("install")
     sub.add_parser("test")
+    sub.add_parser("audio-review-batch")
     generate = sub.add_parser("generate-tasks")
     generate.add_argument("--profile", help="Registry profile to generate task targets for")
 
@@ -168,7 +170,10 @@ def main() -> None:
 
     sub.add_parser("clean")
 
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+
+    if args.command != "audio-review-batch" and extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
     if args.command == "help":
         _print_help()
@@ -177,6 +182,17 @@ def main() -> None:
         sys.exit(_run_cmd(["poetry", "install", "--with", "dev"]))
     if args.command == "test":
         sys.exit(_run_cmd(["poetry", "run", "pytest"]))
+    if args.command == "audio-review-batch":
+        sys.exit(
+            _run_cmd(
+                [
+                    sys.executable,
+                    "-m",
+                    "part_io.cli.audio_review_batch",
+                    *extra,
+                ]
+            )
+        )
     if args.command == "generate-tasks":
         sys.exit(_run_generate_tasks(args.profile))
     if args.command == "check-tasks":
