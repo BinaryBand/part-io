@@ -38,3 +38,22 @@ def add_review_export_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Allow writing into an existing bundle directory",
     )
+
+
+def add_alignment_refinement_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add alignment refinement flags shared by audio review CLIs."""
+    parser.add_argument(
+        "--refine",
+        action="store_true",
+        help="Refine coarse matches via finer-grained local search",
+    )
+    parser.add_argument(
+        "--onset-anchor",
+        action="store_true",
+        help="Shift match start to first significant energy onset (Phase 2)",
+    )
+    parser.add_argument(
+        "--precise",
+        action="store_true",
+        help="Refine alignment via waveform cross-correlation (Phase 3, slow)",
+    )

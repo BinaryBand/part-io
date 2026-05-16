@@ -33,9 +33,23 @@ class AudioMatch:
     score: float
 
 
+def _run_pcm_decode(command: list[str]) -> list[int]:
+    """Execute an ffmpeg PCM decode *command* and return signed 16-bit samples."""
+    result = run_resolved(command, capture_output=True)
+    if result.returncode != 0:
+        return []
+    raw = getattr(result, "stdout", b"")
+    if not isinstance(raw, (bytes, bytearray)) or not raw:
+        return []
+    samples = array("h")
+    samples.frombytes(raw)
+    return list(samples)
+
+
+@cache
 def _decode_pcm_mono_16k(source: Path) -> list[int]:
     """Decode *source* to signed 16-bit PCM samples at a low analysis rate."""
-    result = run_resolved(
+    samples = _run_pcm_decode(
         [
             "ffmpeg",
             "-hide_banner",
@@ -50,19 +64,43 @@ def _decode_pcm_mono_16k(source: Path) -> list[int]:
             "-f",
             "s16le",
             "pipe:1",
-        ],
-        capture_output=True,
+        ]
     )
-    if result.returncode != 0:
+    if not samples:
         raise ValueError(f"ffmpeg failed to decode audio: {source}")
+    return samples
 
-    raw = getattr(result, "stdout", b"")
-    if not isinstance(raw, (bytes, bytearray)) or not raw:
-        raise ValueError(f"No decoded audio produced for: {source}")
 
-    samples = array("h")
-    samples.frombytes(raw)
-    return list(samples)
+def _decode_pcm_mono_16k_window(
+    source: Path,
+    start_seconds: float,
+    end_seconds: float,
+) -> list[int]:
+    """Decode a time-bounded window of *source* to signed 16-bit PCM at 16 kHz."""
+    duration = max(0.0, end_seconds - start_seconds)
+    if duration <= 0:
+        return []
+    return _run_pcm_decode(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{start_seconds:.3f}",
+            "-t",
+            f"{duration:.3f}",
+            "-i",
+            str(source),
+            "-ac",
+            "1",
+            "-ar",
+            str(_ANALYSIS_RATE),
+            "-f",
+            "s16le",
+            "pipe:1",
+        ]
+    )
 
 
 @cache
@@ -137,6 +175,7 @@ def _build_match_candidates(
     frame_hop_seconds: float,
     hop: int,
     score_threshold: float,
+    frame_offset_seconds: float = 0.0,
 ) -> list[AudioMatch]:
     windowed_profiles = np.lib.stride_tricks.sliding_window_view(
         source_profile,
@@ -151,7 +190,7 @@ def _build_match_candidates(
         if score < score_threshold:
             continue
 
-        start_seconds = start_index * hop * frame_hop_seconds
+        start_seconds = frame_offset_seconds + start_index * hop * frame_hop_seconds
         matches.append(
             AudioMatch(
                 start_seconds=round(start_seconds, 3),
@@ -199,11 +238,17 @@ def find_audio_sample_matches(
     score_threshold: float = 0.8,
     step_seconds: float = 0.1,
     dedupe_overlap: float = 0.5,
+    search_start_seconds: float | None = None,
+    search_end_seconds: float | None = None,
 ) -> list[AudioMatch]:
     """Find likely occurrences of *sample_path* inside *source_path*.
 
     The matcher works on short energy fingerprints, which is enough for a first
     deterministic pass and keeps the implementation dependency-light.
+
+    When *search_start_seconds* and *search_end_seconds* are both provided only
+    that slice of the source is decoded and profiled, which is much cheaper for
+    local refinement searches over a small window.
     """
     if not source_path.exists():
         raise FileNotFoundError(source_path)
@@ -214,7 +259,16 @@ def find_audio_sample_matches(
     if not 0 <= dedupe_overlap <= 1:
         raise ValueError("dedupe_overlap must be in [0, 1]")
 
-    source_samples = _decode_pcm_mono_16k(source_path)
+    use_window = search_start_seconds is not None and search_end_seconds is not None
+    if use_window:
+        source_samples = _decode_pcm_mono_16k_window(
+            source_path, search_start_seconds, search_end_seconds  # type: ignore[arg-type]
+        )
+        frame_offset_seconds = search_start_seconds or 0.0
+    else:
+        source_samples = _decode_pcm_mono_16k(source_path)
+        frame_offset_seconds = 0.0
+
     sample_samples = _decode_pcm_mono_16k(sample_path)
 
     sample_rate = _ANALYSIS_RATE
@@ -238,9 +292,111 @@ def find_audio_sample_matches(
         frame_hop_seconds=frame_hop_seconds,
         hop=hop,
         score_threshold=score_threshold,
+        frame_offset_seconds=frame_offset_seconds,
     )
 
     return _suppress_overlapping(matches, min_overlap=dedupe_overlap)
 
 
-__all__ = ["AudioMatch", "find_audio_sample_matches", "_suppress_overlapping"]
+def _shift_match(match: AudioMatch, new_start_seconds: float) -> AudioMatch:
+    """Return a copy of *match* with start_seconds set to *new_start_seconds*."""
+    start = round(new_start_seconds, 3)
+    return AudioMatch(
+        start_seconds=start,
+        end_seconds=round(start + match.duration_seconds, 3),
+        duration_seconds=match.duration_seconds,
+        score=match.score,
+    )
+
+
+def anchor_to_onset(
+    *,
+    match: AudioMatch,
+    source_path: Path,
+    onset_energy_ratio: float = 0.20,
+    smoothing_window: int = 400,
+) -> AudioMatch:
+    """Shift *match* start_seconds to the first significant energy onset.
+
+    Extracts raw PCM for the matched window, builds a smoothed absolute-value
+    energy envelope, and finds the first sample whose energy exceeds
+    ``onset_energy_ratio * peak_energy``.  Returns the original match
+    unchanged when the window is empty or no clear onset is detected.
+    """
+    window_samples = _decode_pcm_mono_16k_window(
+        source_path, match.start_seconds, match.end_seconds
+    )
+    if not window_samples:
+        return match
+
+    arr = np.abs(np.asarray(window_samples, dtype=np.float32))
+    kernel_size = max(1, min(smoothing_window, len(arr)))
+    kernel = np.ones(kernel_size, dtype=np.float32) / kernel_size
+    envelope = np.convolve(arr, kernel, mode="same")
+
+    peak_energy = float(envelope.max())
+    if peak_energy <= 0:
+        return match
+
+    threshold = onset_energy_ratio * peak_energy
+    onset_indices = np.where(envelope >= threshold)[0]
+    if not onset_indices.size:
+        return match
+
+    offset_seconds = int(onset_indices[0]) / _ANALYSIS_RATE
+    return _shift_match(match, match.start_seconds + offset_seconds)
+
+
+def cross_correlate_align(
+    *,
+    match: AudioMatch,
+    source_path: Path,
+    sample_path: Path,
+    padding_seconds: float = 2.0,
+) -> AudioMatch:
+    """Refine alignment via waveform cross-correlation (Phase 3 --precise).
+
+    Extracts raw PCM for the candidate region (with padding) and the
+    reference sample, computes the normalised cross-correlation, and shifts
+    ``start_seconds`` by the lag that maximises correlation.  Returns the
+    original match unchanged when PCM extraction fails or signals are silent.
+    """
+    window_start = max(0.0, match.start_seconds - padding_seconds)
+    window_end = match.end_seconds + padding_seconds
+    source_window = _decode_pcm_mono_16k_window(source_path, window_start, window_end)
+    sample_pcm = _decode_pcm_mono_16k(sample_path)
+
+    if not source_window or not sample_pcm:
+        return match
+
+    source_arr = np.asarray(source_window, dtype=np.float32)
+    sample_arr = np.asarray(sample_pcm, dtype=np.float32)
+
+    src_norm = float(np.linalg.norm(source_arr))
+    smp_norm = float(np.linalg.norm(sample_arr))
+    if src_norm == 0 or smp_norm == 0:
+        return match
+
+    source_arr = source_arr / src_norm
+    sample_arr = sample_arr / smp_norm
+
+    # O(N log N) cross-correlation via FFT
+    n = len(source_arr) + len(sample_arr) - 1
+    fft_size = 1 << (n - 1).bit_length()  # next power of two
+    src_fft = np.fft.rfft(source_arr, n=fft_size)
+    smp_fft = np.fft.rfft(sample_arr, n=fft_size)
+    corr = np.fft.irfft(src_fft * np.conj(smp_fft), n=fft_size)[:n]
+    peak_index = int(np.argmax(corr))
+    # lag > 0  →  sample starts lag samples into the source window
+    lag_samples = peak_index - (len(sample_arr) - 1)
+    lag_seconds = lag_samples / _ANALYSIS_RATE
+    return _shift_match(match, max(0.0, window_start + lag_seconds))
+
+
+__all__ = [
+    "AudioMatch",
+    "find_audio_sample_matches",
+    "anchor_to_onset",
+    "cross_correlate_align",
+    "_suppress_overlapping",
+]

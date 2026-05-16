@@ -12,9 +12,15 @@ import csv
 import json
 from pathlib import Path
 
-from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
+from part_io.adapters.audio.matcher import (
+    AudioMatch,
+    anchor_to_onset,
+    cross_correlate_align,
+    find_audio_sample_matches,
+)
 from part_io.adapters.process.runner import run_resolved
 from part_io.utils.cli import (
+    add_alignment_refinement_arguments,
     add_audio_sample_arguments,
     add_review_export_arguments,
 )
@@ -34,30 +40,23 @@ def _refine_match(
     Searches around the coarse winner within ±refine_window_seconds at finer
     resolution (refine_step_seconds). Returns best refined match from finer scan.
     """
-    # Define search window around coarse match center
     window_start = max(0.0, coarse_match.start_seconds - refine_window_seconds)
     window_end = coarse_match.start_seconds + coarse_match.duration_seconds + refine_window_seconds
 
-    # Run finer scan within window; use lower threshold to not filter refinement candidates
     candidates = find_audio_sample_matches(
         source_path=source_path,
         sample_path=sample_path,
-        score_threshold=min(
-            threshold, coarse_match.score * 0.9
-        ),  # Allow slight score drop in refinement
+        score_threshold=min(threshold, coarse_match.score * 0.9),
         step_seconds=refine_step_seconds,
         dedupe_overlap=0.5,
+        search_start_seconds=window_start,
+        search_end_seconds=window_end,
     )
 
-    # Filter to candidates within window
-    windowed = [m for m in candidates if window_start <= m.start_seconds <= window_end]
-
-    # Return best from finer scan, or coarse match if no refinement found
-    if not windowed:
+    if not candidates:
         return coarse_match
 
-    refined = max(windowed, key=lambda m: m.score)
-    return refined
+    return max(candidates, key=lambda m: m.score)
 
 
 def _format_clip_name(index: int, match: AudioMatch) -> str:
@@ -174,11 +173,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional bundle directory name under output root",
     )
-    parser.add_argument(
-        "--refine",
-        action="store_true",
-        help="Refine coarse matches via finer-grained local search",
-    )
+    add_alignment_refinement_arguments(parser)
     return parser
 
 
@@ -199,6 +194,8 @@ def _find_and_refine_matches(
     step_seconds: float,
     dedupe_overlap: float,
     refine: bool = False,
+    onset_anchor: bool = False,
+    precise: bool = False,
 ) -> list[AudioMatch]:
     """Find matches and optionally refine them."""
     matches = find_audio_sample_matches(
@@ -218,6 +215,17 @@ def _find_and_refine_matches(
             )
             for match in matches
         ]
+    if onset_anchor:
+        matches = [anchor_to_onset(match=match, source_path=source_path) for match in matches]
+    if precise:
+        matches = [
+            cross_correlate_align(
+                match=match,
+                source_path=source_path,
+                sample_path=sample_path,
+            )
+            for match in matches
+        ]
     return matches
 
 
@@ -233,6 +241,8 @@ def _generate_bundle(
     bundle_name: str | None,
     overwrite: bool,
     refine: bool = False,
+    onset_anchor: bool = False,
+    precise: bool = False,
 ) -> tuple[Path, Path, Path, int, int]:
     _validate_args(
         argparse.Namespace(
@@ -259,6 +269,8 @@ def _generate_bundle(
         step_seconds=step_seconds,
         dedupe_overlap=dedupe_overlap,
         refine=refine,
+        onset_anchor=onset_anchor,
+        precise=precise,
     )
 
     ranked_matches = sorted(matches, key=lambda match: match.score, reverse=True)
@@ -295,6 +307,8 @@ def main() -> None:
             bundle_name=args.bundle_name,
             overwrite=args.overwrite,
             refine=args.refine,
+            onset_anchor=args.onset_anchor,
+            precise=args.precise,
         )
     except (FileNotFoundError, ValueError) as exc:
         parser.exit(2, f"{exc}\n")

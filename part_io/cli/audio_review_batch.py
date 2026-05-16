@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from part_io.adapters.process.runner import run_resolved
-from part_io.utils.cli import add_review_export_arguments
+from part_io.utils.cli import add_alignment_refinement_arguments, add_review_export_arguments
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -41,10 +43,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="{base}/{kind}_high_points",
         help="Bundle naming pattern, e.g. '{base}/{kind}_high_points'",
     )
+    add_alignment_refinement_arguments(parser)
     parser.add_argument(
-        "--refine",
-        action="store_true",
-        help="Refine coarse matches via finer-grained local search",
+        "--workers",
+        type=int,
+        default=min(2, os.cpu_count() or 1),
+        help="Number of parallel subprocess workers (default: min(2, cpu_count))",
     )
     return parser
 
@@ -64,6 +68,8 @@ def _run_one(
     bundle_name: str,
     overwrite: bool,
     refine: bool = False,
+    onset_anchor: bool = False,
+    precise: bool = False,
 ) -> int:
     command = [
         sys.executable,
@@ -86,8 +92,15 @@ def _run_one(
         command.append("--overwrite")
     if refine:
         command.append("--refine")
+    if onset_anchor:
+        command.append("--onset-anchor")
+    if precise:
+        command.append("--precise")
 
-    result = run_resolved(command)
+    result = run_resolved(command, capture_output=True)
+    if result.returncode != 0 and result.stderr:
+        sys.stderr.buffer.write(result.stderr)
+        sys.stderr.flush()
     return int(result.returncode)
 
 
@@ -114,38 +127,50 @@ def main() -> None:
     if not media_files:
         parser.exit(2, f"No .mp3 files found in media directory: {args.media_dir}\n")
 
+    jobs = []
     for source_file in media_files:
         base_name = source_file.stem
-
         close_bundle = args.bundle_pattern.format(base=base_name, kind="close")
-        close_exit = _run_one(
-            source_file=source_file,
-            sample_path=close_sample_path,
-            threshold=args.threshold,
-            step_seconds=args.step_seconds,
-            max_clips=args.max_clips,
-            output_root=args.output_root,
-            bundle_name=close_bundle,
-            overwrite=args.overwrite,
-            refine=args.refine,
-        )
-        if close_exit != 0:
-            raise SystemExit(close_exit)
-
         open_bundle = args.bundle_pattern.format(base=base_name, kind="open")
-        open_exit = _run_one(
-            source_file=source_file,
-            sample_path=open_sample_path,
-            threshold=args.threshold,
-            step_seconds=args.step_seconds,
-            max_clips=args.max_clips,
-            output_root=args.output_root,
-            bundle_name=open_bundle,
-            overwrite=args.overwrite,
-            refine=args.refine,
-        )
-        if open_exit != 0:
-            raise SystemExit(open_exit)
+        jobs.append((source_file, close_sample_path, close_bundle))
+        jobs.append((source_file, open_sample_path, open_bundle))
+
+    common_kwargs = {
+        "threshold": args.threshold,
+        "step_seconds": args.step_seconds,
+        "max_clips": args.max_clips,
+        "output_root": args.output_root,
+        "overwrite": args.overwrite,
+        "refine": args.refine,
+        "onset_anchor": args.onset_anchor,
+        "precise": args.precise,
+    }
+
+    total = len(jobs)
+    print(f"Processing {total} bundles across {args.workers} worker(s)...", flush=True)
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {
+            pool.submit(
+                _run_one,
+                source_file=sf,
+                sample_path=sp,
+                bundle_name=bn,
+                **common_kwargs,
+            ): bn
+            for sf, sp, bn in jobs
+        }
+        done = 0
+        for future in as_completed(futures):
+            bundle_name = futures[future]
+            exit_code = future.result()
+            done += 1
+            if exit_code != 0:
+                print(f"[{done}/{total}] FAILED {bundle_name}", flush=True)
+                for pending in futures:
+                    pending.cancel()
+                raise SystemExit(exit_code)
+            print(f"[{done}/{total}] done  {bundle_name}", flush=True)
 
 
 if __name__ == "__main__":
