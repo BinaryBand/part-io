@@ -191,6 +191,36 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-clips must be >= 0")
 
 
+def _find_and_refine_matches(
+    *,
+    source_path: Path,
+    sample_path: Path,
+    threshold: float,
+    step_seconds: float,
+    dedupe_overlap: float,
+    refine: bool = False,
+) -> list[AudioMatch]:
+    """Find matches and optionally refine them."""
+    matches = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=threshold,
+        step_seconds=step_seconds,
+        dedupe_overlap=dedupe_overlap,
+    )
+    if refine:
+        matches = [
+            _refine_match(
+                coarse_match=match,
+                source_path=source_path,
+                sample_path=sample_path,
+                threshold=threshold,
+            )
+            for match in matches
+        ]
+    return matches
+
+
 def _generate_bundle(
     *,
     source_path: Path,
@@ -222,25 +252,14 @@ def _generate_bundle(
         raise ValueError(f"Bundle already exists: {bundle_dir} (use --overwrite)")
 
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    matches = find_audio_sample_matches(
+    matches = _find_and_refine_matches(
         source_path=source_path,
         sample_path=sample_path,
-        score_threshold=threshold,
+        threshold=threshold,
         step_seconds=step_seconds,
         dedupe_overlap=dedupe_overlap,
+        refine=refine,
     )
-
-    # Optionally refine each match via finer-grained local search
-    if refine:
-        matches = [
-            _refine_match(
-                coarse_match=match,
-                source_path=source_path,
-                sample_path=sample_path,
-                threshold=threshold,
-            )
-            for match in matches
-        ]
 
     ranked_matches = sorted(matches, key=lambda match: match.score, reverse=True)
     selected_matches = ranked_matches if max_clips == 0 else ranked_matches[:max_clips]
