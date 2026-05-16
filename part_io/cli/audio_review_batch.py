@@ -104,11 +104,7 @@ def _run_one(
     return int(result.returncode)
 
 
-def main() -> None:
-    """Run batch audio review generation across all source files in media dir."""
-    parser = _build_parser()
-    args = parser.parse_args()
-
+def _validate_batch_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.max_clips < 0:
         parser.exit(2, "--max-clips must be >= 0\n")
 
@@ -123,40 +119,70 @@ def main() -> None:
     if not open_sample_path.exists():
         parser.exit(2, f"Open sample not found: {open_sample_path}\n")
 
-    media_files = _iter_media_files(args.media_dir)
-    if not media_files:
-        parser.exit(2, f"No .mp3 files found in media directory: {args.media_dir}\n")
 
-    jobs = []
+def _build_batch_jobs(
+    *,
+    media_files: list[Path],
+    close_sample_path: Path,
+    open_sample_path: Path,
+    bundle_pattern: str,
+) -> list[tuple[Path, Path, str]]:
+    jobs: list[tuple[Path, Path, str]] = []
     for source_file in media_files:
         base_name = source_file.stem
-        close_bundle = args.bundle_pattern.format(base=base_name, kind="close")
-        open_bundle = args.bundle_pattern.format(base=base_name, kind="open")
-        jobs.append((source_file, close_sample_path, close_bundle))
-        jobs.append((source_file, open_sample_path, open_bundle))
+        jobs.append(
+            (
+                source_file,
+                close_sample_path,
+                bundle_pattern.format(base=base_name, kind="close"),
+            )
+        )
+        jobs.append(
+            (
+                source_file,
+                open_sample_path,
+                bundle_pattern.format(base=base_name, kind="open"),
+            )
+        )
+    return jobs
 
-    common_kwargs = {
-        "threshold": args.threshold,
-        "step_seconds": args.step_seconds,
-        "max_clips": args.max_clips,
-        "output_root": args.output_root,
-        "overwrite": args.overwrite,
-        "refine": args.refine,
-        "onset_anchor": args.onset_anchor,
-        "precise": args.precise,
-    }
 
+def _emit_progress(message: str) -> None:
+    sys.stderr.write(message + "\n")
+    sys.stderr.flush()
+
+
+def _run_batch_jobs(
+    *,
+    jobs: list[tuple[Path, Path, str]],
+    workers: int,
+    threshold: float,
+    step_seconds: float,
+    max_clips: int,
+    output_root: Path,
+    overwrite: bool,
+    refine: bool,
+    onset_anchor: bool,
+    precise: bool,
+) -> None:
     total = len(jobs)
-    print(f"Processing {total} bundles across {args.workers} worker(s)...", flush=True)
+    _emit_progress(f"Processing {total} bundles across {workers} worker(s)...")
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
                 _run_one,
                 source_file=sf,
                 sample_path=sp,
                 bundle_name=bn,
-                **common_kwargs,
+                threshold=threshold,
+                step_seconds=step_seconds,
+                max_clips=max_clips,
+                output_root=output_root,
+                overwrite=overwrite,
+                refine=refine,
+                onset_anchor=onset_anchor,
+                precise=precise,
             ): bn
             for sf, sp, bn in jobs
         }
@@ -166,11 +192,46 @@ def main() -> None:
             exit_code = future.result()
             done += 1
             if exit_code != 0:
-                print(f"[{done}/{total}] FAILED {bundle_name}", flush=True)
+                _emit_progress(f"[{done}/{total}] FAILED {bundle_name}")
                 for pending in futures:
                     pending.cancel()
                 raise SystemExit(exit_code)
-            print(f"[{done}/{total}] done  {bundle_name}", flush=True)
+            _emit_progress(f"[{done}/{total}] done  {bundle_name}")
+
+
+def main() -> None:
+    """Run batch audio review generation across all source files in media dir."""
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    _validate_batch_args(parser, args)
+
+    close_sample_path = args.snippets_dir / args.close_sample
+    open_sample_path = args.snippets_dir / args.open_sample
+
+    media_files = _iter_media_files(args.media_dir)
+    if not media_files:
+        parser.exit(2, f"No .mp3 files found in media directory: {args.media_dir}\n")
+
+    jobs = _build_batch_jobs(
+        media_files=media_files,
+        close_sample_path=close_sample_path,
+        open_sample_path=open_sample_path,
+        bundle_pattern=args.bundle_pattern,
+    )
+
+    _run_batch_jobs(
+        jobs=jobs,
+        workers=args.workers,
+        threshold=args.threshold,
+        step_seconds=args.step_seconds,
+        max_clips=args.max_clips,
+        output_root=args.output_root,
+        overwrite=args.overwrite,
+        refine=args.refine,
+        onset_anchor=args.onset_anchor,
+        precise=args.precise,
+    )
 
 
 if __name__ == "__main__":

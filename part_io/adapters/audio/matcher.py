@@ -242,6 +242,56 @@ def _get_source_profile(source_path: Path) -> np.ndarray:
     return np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
 
 
+def _validate_match_search_inputs(
+    source_path: Path,
+    sample_path: Path,
+    step_seconds: float,
+    dedupe_overlap: float,
+) -> None:
+    if not source_path.exists():
+        raise FileNotFoundError(source_path)
+    if not sample_path.exists():
+        raise FileNotFoundError(sample_path)
+    if step_seconds <= 0:
+        raise ValueError("step_seconds must be positive")
+    if not 0 <= dedupe_overlap <= 1:
+        raise ValueError("dedupe_overlap must be in [0, 1]")
+
+
+def _prepare_match_search(
+    *,
+    source_path: Path,
+    sample_path: Path,
+    search_start_seconds: float | None,
+    search_end_seconds: float | None,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    sample_samples = _decode_pcm_mono_16k(sample_path)
+    sample_rate = _ANALYSIS_RATE
+    reference = np.asarray(_build_spectral_profile(sample_samples, sample_rate), dtype=np.float32)
+    if reference.size == 0:
+        return reference, np.asarray([], dtype=np.float32), sample_rate, 0.0
+
+    full_profile = _get_source_profile(source_path)
+    if full_profile.size == 0 or full_profile.shape[0] < reference.shape[0]:
+        return reference, np.asarray([], dtype=np.float32), sample_rate, 0.0
+
+    frame_hop_seconds = _HOP_SIZE / sample_rate
+    if search_start_seconds is not None and search_end_seconds is not None:
+        start_frame = max(0, int(search_start_seconds / frame_hop_seconds))
+        end_frame = min(
+            full_profile.shape[0],
+            int(search_end_seconds / frame_hop_seconds) + reference.shape[0],
+        )
+        source_profile = full_profile[start_frame:end_frame]
+        frame_offset_seconds = start_frame * frame_hop_seconds
+    else:
+        source_profile = full_profile
+        frame_offset_seconds = 0.0
+
+    sample_duration = len(sample_samples) / sample_rate
+    return reference, source_profile, sample_duration, frame_offset_seconds
+
+
 def find_audio_sample_matches(
     *,
     source_path: Path,
@@ -262,47 +312,23 @@ def find_audio_sample_matches(
     boundaries) but only the relevant frame slice is scored, which is much
     cheaper for local refinement searches.
     """
-    if not source_path.exists():
-        raise FileNotFoundError(source_path)
-    if not sample_path.exists():
-        raise FileNotFoundError(sample_path)
-    if step_seconds <= 0:
-        raise ValueError("step_seconds must be positive")
-    if not 0 <= dedupe_overlap <= 1:
-        raise ValueError("dedupe_overlap must be in [0, 1]")
+    _validate_match_search_inputs(source_path, sample_path, step_seconds, dedupe_overlap)
 
-    sample_samples = _decode_pcm_mono_16k(sample_path)
-    sample_rate = _ANALYSIS_RATE
-    reference = np.asarray(_build_spectral_profile(sample_samples, sample_rate), dtype=np.float32)
-    if reference.size == 0:
+    reference, source_profile, sample_duration, frame_offset_seconds = _prepare_match_search(
+        source_path=source_path,
+        sample_path=sample_path,
+        search_start_seconds=search_start_seconds,
+        search_end_seconds=search_end_seconds,
+    )
+    if reference.size == 0 or source_profile.size == 0:
         return []
-
-    full_profile = _get_source_profile(source_path)
-    if full_profile.size == 0 or full_profile.shape[0] < reference.shape[0]:
-        return []
-
-    frame_hop_seconds = _HOP_SIZE / sample_rate
-
-    # Clip to the requested window at the frame level.  Using the full profile
-    # preserves delta-feature context at the boundary frames, so scores are
-    # identical to a full-source scan for matches within the window.
-    if search_start_seconds is not None and search_end_seconds is not None:
-        start_frame = max(0, int(search_start_seconds / frame_hop_seconds))
-        end_frame = min(
-            full_profile.shape[0],
-            int(search_end_seconds / frame_hop_seconds) + reference.shape[0],
-        )
-        source_profile = full_profile[start_frame:end_frame]
-        frame_offset_seconds = start_frame * frame_hop_seconds
-    else:
-        source_profile = full_profile
-        frame_offset_seconds = 0.0
 
     if source_profile.shape[0] < reference.shape[0]:
         return []
 
+    sample_rate = _ANALYSIS_RATE
+    frame_hop_seconds = _HOP_SIZE / sample_rate
     hop = max(1, int(step_seconds / frame_hop_seconds))
-    sample_duration = len(sample_samples) / sample_rate
     matches = _build_match_candidates(
         reference=reference,
         source_profile=source_profile,
