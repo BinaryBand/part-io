@@ -14,6 +14,7 @@ from pathlib import Path
 
 from part_io.adapters.audio.matcher import (
     AudioMatch,
+    _suppress_overlapping,
     anchor_to_onset,
     cross_correlate_align,
     find_audio_sample_matches,
@@ -215,8 +216,10 @@ def _find_and_refine_matches(
             )
             for match in matches
         ]
+        matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
     if onset_anchor:
         matches = [anchor_to_onset(match=match, source_path=source_path) for match in matches]
+        matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
     if precise:
         matches = [
             cross_correlate_align(
@@ -226,6 +229,7 @@ def _find_and_refine_matches(
             )
             for match in matches
         ]
+        matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
     return matches
 
 

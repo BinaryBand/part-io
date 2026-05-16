@@ -231,6 +231,17 @@ def _suppress_overlapping(matches: list[AudioMatch], min_overlap: float = 0.5) -
     return sorted(kept, key=lambda item: item.start_seconds)
 
 
+@cache
+def _get_source_profile(source_path: Path) -> np.ndarray:
+    """Build and cache the full spectral profile for *source_path*.
+
+    Caching ensures the coarse pass and every subsequent refine call share the
+    same profile array, avoiding redundant ffmpeg decodes and FFT work.
+    """
+    samples = _decode_pcm_mono_16k(source_path)
+    return np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
+
+
 def find_audio_sample_matches(
     *,
     source_path: Path,
@@ -246,9 +257,10 @@ def find_audio_sample_matches(
     The matcher works on short energy fingerprints, which is enough for a first
     deterministic pass and keeps the implementation dependency-light.
 
-    When *search_start_seconds* and *search_end_seconds* are both provided only
-    that slice of the source is decoded and profiled, which is much cheaper for
-    local refinement searches over a small window.
+    When *search_start_seconds* and *search_end_seconds* are both provided the
+    full source profile is still used (preserving delta-feature accuracy at
+    boundaries) but only the relevant frame slice is scored, which is much
+    cheaper for local refinement searches.
     """
     if not source_path.exists():
         raise FileNotFoundError(source_path)
@@ -259,30 +271,36 @@ def find_audio_sample_matches(
     if not 0 <= dedupe_overlap <= 1:
         raise ValueError("dedupe_overlap must be in [0, 1]")
 
-    use_window = search_start_seconds is not None and search_end_seconds is not None
-    if use_window:
-        source_samples = _decode_pcm_mono_16k_window(
-            source_path, search_start_seconds, search_end_seconds  # type: ignore[arg-type]
-        )
-        frame_offset_seconds = search_start_seconds or 0.0
-    else:
-        source_samples = _decode_pcm_mono_16k(source_path)
-        frame_offset_seconds = 0.0
-
     sample_samples = _decode_pcm_mono_16k(sample_path)
-
     sample_rate = _ANALYSIS_RATE
     reference = np.asarray(_build_spectral_profile(sample_samples, sample_rate), dtype=np.float32)
     if reference.size == 0:
         return []
 
-    source_profile = np.asarray(
-        _build_spectral_profile(source_samples, sample_rate), dtype=np.float32
-    )
-    if source_profile.size == 0 or source_profile.shape[0] < reference.shape[0]:
+    full_profile = _get_source_profile(source_path)
+    if full_profile.size == 0 or full_profile.shape[0] < reference.shape[0]:
         return []
 
     frame_hop_seconds = _HOP_SIZE / sample_rate
+
+    # Clip to the requested window at the frame level.  Using the full profile
+    # preserves delta-feature context at the boundary frames, so scores are
+    # identical to a full-source scan for matches within the window.
+    if search_start_seconds is not None and search_end_seconds is not None:
+        start_frame = max(0, int(search_start_seconds / frame_hop_seconds))
+        end_frame = min(
+            full_profile.shape[0],
+            int(search_end_seconds / frame_hop_seconds) + reference.shape[0],
+        )
+        source_profile = full_profile[start_frame:end_frame]
+        frame_offset_seconds = start_frame * frame_hop_seconds
+    else:
+        source_profile = full_profile
+        frame_offset_seconds = 0.0
+
+    if source_profile.shape[0] < reference.shape[0]:
+        return []
+
     hop = max(1, int(step_seconds / frame_hop_seconds))
     sample_duration = len(sample_samples) / sample_rate
     matches = _build_match_candidates(
@@ -398,5 +416,6 @@ __all__ = [
     "find_audio_sample_matches",
     "anchor_to_onset",
     "cross_correlate_align",
+    "_get_source_profile",
     "_suppress_overlapping",
 ]
