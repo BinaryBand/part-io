@@ -49,6 +49,8 @@ def _print_help() -> None:
     print("  install         Install development dependencies via poetry")
     print("  test            Run pytest")
     print("  audio-review-batch  Run batch audio review generation")
+    print("  audio-ad-detect     Pair open/close detections into ad_segments.json")
+    print("  audio-ad-remove     Cut detected ad segments from an episode MP3")
     print("  generate-tasks  Regenerate config/generated.mk")
     print("  check-tasks     Verify config/generated.mk is current")
     print("  lint            Run declared lint tasks")
@@ -157,6 +159,8 @@ def main() -> None:
     sub.add_parser("install")
     sub.add_parser("test")
     sub.add_parser("audio-review-batch")
+    sub.add_parser("audio-ad-detect")
+    sub.add_parser("audio-ad-remove")
     generate = sub.add_parser("generate-tasks")
     generate.add_argument("--profile", help="Registry profile to generate task targets for")
 
@@ -172,7 +176,8 @@ def main() -> None:
 
     args, extra = parser.parse_known_args()
 
-    if args.command != "audio-review-batch" and extra:
+    _passthrough_cmds = {"audio-review-batch", "audio-ad-detect", "audio-ad-remove"}
+    if args.command not in _passthrough_cmds and extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
     if args.command == "help":
@@ -183,16 +188,11 @@ def main() -> None:
     if args.command == "test":
         sys.exit(_run_cmd(["poetry", "run", "pytest"]))
     if args.command == "audio-review-batch":
-        sys.exit(
-            _run_cmd(
-                [
-                    sys.executable,
-                    "-m",
-                    "part_io.cli.audio_review_batch",
-                    *extra,
-                ]
-            )
-        )
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_review_batch", *extra]))
+    if args.command == "audio-ad-detect":
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_detect", *extra]))
+    if args.command == "audio-ad-remove":
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_remove", *extra]))
     if args.command == "generate-tasks":
         sys.exit(_run_generate_tasks(args.profile))
     if args.command == "check-tasks":
