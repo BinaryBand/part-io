@@ -70,6 +70,7 @@ def _run_one(
     refine: bool = False,
     onset_anchor: bool = False,
     precise: bool = False,
+    z_threshold: float | None = None,
 ) -> int:
     command = [
         sys.executable,
@@ -96,6 +97,8 @@ def _run_one(
         command.append("--onset-anchor")
     if precise:
         command.append("--precise")
+    if z_threshold is not None:
+        command.extend(["--z-threshold", str(z_threshold)])
 
     result = run_resolved(command, capture_output=True)
     if result.returncode != 0 and result.stderr:
@@ -164,6 +167,7 @@ def _run_batch_jobs(
     refine: bool,
     onset_anchor: bool,
     precise: bool,
+    z_threshold: float | None = None,
 ) -> None:
     total = len(jobs)
     _emit_progress(f"Processing {total} bundles across {workers} worker(s)...")
@@ -183,6 +187,7 @@ def _run_batch_jobs(
                 refine=refine,
                 onset_anchor=onset_anchor,
                 precise=precise,
+                z_threshold=z_threshold,
             ): bn
             for sf, sp, bn in jobs
         }
@@ -231,6 +236,7 @@ def main() -> None:
         refine=args.refine,
         onset_anchor=args.onset_anchor,
         precise=args.precise,
+        z_threshold=args.z_threshold,
     )
 
 

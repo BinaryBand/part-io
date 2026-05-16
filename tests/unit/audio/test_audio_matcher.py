@@ -11,6 +11,7 @@ import pytest
 
 from part_io.adapters.audio.matcher import (
     AudioMatch,
+    _build_match_candidates,
     _build_spectral_profile,
     _suppress_overlapping,
     find_audio_sample_matches,
@@ -107,6 +108,68 @@ def test_matches_are_sorted_and_non_overlapping_by_default() -> None:
         assert right.start_seconds >= left.end_seconds or left.end_seconds - right.start_seconds < (
             0.5 * min(left.duration_seconds, right.duration_seconds)
         )
+
+
+def test_z_threshold_filters_below_z_cutoff(tmp_path: Path) -> None:
+    """With z_threshold set, only matches significantly above the mean are kept."""
+    sample_rate = 16000
+    burst = _make_sine_wave(sample_rate, 1.0, 440.0)
+    sample_path = tmp_path / "sample.wav"
+    source_path = tmp_path / "source.wav"
+
+    _write_mono_wav(sample_path, burst, sample_rate)
+
+    prefix = _make_noise(sample_rate * 5, seed=1234)
+    suffix = _make_noise(sample_rate * 5, seed=5678)
+    source_samples = [*prefix, *burst, *suffix]
+    _write_mono_wav(source_path, source_samples, sample_rate)
+
+    matches_no_z = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.0,
+        step_seconds=0.5,
+    )
+    matches_with_z = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.0,
+        step_seconds=0.5,
+        z_threshold=2.0,
+    )
+
+    assert len(matches_with_z) < len(matches_no_z)
+    assert any(4.8 <= m.start_seconds <= 5.5 for m in matches_with_z), (
+        "z-score filter should still keep the genuine burst match"
+    )
+
+
+def test_z_threshold_none_leaves_results_unchanged(tmp_path: Path) -> None:
+    """z_threshold=None should produce identical results to not passing it."""
+    sample_rate = 16000
+    burst = _make_sine_wave(sample_rate, 1.0, 440.0)
+    sample_path = tmp_path / "sample.wav"
+    source_path = tmp_path / "source.wav"
+
+    _write_mono_wav(sample_path, burst, sample_rate)
+    source_samples = [*_make_noise(sample_rate * 2, seed=9), *burst, *_make_noise(sample_rate * 2, seed=7)]
+    _write_mono_wav(source_path, source_samples, sample_rate)
+
+    matches_default = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.8,
+        step_seconds=0.1,
+    )
+    matches_none = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.8,
+        step_seconds=0.1,
+        z_threshold=None,
+    )
+
+    assert matches_default == matches_none
 
 
 def test_suppress_overlapping_keeps_best_scored_match() -> None:

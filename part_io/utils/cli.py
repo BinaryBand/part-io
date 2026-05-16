@@ -17,6 +17,12 @@ def add_audio_sample_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("source", type=Path, help="Longer audio file to scan")
     parser.add_argument("sample", type=Path, help="Reference sample to search for")
     parser.add_argument("--threshold", type=float, default=0.8, help="Match score threshold")
+    parser.add_argument(
+        "--z-threshold",
+        type=float,
+        default=None,
+        help="Z-score cutoff: only keep matches scoring >= mean + N*std (e.g. 3.0)",
+    )
 
 
 def add_review_export_arguments(parser: argparse.ArgumentParser) -> None:

@@ -20,6 +20,7 @@ def main() -> None:
             source_path=args.source,
             sample_path=args.sample,
             score_threshold=args.threshold,
+            z_threshold=args.z_threshold,
         )
     except (FileNotFoundError, ValueError) as exc:
         parser.exit(2, f"{exc}\n")

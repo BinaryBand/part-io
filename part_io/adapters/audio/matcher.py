@@ -176,6 +176,7 @@ def _build_match_candidates(
     hop: int,
     score_threshold: float,
     frame_offset_seconds: float = 0.0,
+    z_threshold: float | None = None,
 ) -> list[AudioMatch]:
     windowed_profiles = np.lib.stride_tricks.sliding_window_view(
         source_profile,
@@ -185,9 +186,15 @@ def _build_match_candidates(
     windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
     scores = np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
 
+    effective_threshold = score_threshold
+    if z_threshold is not None and scores.size > 1:
+        std = float(np.std(scores))
+        if std > 0:
+            effective_threshold = max(score_threshold, float(np.mean(scores)) + z_threshold * std)
+
     matches: list[AudioMatch] = []
     for start_index, score in enumerate(scores):
-        if score < score_threshold:
+        if score < effective_threshold:
             continue
 
         start_seconds = frame_offset_seconds + start_index * hop * frame_hop_seconds
@@ -301,6 +308,7 @@ def find_audio_sample_matches(
     dedupe_overlap: float = 0.5,
     search_start_seconds: float | None = None,
     search_end_seconds: float | None = None,
+    z_threshold: float | None = None,
 ) -> list[AudioMatch]:
     """Find likely occurrences of *sample_path* inside *source_path*.
 
@@ -337,6 +345,7 @@ def find_audio_sample_matches(
         hop=hop,
         score_threshold=score_threshold,
         frame_offset_seconds=frame_offset_seconds,
+        z_threshold=z_threshold,
     )
 
     return _suppress_overlapping(matches, min_overlap=dedupe_overlap)
