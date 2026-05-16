@@ -41,6 +41,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="{base}/{kind}_high_points",
         help="Bundle naming pattern, e.g. '{base}/{kind}_high_points'",
     )
+    parser.add_argument(
+        "--refine",
+        action="store_true",
+        help="Refine coarse matches via finer-grained local search",
+    )
     return parser
 
 
@@ -58,6 +63,7 @@ def _run_one(
     output_root: Path,
     bundle_name: str,
     overwrite: bool,
+    refine: bool = False,
 ) -> int:
     command = [
         sys.executable,
@@ -78,6 +84,8 @@ def _run_one(
     ]
     if overwrite:
         command.append("--overwrite")
+    if refine:
+        command.append("--refine")
 
     result = run_resolved(command)
     return int(result.returncode)
@@ -119,6 +127,7 @@ def main() -> None:
             output_root=args.output_root,
             bundle_name=close_bundle,
             overwrite=args.overwrite,
+            refine=args.refine,
         )
         if close_exit != 0:
             raise SystemExit(close_exit)
@@ -133,6 +142,7 @@ def main() -> None:
             output_root=args.output_root,
             bundle_name=open_bundle,
             overwrite=args.overwrite,
+            refine=args.refine,
         )
         if open_exit != 0:
             raise SystemExit(open_exit)

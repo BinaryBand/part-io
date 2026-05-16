@@ -20,6 +20,46 @@ from part_io.utils.cli import (
 )
 
 
+def _refine_match(
+    *,
+    coarse_match: AudioMatch,
+    source_path: Path,
+    sample_path: Path,
+    threshold: float,
+    refine_step_seconds: float = 0.01,
+    refine_window_seconds: float = 5.0,
+) -> AudioMatch:
+    """Refine a coarse match via finer-grained local search.
+
+    Searches around the coarse winner within ±refine_window_seconds at finer
+    resolution (refine_step_seconds). Returns best refined match from finer scan.
+    """
+    # Define search window around coarse match center
+    window_start = max(0.0, coarse_match.start_seconds - refine_window_seconds)
+    window_end = coarse_match.start_seconds + coarse_match.duration_seconds + refine_window_seconds
+
+    # Run finer scan within window; use lower threshold to not filter refinement candidates
+    candidates = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=min(
+            threshold, coarse_match.score * 0.9
+        ),  # Allow slight score drop in refinement
+        step_seconds=refine_step_seconds,
+        dedupe_overlap=0.5,
+    )
+
+    # Filter to candidates within window
+    windowed = [m for m in candidates if window_start <= m.start_seconds <= window_end]
+
+    # Return best from finer scan, or coarse match if no refinement found
+    if not windowed:
+        return coarse_match
+
+    refined = max(windowed, key=lambda m: m.score)
+    return refined
+
+
 def _format_clip_name(index: int, match: AudioMatch) -> str:
     score = f"{match.score:.4f}".replace(".", "_")
     start = f"{match.start_seconds:.3f}".replace(".", "_")
@@ -134,6 +174,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional bundle directory name under output root",
     )
+    parser.add_argument(
+        "--refine",
+        action="store_true",
+        help="Refine coarse matches via finer-grained local search",
+    )
     return parser
 
 
@@ -157,6 +202,7 @@ def _generate_bundle(
     output_root: Path,
     bundle_name: str | None,
     overwrite: bool,
+    refine: bool = False,
 ) -> tuple[Path, Path, Path, int, int]:
     _validate_args(
         argparse.Namespace(
@@ -183,7 +229,21 @@ def _generate_bundle(
         step_seconds=step_seconds,
         dedupe_overlap=dedupe_overlap,
     )
-    selected_matches = matches if max_clips == 0 else matches[:max_clips]
+
+    # Optionally refine each match via finer-grained local search
+    if refine:
+        matches = [
+            _refine_match(
+                coarse_match=match,
+                source_path=source_path,
+                sample_path=sample_path,
+                threshold=threshold,
+            )
+            for match in matches
+        ]
+
+    ranked_matches = sorted(matches, key=lambda match: match.score, reverse=True)
+    selected_matches = ranked_matches if max_clips == 0 else ranked_matches[:max_clips]
     manifest_path = _write_manifest(
         bundle_dir=bundle_dir,
         source_path=source_path,
@@ -215,6 +275,7 @@ def main() -> None:
             output_root=args.output_root,
             bundle_name=args.bundle_name,
             overwrite=args.overwrite,
+            refine=args.refine,
         )
     except (FileNotFoundError, ValueError) as exc:
         parser.exit(2, f"{exc}\n")

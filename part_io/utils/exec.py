@@ -25,7 +25,8 @@ def resolve_executable(name: str) -> str:
     if os.sep in name or name.startswith("."):
         path_obj = Path(name).expanduser()
         if path_obj.exists() and os.access(path_obj, os.X_OK):
-            return str(path_obj.resolve())
+            # Keep symlink paths (e.g. .venv/bin/python) to preserve venv behavior.
+            return str(path_obj.absolute())
         raise FileNotFoundError(f"Executable not found or not executable: {name}")
 
     path = shutil.which(name)

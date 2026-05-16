@@ -43,7 +43,20 @@ def test_resolve_executable_uses_existing_path(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr(exec_utils.os, "access", lambda path, mode: Path(path) == tool)
     resolved = exec_utils.resolve_executable(str(tool))
 
-    assert Path(resolved) == tool.resolve()
+    assert Path(resolved) == tool.absolute()
+
+
+def test_resolve_executable_preserves_symlink_path(monkeypatch, tmp_path: Path) -> None:
+    """Symlink paths should not be dereferenced to keep venv interpreter semantics."""
+    target = tmp_path / "python-real"
+    target.write_text("", encoding="utf-8")
+    link = tmp_path / "python"
+    link.symlink_to(target)
+
+    monkeypatch.setattr(exec_utils.os, "access", lambda path, mode: Path(path) == link)
+    resolved = exec_utils.resolve_executable(str(link))
+
+    assert Path(resolved) == link.absolute()
 
 
 def test_resolve_executable_uses_which_and_missing_cases(monkeypatch) -> None:
