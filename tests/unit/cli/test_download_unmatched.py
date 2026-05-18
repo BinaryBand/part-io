@@ -80,10 +80,14 @@ class TestMain:
         path.write_text(json.dumps(jobs), encoding="utf-8")
 
     def test_missing_manifest_exits(self, tmp_path):
-        with patch("sys.argv", [
-            "download_unmatched",
-            "--manifest", str(tmp_path / "missing.json"),
-        ]):
+        with patch(
+            "sys.argv",
+            [
+                "download_unmatched",
+                "--manifest",
+                str(tmp_path / "missing.json"),
+            ],
+        ):
             with pytest.raises(SystemExit):
                 main()
 
@@ -96,11 +100,16 @@ class TestMain:
         (dest_dir / "ep_001.mp3").write_bytes(b"existing")
         (dest_dir / "ep_002.mp3").write_bytes(b"existing")
 
-        with patch("sys.argv", [
-            "download_unmatched",
-            "--manifest", str(manifest),
-            "--output-dir", str(out_dir),
-        ]):
+        with patch(
+            "sys.argv",
+            [
+                "download_unmatched",
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(out_dir),
+            ],
+        ):
             main()
 
         err = capsys.readouterr().err
@@ -108,22 +117,30 @@ class TestMain:
 
     def test_downloads_new_files(self, tmp_path, capsys):
         manifest = tmp_path / "unmatched.json"
-        self._write_manifest(manifest, [
-            {
-                "slug": "my-show",
-                "unmatched_references": [
-                    {"id": "ep001", "content": "https://example.com/ep1.mp3"},
-                ],
-            }
-        ])
+        self._write_manifest(
+            manifest,
+            [
+                {
+                    "slug": "my-show",
+                    "unmatched_references": [
+                        {"id": "ep001", "content": "https://example.com/ep1.mp3"},
+                    ],
+                }
+            ],
+        )
         out_dir = tmp_path / "out"
 
         with patch("part_io.cli.download_unmatched._download_one") as mock_dl:
-            with patch("sys.argv", [
-                "download_unmatched",
-                "--manifest", str(manifest),
-                "--output-dir", str(out_dir),
-            ]):
+            with patch(
+                "sys.argv",
+                [
+                    "download_unmatched",
+                    "--manifest",
+                    str(manifest),
+                    "--output-dir",
+                    str(out_dir),
+                ],
+            ):
                 main()
 
         mock_dl.assert_called_once()
@@ -137,12 +154,18 @@ class TestMain:
         (out_dir / "custom" / "ep_001.mp3").write_bytes(b"x")
         (out_dir / "custom" / "ep_002.mp3").write_bytes(b"x")
 
-        with patch("sys.argv", [
-            "download_unmatched",
-            "--manifest", str(manifest),
-            "--output-dir", str(out_dir),
-            "--root", "custom",
-        ]):
+        with patch(
+            "sys.argv",
+            [
+                "download_unmatched",
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(out_dir),
+                "--root",
+                "custom",
+            ],
+        ):
             main()
 
         # Files would land under "custom" not "my-show"
@@ -150,34 +173,46 @@ class TestMain:
 
     def test_no_downloadable_refs_returns_early(self, tmp_path, capsys):
         manifest = tmp_path / "unmatched.json"
-        manifest.write_text(json.dumps([
-            {"slug": "empty", "unmatched_references": [{"id": "x", "content": ""}]}
-        ]), encoding="utf-8")
+        manifest.write_text(
+            json.dumps([{"slug": "empty", "unmatched_references": [{"id": "x", "content": ""}]}]),
+            encoding="utf-8",
+        )
 
-        with patch("sys.argv", [
-            "download_unmatched",
-            "--manifest", str(manifest),
-            "--output-dir", str(tmp_path / "out"),
-        ]):
+        with patch(
+            "sys.argv",
+            [
+                "download_unmatched",
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(tmp_path / "out"),
+            ],
+        ):
             main()
 
         assert "No downloadable" in capsys.readouterr().err
 
     def test_failed_download_exits_1(self, tmp_path):
         manifest = tmp_path / "unmatched.json"
-        self._write_manifest(manifest, [
-            {"slug": "s", "unmatched_references": [{"id": "x", "content": "https://x.com/x"}]}
-        ])
+        self._write_manifest(
+            manifest,
+            [{"slug": "s", "unmatched_references": [{"id": "x", "content": "https://x.com/x"}]}],
+        )
 
         def _fail(url, dest, *, client):
             raise OSError("network error")
 
         with patch("part_io.cli.download_unmatched._download_one", side_effect=_fail):
-            with patch("sys.argv", [
-                "download_unmatched",
-                "--manifest", str(manifest),
-                "--output-dir", str(tmp_path / "out"),
-            ]):
+            with patch(
+                "sys.argv",
+                [
+                    "download_unmatched",
+                    "--manifest",
+                    str(manifest),
+                    "--output-dir",
+                    str(tmp_path / "out"),
+                ],
+            ):
                 with pytest.raises(SystemExit) as exc_info:
                     main()
         assert exc_info.value.code == 1

@@ -1,163 +1,150 @@
 # part-io
 
-## License
+A toolkit for removing ads from podcast episodes. It detects ad-break jingles (open/close snippets) inside source audio, lets you confirm matches interactively, and cuts the ad segments out with ffmpeg.
 
-MIT. See `LICENSE`.
-
-## Project Layout
-
-- `part_io/`: application package (CLI, adapters, services, models, utils)
-- `config/`: lint policies and generated task config inputs
-- `tests/`: architecture, integration, and unit test suites
-- `downloads/`: local media/snippet assets and generated review bundles
-
-## Command Reference
-
-Task runner entrypoint:
-
-```bash
-poetry run part-io-tasks help
-```
-
-Run lint by profile:
-
-```bash
-poetry run part-io-tasks lint --profile strict
-```
-
-Run tests:
-
-```bash
-poetry run part-io-tasks test
-```
-
-Generate/check make-style task targets:
-
-```bash
-poetry run part-io-tasks generate-tasks
-poetry run part-io-tasks check-tasks
-```
-
-Run duplicate-code detection:
-
-```bash
-poetry run python -m part_io.cli.lint.cpd
-```
-
-Run Semgrep policies:
-
-```bash
-poetry run semgrep scan --config config/semgrep part_io tests --error
-```
-
-## Audio Review Workflows
-
-Single file + sample review bundle:
-
-```bash
-poetry run part-io-audio-review \
- downloads/media/ep_45e2978e.mp3 \
- downloads/snippets/close.mp3 \
- --threshold 0.8 \
- --step-seconds 0.1 \
- --max-clips 25 \
- --bundle-name ep_45e2978e/close_high_points \
- --overwrite
-```
-
-Batch review all media files (close/open samples):
-
-```bash
-poetry run python -m part_io.cli.audio_review_batch \
- --threshold 0.8 \
- --step-seconds 0.1 \
- --max-clips 25 \
- --overwrite
-```
-
-Batch review through task runner:
-
-```bash
-poetry run part-io-tasks audio-review-batch \
- --threshold 0.8 \
- --step-seconds 0.1 \
- --max-clips 25 \
- --overwrite
-```
-
-## Ad Removal Workflow
-
-`downloads/snippets/open.mp3` marks the start of an ad break; `close.mp3` marks the end. The pipeline has three steps: detect candidates, review them manually, then cut.
-
-### Step 1 — Generate review bundles
-
-```bash
-poetry run part-io-tasks audio-review-batch \
-  --threshold 0.8 \
-  --step-seconds 0.1 \
-  --max-clips 25 \
-  --overwrite --refine \
-  --workers 3
-```
-
-Outputs clip files and manifests under `downloads/review/{episode}/open_high_points/` and `close_high_points/`.
-
-### Step 2 — Label true positives
-
-Listen to the extracted clips. For each bundle, open `match_labels.json` and fill in the `true_positive_indices` array with the clip indices that are genuine ad opens/closes.
-
-### Step 3 — Pair opens with closes
-
-```bash
-poetry run part-io-tasks audio-ad-detect \
-  --episode ep_ce79a6d1 \
-  --use-labels
-```
-
-Writes `downloads/review/ep_ce79a6d1/ad_segments.json`. Without `--use-labels` all manifest rows are used (useful for a first-pass inspection, less reliable).
-
-### Step 4 — Dry run to verify cuts
-
-```bash
-poetry run part-io-tasks audio-ad-remove \
-  --source downloads/media/ep_ce79a6d1.mp3 \
-  --segments downloads/review/ep_ce79a6d1/ad_segments.json \
-  --dry-run
-```
-
-Prints the exact time ranges that will be removed without touching any audio.
-
-### Step 5 — Cut
-
-```bash
-poetry run part-io-tasks audio-ad-remove \
-  --source downloads/media/ep_ce79a6d1.mp3 \
-  --segments downloads/review/ep_ce79a6d1/ad_segments.json
-```
-
-Writes the cleaned episode to `downloads/cleaned/ep_ce79a6d1.mp3`. The command errors on overlapping segments and refuses to cut if `ad_segments.json` is empty.
-
-## Setup
-
-Requirements:
+## Requirements
 
 - Python 3.11+
 - Poetry
-- Node.js (for `npx`-based CPD checks)
-
-Install dependencies:
+- ffmpeg / ffplay
 
 ```bash
 poetry install --with dev
 ```
 
-## Overview
+## Remote pipeline (recommended)
 
-part-io is a Python toolkit for task orchestration and lint automation with strict architecture guardrails.
+The remote pipeline works directly against a mounted remote directory (e.g. an rclone pCloud mount at `downloads/remote/`). All state — match candidates, labels, adaptive thresholds, cut status — lives in a single human-editable file: `downloads/review/state.toml`. No clip files are written to disk.
 
-Core characteristics:
+### Streamlined: one episode at a time
 
-- Typed task registry and profile-driven task selection
-- Lint orchestration via module entrypoints
-- Architecture and boundary enforcement via Semgrep
-- Focused adapters for config loading, process execution, and reporting
+Detect matches, review them interactively, cut the episode, then move on:
+
+```bash
+poetry run part-io-tasks remote-loop
+```
+
+During review, for each match you hear a few seconds of the source audio at the detected position:
+
+| Key | Action |
+| --- | ------ |
+| `a` | Approve (true positive — will be used for cutting) |
+| `r` | Reject (false positive) |
+| `p` | Replay the current match |
+| `c` | Play the reference snippet for comparison |
+| `s` | Skip (leave unlabeled) |
+| `u` | Undo the previous decision |
+| `q` | Quit and save progress |
+
+Progress is saved after every episode. Restart at any time — already-cut episodes are skipped automatically.
+
+### Batch: detect many, then review
+
+Generate match candidates for a batch of episodes before reviewing:
+
+```bash
+# Detect matches for 10 episodes at a time (no review yet)
+poetry run part-io-tasks remote-review --batch-size 10 --no-interactive
+
+# Review previously detected matches
+poetry run part-io-tasks remote-review
+
+# Cut all labeled episodes
+poetry run part-io-tasks remote-cut
+```
+
+### Key options
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--threshold` | `0.8` | Minimum match score. Adapts upward automatically as you approve clips. |
+| `--z-threshold` | `3.0` | Z-score cutoff — keeps only matches that are statistical outliers against the full episode distribution. |
+| `--max-matches` | `10` | Maximum candidates to store per snippet type per episode. |
+| `--min-gap` | `-15.0` | Minimum seconds between open-end and close-start (negative allows back-to-back jingles). |
+| `--max-gap` | `600.0` | Maximum seconds between open-end and close-start. |
+| `--yes` | flag | Skip cut confirmation prompts. |
+| `--dry-run` | flag | Show planned cuts without running ffmpeg. |
+| `--overwrite` | flag | Re-detect, re-review, and re-cut already-processed episodes. |
+
+### State file
+
+`downloads/review/state.toml` is the single source of truth. It is safe to edit by hand:
+
+```toml
+# Remote episode pipeline state.
+# Edit freely — delete this file to start fresh.
+
+[thresholds]
+open  = 0.9503
+close = 0.8378
+
+[episodes.6b173fd3-0c42-45d1-806a-88ab69b861da]
+source = "downloads/remote/6b173fd3-0c42-45d1-806a-88ab69b861da.mp3"
+open_matches   = [{index = 1, score = 0.9704, start = 1190.900, end = 1200.900}]
+close_matches  = [{index = 1, score = 0.8369, start = 4396.608, end = 4406.608}]
+open_approved  = [1]
+open_rejected  = []
+close_approved = [1]
+close_rejected = []
+cut = false
+```
+
+Delete the file to treat the next run as a first-time run.
+
+---
+
+## Local pipeline
+
+For working with files already on disk (e.g. `downloads/media/`).
+
+### Detect + pair + cut a single episode
+
+```bash
+# Pair open/close matches and write ad_segments.json
+poetry run part-io-tasks audio-ad-detect \
+  --episode ep_ce79a6d1 --use-labels
+
+# Dry run
+poetry run part-io-tasks audio-ad-remove \
+  --source downloads/media/ep_ce79a6d1.mp3 \
+  --segments downloads/review/ep_ce79a6d1/ad_segments.json \
+  --dry-run
+
+# Cut
+poetry run part-io-tasks audio-ad-remove \
+  --source downloads/media/ep_ce79a6d1.mp3 \
+  --segments downloads/review/ep_ce79a6d1/ad_segments.json
+```
+
+### Batch review bundle generation
+
+Generates clip files and manifests under `downloads/review/` for manual inspection:
+
+```bash
+poetry run part-io-tasks audio-review-batch \
+  --threshold 0.8 --z-threshold 3.0 \
+  --max-clips 10 --refine --workers 2
+```
+
+---
+
+## How it works
+
+`downloads/snippets/open.mp3` is the jingle that plays at the start of an ad break; `close.mp3` plays at the end. The matcher builds a 32-band log-energy spectral fingerprint for both the snippet and the source, then slides the snippet fingerprint across the source and scores each window by mean cosine similarity. A z-score filter keeps only windows that score as statistical outliers against the full distribution — separating genuine matches (~99% similarity) from background noise (~95%).
+
+Detected opens and closes are paired greedily: each open is matched with the nearest following close within a configurable time window. The paired spans are cut from the source with a single `ffmpeg` `atrim`+`concat` filter graph — no intermediate files.
+
+---
+
+## Development
+
+```bash
+poetry run part-io-tasks test          # run tests
+poetry run part-io-tasks lint          # run declared lint tasks
+poetry run part-io-tasks generate-tasks  # regenerate config/generated.mk
+poetry run part-io-tasks clean         # remove caches and build artifacts
+```
+
+## License
+
+MIT. See `LICENSE`.

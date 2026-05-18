@@ -93,11 +93,16 @@ class TestBuildParser:
 
     def test_custom_args(self, tmp_path):
         parser = _build_parser()
-        args = parser.parse_args([
-            "--manifest", str(tmp_path / "m.json"),
-            "--output-dir", str(tmp_path / "out"),
-            "--base-url", "https://example.com",
-        ])
+        args = parser.parse_args(
+            [
+                "--manifest",
+                str(tmp_path / "m.json"),
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--base-url",
+                "https://example.com",
+            ]
+        )
         assert args.base_url == "https://example.com"
 
 
@@ -125,31 +130,40 @@ class TestMain:
         self._write_manifest(manifest)
         out_dir = tmp_path / "out"
 
-        import sys
         from unittest.mock import patch
 
-        with patch("sys.argv", [
-            "generate_rss",
-            "--manifest", str(manifest),
-            "--output-dir", str(out_dir),
-            "--base-url", "https://cdn.example.com",
-        ]):
+        with patch(
+            "sys.argv",
+            [
+                "generate_rss",
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(out_dir),
+                "--base-url",
+                "https://cdn.example.com",
+            ],
+        ):
             main()
 
         rss_file = out_dir / "my-show.rss"
         assert rss_file.exists()
-        tree = ET.parse(rss_file)
+        tree = ET.parse(rss_file)  # noqa: S314
         root = tree.getroot()
         assert root.tag == "rss"
 
     def test_exits_when_manifest_missing(self, tmp_path):
-        import sys
         from unittest.mock import patch
 
-        with patch("sys.argv", [
-            "generate_rss",
-            "--manifest", str(tmp_path / "missing.json"),
-            "--output-dir", str(tmp_path),
-        ]):
+        with patch(
+            "sys.argv",
+            [
+                "generate_rss",
+                "--manifest",
+                str(tmp_path / "missing.json"),
+                "--output-dir",
+                str(tmp_path),
+            ],
+        ):
             with pytest.raises(SystemExit):
                 main()

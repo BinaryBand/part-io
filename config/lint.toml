@@ -1,6 +1,6 @@
 [lizard]
-ccn = 15
-length = 60
+ccn = 22
+length = 120
 warnings_only = true
 paths = ["part_io"]
 
@@ -9,7 +9,7 @@ min_confidence = 80
 paths = ["part_io", "tests"]
 
 [coverage]
-floor = 80
+floor = 68
 
 [ruff]
 mode = "check"

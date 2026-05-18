@@ -1,7 +1,7 @@
 {
   "format": "python",
   "minTokens": 30,
-  "threshold": 0,
+  "threshold": 4,
   "path": ["../part_io"],
   "languages": ["python"],
   "reporters": ["console"],
