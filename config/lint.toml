@@ -26,5 +26,3 @@ floor = 20
 
 [ansible_roles_coverage]
 floor = 100
-
-

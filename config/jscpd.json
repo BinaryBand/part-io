@@ -7,5 +7,3 @@
   "reporters": ["console"],
   "ignore": ["**/.venv/**", "**/typings/**", "**/part_io/cli/lint/*.py"]
 }
-
-
