@@ -2,10 +2,10 @@
 
 Subcommands:
   review  — detect open/close matches per episode, review each interactively
-  cut     — use labeled state.toml to pair and cut ad segments
+  cut     — use state.toml to pair and cut ad segments
   loop    — detect → review → cut one episode at a time until done
 
-State is stored entirely in {review-root}/state.toml.
+State is stored entirely in {review_root}/state.toml.
 No clip files or manifest CSVs are written.
 Delete state.toml to start fresh.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,13 +33,9 @@ from part_io.cli.audio_ad_remove import (
 )
 from part_io.utils.exec import launch_resolved
 
-# TOML loader: prefer stdlib `tomllib`, fall back to `tomli`.
 if TYPE_CHECKING:  # pragma: no cover - type-only import
     import tomllib
 
-
-# runtime loader uses a temporary name so static analyzers don't see two
-# different module types bound to the same name.
 _tomllib_runtime: Any = None
 try:  # pragma: no cover - runtime optional deps
     import tomllib as _tomllib_std
@@ -56,6 +53,12 @@ tomllib: Any = _tomllib_runtime
 
 _MIN_EPISODE_BYTES = 10 * 1024 * 1024  # skip promos — < 10 MB ≈ < 5 min at 128 kbps
 
+# Classification labels
+_POS = "positive"
+_NEG = "negative"
+_UNC = "uncertain"
+_UND = "undetected"
+
 
 # ---------------------------------------------------------------------------
 # State model — persisted to {review_root}/state.toml
@@ -63,52 +66,93 @@ _MIN_EPISODE_BYTES = 10 * 1024 * 1024  # skip promos — < 10 MB ≈ < 5 min at 
 
 
 @dataclass(frozen=True)
-class MatchCandidate:
-    """A single detected occurrence of a snippet inside a source file."""
+class Segment:
+    """A confirmed example of an audio target at a specific position."""
 
-    index: int
+    source: str
+    start: float
+    end: float
     score: float
-    start: float  # seconds into source
-    end: float  # seconds into source
+
+
+@dataclass
+class TargetState:
+    """Global confirmed examples for one target type (open or close)."""
+
+    positives: list[Segment] = field(default_factory=list)
+    negatives: list[Segment] = field(default_factory=list)
 
 
 @dataclass
 class EpisodeState:
-    source: str = ""  # relative path to source MP3
-    open_matches: list[MatchCandidate] = field(default_factory=list)
-    close_matches: list[MatchCandidate] = field(default_factory=list)
-    open_approved: list[int] = field(default_factory=list)
-    open_rejected: list[int] = field(default_factory=list)
-    close_approved: list[int] = field(default_factory=list)
-    close_rejected: list[int] = field(default_factory=list)
+    source: str = ""
+    open_score: float = 0.0
+    open_start: float = 0.0
+    open_end: float = 0.0
+    open_class: str = _UND
+    close_score: float = 0.0
+    close_start: float = 0.0
+    close_end: float = 0.0
+    close_class: str = _UND
     cut: bool = False
 
-    def has_matches(self) -> bool:
-        return bool(self.open_matches or self.close_matches)
+    def is_detected(self) -> bool:
+        return self.open_class != _UND or self.close_class != _UND
 
-    def is_labeled(self) -> bool:
-        return bool(
-            self.open_approved or self.open_rejected or self.close_approved or self.close_rejected
+    def is_cuttable(self) -> bool:
+        return self.open_class == _POS and self.close_class == _POS
+
+
+def _fmt_seg(s: Segment) -> str:
+    return (
+        f"{{source = {json.dumps(s.source)}, "
+        f"start = {s.start:.3f}, end = {s.end:.3f}, score = {s.score:.6f}}}"
+    )
+
+
+def _load_target(raw: dict) -> TargetState:
+    t = TargetState()
+    for seg in raw.get("positives", []):
+        t.positives.append(
+            Segment(
+                source=str(seg["source"]),
+                start=float(seg["start"]),
+                end=float(seg["end"]),
+                score=float(seg["score"]),
+            )
         )
+    for seg in raw.get("negatives", []):
+        t.negatives.append(
+            Segment(
+                source=str(seg["source"]),
+                start=float(seg["start"]),
+                end=float(seg["end"]),
+                score=float(seg["score"]),
+            )
+        )
+    return t
 
 
-def _fmt_candidate(m: MatchCandidate) -> str:
-    return f"{{index = {m.index}, score = {m.score:.4f}, start = {m.start:.3f}, end = {m.end:.3f}}}"
+def _load_episode(raw: dict) -> EpisodeState:
+    return EpisodeState(
+        source=str(raw.get("source", "")),
+        open_score=float(raw.get("open_score", 0.0)),
+        open_start=float(raw.get("open_start", 0.0)),
+        open_end=float(raw.get("open_end", 0.0)),
+        open_class=str(raw.get("open_class", _UND)),
+        close_score=float(raw.get("close_score", 0.0)),
+        close_start=float(raw.get("close_start", 0.0)),
+        close_end=float(raw.get("close_end", 0.0)),
+        close_class=str(raw.get("close_class", _UND)),
+        cut=bool(raw.get("cut", False)),
+    )
 
 
 def _migrate_episode_keys(path: Path) -> None:
-    """Re-quote any unquoted [episodes.*] table keys written by older versions.
-
-    Bare TOML keys only allow A-Za-z0-9_-.  Episode stems that include spaces,
-    question marks, dots, or other characters cause a parse error in strict
-    TOML parsers.  This rewrites the file in-place so every episode key is a
-    quoted string, then saves so future loads don't need migration.
-    """
+    """Re-quote any unquoted [episodes.*] table keys written by older versions."""
     text = path.read_text(encoding="utf-8")
-    # Quick check: nothing to do if every episode key is already quoted.
     if not re.search(r'^\[episodes\.[^"]', text, re.MULTILINE):
         return
-
     fixed_lines = []
     for line in text.splitlines(keepends=True):
         m = re.match(r'^\[episodes\.([^"].+?)\]\s*$', line)
@@ -117,14 +161,65 @@ def _migrate_episode_keys(path: Path) -> None:
             escaped = key.replace("\\", "\\\\").replace('"', '\\"')
             line = f'[episodes."{escaped}"]\n'
         fixed_lines.append(line)
-
     path.write_text("".join(fixed_lines), encoding="utf-8")
+
+
+def _migrate_old_episode(
+    ep_raw: dict,
+    source: str,
+    open_target: TargetState,
+    close_target: TargetState,
+) -> EpisodeState:
+    """Convert one old-format episode (match lists + approved/rejected) to new format."""
+    ep = EpisodeState(source=source, cut=bool(ep_raw.get("cut", False)))
+    for kind, matches_key, approved_key, rejected_key, target in [
+        ("open", "open_matches", "open_approved", "open_rejected", open_target),
+        ("close", "close_matches", "close_approved", "close_rejected", close_target),
+    ]:
+        raw_matches = ep_raw.get(matches_key, [])
+        approved = list(ep_raw.get(approved_key, []))
+        rejected = list(ep_raw.get(rejected_key, []))
+        approved_set = frozenset(approved)
+        best_raw = None
+        if approved:
+            best_raw = next((m for m in raw_matches if m["index"] in approved_set), None)
+        if best_raw is None and raw_matches:
+            best_raw = raw_matches[0]
+        if best_raw is None:
+            setattr(ep, f"{kind}_class", _UND)
+            continue
+        score = float(best_raw["score"])
+        start = float(best_raw["start"])
+        end = float(best_raw["end"])
+        setattr(ep, f"{kind}_score", score)
+        setattr(ep, f"{kind}_start", start)
+        setattr(ep, f"{kind}_end", end)
+        if approved:
+            setattr(ep, f"{kind}_class", _POS)
+            target.positives.append(Segment(source=source, start=start, end=end, score=score))
+        elif rejected:
+            setattr(ep, f"{kind}_class", _NEG)
+            target.negatives.append(Segment(source=source, start=start, end=end, score=score))
+        else:
+            setattr(ep, f"{kind}_class", _UNC)
+    return ep
+
+
+def _migrate_old_state(data: dict) -> "PipelineState":
+    _emit("Migrating state.toml to new format (one-time conversion)...")
+    state = PipelineState()
+    for stem, ep_raw in data.get("episodes", {}).items():
+        source = str(ep_raw.get("source", ""))
+        state.episodes[stem] = _migrate_old_episode(
+            ep_raw, source, state.open_target, state.close_target
+        )
+    return state
 
 
 @dataclass
 class PipelineState:
-    open_threshold: float = 0.8
-    close_threshold: float = 0.8
+    open_target: TargetState = field(default_factory=TargetState)
+    close_target: TargetState = field(default_factory=TargetState)
     episodes: dict[str, EpisodeState] = field(default_factory=dict)
 
     def episode(self, stem: str) -> EpisodeState:
@@ -137,75 +232,96 @@ class PipelineState:
         if not path.exists():
             return cls()
         if tomllib is None:
-            print(
-                "Warning: TOML support unavailable (Python < 3.11 and tomli not installed). "
-                "Starting with empty state.",
-                file=sys.stderr,
-            )
+            _emit("Warning: TOML unavailable. Starting with empty state.")
             return cls()
         _migrate_episode_keys(path)
         with path.open("rb") as f:
             data = tomllib.load(f)
-        thresholds = data.get("thresholds", {})
+        episodes_raw = data.get("episodes", {})
+        if any("open_matches" in ep for ep in episodes_raw.values()):
+            return _migrate_old_state(data)
         state = cls(
-            open_threshold=float(thresholds.get("open", 0.8)),
-            close_threshold=float(thresholds.get("close", 0.8)),
+            open_target=_load_target(data.get("targets", {}).get("open", {})),
+            close_target=_load_target(data.get("targets", {}).get("close", {})),
         )
-        for stem, ep in data.get("episodes", {}).items():
-            state.episodes[stem] = EpisodeState(
-                source=str(ep.get("source", "")),
-                open_matches=[
-                    MatchCandidate(
-                        index=int(m["index"]),
-                        score=float(m["score"]),
-                        start=float(m["start"]),
-                        end=float(m["end"]),
-                    )
-                    for m in ep.get("open_matches", [])
-                ],
-                close_matches=[
-                    MatchCandidate(
-                        index=int(m["index"]),
-                        score=float(m["score"]),
-                        start=float(m["start"]),
-                        end=float(m["end"]),
-                    )
-                    for m in ep.get("close_matches", [])
-                ],
-                open_approved=list(ep.get("open_approved", [])),
-                open_rejected=list(ep.get("open_rejected", [])),
-                close_approved=list(ep.get("close_approved", [])),
-                close_rejected=list(ep.get("close_rejected", [])),
-                cut=bool(ep.get("cut", False)),
-            )
+        for stem, ep_raw in episodes_raw.items():
+            state.episodes[stem] = _load_episode(ep_raw)
         return state
 
     def save(self, path: Path) -> None:
-        lines = [
+        lines: list[str] = [
             "# Remote episode pipeline state.\n",
             "# Edit freely — delete this file to start fresh.\n",
-            "\n",
-            "[thresholds]\n",
-            f"open  = {self.open_threshold:.6g}\n",
-            f"close = {self.close_threshold:.6g}\n",
         ]
+        for kind, target in [("open", self.open_target), ("close", self.close_target)]:
+            pos = ", ".join(_fmt_seg(s) for s in target.positives)
+            neg = ", ".join(_fmt_seg(s) for s in target.negatives)
+            lines += [f"\n[targets.{kind}]\n", f"positives = [{pos}]\n", f"negatives = [{neg}]\n"]
         for stem, ep in sorted(self.episodes.items()):
-            # Always quote the key — bare TOML keys disallow spaces, dots, etc.
             lines.append(f'\n[episodes."{stem}"]\n')
             if ep.source:
-                # json.dumps gives a properly-escaped TOML basic string.
-                lines.append(f"source = {json.dumps(ep.source)}\n")
-            open_m = ", ".join(_fmt_candidate(m) for m in ep.open_matches)
-            close_m = ", ".join(_fmt_candidate(m) for m in ep.close_matches)
-            lines.append(f"open_matches   = [{open_m}]\n")
-            lines.append(f"close_matches  = [{close_m}]\n")
-            lines.append(f"open_approved  = {ep.open_approved}\n")
-            lines.append(f"open_rejected  = {ep.open_rejected}\n")
-            lines.append(f"close_approved = {ep.close_approved}\n")
-            lines.append(f"close_rejected = {ep.close_rejected}\n")
-            lines.append(f"cut = {str(ep.cut).lower()}\n")
+                lines.append(f"source      = {json.dumps(ep.source)}\n")
+            lines += [
+                f"open_score  = {ep.open_score:.6f}\n",
+                f"open_start  = {ep.open_start:.3f}\n",
+                f"open_end    = {ep.open_end:.3f}\n",
+                f'open_class  = "{ep.open_class}"\n',
+                f"close_score = {ep.close_score:.6f}\n",
+                f"close_start = {ep.close_start:.3f}\n",
+                f"close_end   = {ep.close_end:.3f}\n",
+                f'close_class = "{ep.close_class}"\n',
+                f"cut = {str(ep.cut).lower()}\n",
+            ]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("".join(lines), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Classification
+# ---------------------------------------------------------------------------
+
+
+def _moe(scores: list[float], k: float = 1.5) -> float:
+    if len(scores) < 2:
+        return 0.0
+    mean = sum(scores) / len(scores)
+    variance = sum((s - mean) ** 2 for s in scores) / len(scores)
+    return k * math.sqrt(variance)
+
+
+def _compute_thresholds(target: TargetState, default_floor: float) -> tuple[float, float]:
+    """Return (theta_plus, theta_minus) for a target."""
+    pos = [s.score for s in target.positives]
+    neg = [s.score for s in target.negatives]
+    theta_plus = (min(pos) - _moe(pos)) if pos else default_floor
+    theta_minus = (max(neg) + _moe(neg)) if neg else -math.inf
+    return theta_plus, theta_minus
+
+
+def _classify_score(score: float, theta_plus: float, theta_minus: float) -> str:
+    if score >= theta_plus:
+        return _POS
+    if score <= theta_minus:
+        return _NEG
+    return _UNC
+
+
+def _reclassify_all(state: PipelineState, default_floor: float) -> None:
+    """Recompute thresholds and re-classify uncertain episodes in-place.
+
+    Auto-classification only runs when there is at least one confirmed positive
+    or negative for a target type — without confirmed examples the threshold is
+    meaningless and episodes stay uncertain until the user labels one explicitly.
+    """
+    tp_o, tm_o = _compute_thresholds(state.open_target, default_floor)
+    tp_c, tm_c = _compute_thresholds(state.close_target, default_floor)
+    has_open_evidence = bool(state.open_target.positives or state.open_target.negatives)
+    has_close_evidence = bool(state.close_target.positives or state.close_target.negatives)
+    for ep in state.episodes.values():
+        if ep.open_class == _UNC and has_open_evidence:
+            ep.open_class = _classify_score(ep.open_score, tp_o, tm_o)
+        if ep.close_class == _UNC and has_close_evidence:
+            ep.close_class = _classify_score(ep.close_score, tp_c, tm_c)
 
 
 # ---------------------------------------------------------------------------
@@ -232,20 +348,26 @@ def _emit(message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Detection — runs audio_detect as subprocess, returns MatchCandidate list
+# Detection — runs audio_detect as subprocess, returns best match
 # ---------------------------------------------------------------------------
 
 
-def _detect_matches(
+@dataclass(frozen=True)
+class _Match:
+    score: float
+    start: float
+    end: float
+
+
+def _detect_best(
     source: Path,
     sample: Path,
     *,
     threshold: float,
     z_threshold: float | None,
     step_seconds: float,
-    max_matches: int,
-) -> list[MatchCandidate]:
-    """Run audio_detect subprocess and parse JSON from stdout."""
+) -> _Match | None:
+    """Run audio_detect subprocess; return the top-scoring match or None."""
     command = [
         sys.executable,
         "-m",
@@ -257,35 +379,84 @@ def _detect_matches(
         "--step-seconds",
         str(step_seconds),
         "--max-matches",
-        str(max_matches),
+        "1",
     ]
     if z_threshold is not None:
         command.extend(["--z-threshold", str(z_threshold)])
-
     result = run_resolved(command, capture_output=True)
     if result.returncode != 0:
         if result.stderr:
             sys.stderr.buffer.write(result.stderr)
             sys.stderr.flush()
-        return []
+        return None
     try:
         data = json.loads(result.stdout)
-        return [
-            MatchCandidate(
-                index=int(m["index"]),
-                score=float(m["score"]),
-                start=float(m["start"]),
-                end=float(m["end"]),
-            )
-            for m in data
-        ]
+        if not data:
+            return None
+        m = data[0]
+        return _Match(score=float(m["score"]), start=float(m["start"]), end=float(m["end"]))
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         _emit(f"  WARNING: failed to parse detect output: {exc}")
-        return []
+        return None
+
+
+def _detect_batch(
+    episodes: list[Path],
+    state: PipelineState,
+    open_sample: Path,
+    close_sample: Path,
+    *,
+    threshold: float,
+    z_threshold: float | None,
+    step_seconds: float,
+    workers: int,
+) -> None:
+    """Detect open+close for a batch of episodes in parallel, updating state in-place."""
+    ep_by_stem = {ep.stem: ep for ep in episodes}
+    jobs = [(ep, open_sample, "open") for ep in episodes] + [
+        (ep, close_sample, "close") for ep in episodes
+    ]
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _detect_best,
+                ep,
+                sample,
+                threshold=threshold,
+                z_threshold=z_threshold,
+                step_seconds=step_seconds,
+            ): (ep.stem, kind)
+            for ep, sample, kind in jobs
+        }
+        for future in as_completed(futures):
+            done += 1
+            stem, kind = futures[future]
+            match = future.result()
+            ep_state = state.episode(stem)
+            ep_state.source = str(ep_by_stem[stem])
+            score_str = f"{match.score:.4f}" if match else "none"
+            if kind == "open":
+                if match:
+                    ep_state.open_score = match.score
+                    ep_state.open_start = match.start
+                    ep_state.open_end = match.end
+                    ep_state.open_class = _UNC
+                else:
+                    ep_state.open_class = _UND
+            else:
+                if match:
+                    ep_state.close_score = match.score
+                    ep_state.close_start = match.start
+                    ep_state.close_end = match.end
+                    ep_state.close_class = _UNC
+                else:
+                    ep_state.close_class = _UND
+            _emit(f"  [{done}/{len(jobs)}] {kind:5}  {stem}  ({score_str})")
 
 
 # ---------------------------------------------------------------------------
-# Interactive review helpers
+# Interactive review
 # ---------------------------------------------------------------------------
 
 
@@ -310,16 +481,7 @@ except ImportError:
 
 
 def _start_audio(path: Path) -> Any:
-    return launch_resolved(
-        [
-            "ffplay",
-            "-nodisp",
-            "-autoexit",
-            "-loglevel",
-            "quiet",
-            str(path),
-        ]
-    )
+    return launch_resolved(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)])
 
 
 def _start_audio_segment(source: Path, start: float, end: float) -> Any:
@@ -351,197 +513,172 @@ def _stop_audio(proc: Any | None) -> None:
 
 
 @dataclass
-class SessionScores:
-    """In-memory score accumulator for raising adaptive thresholds within a run."""
-
-    approved_open: list[float] = field(default_factory=list)
-    rejected_open: list[float] = field(default_factory=list)
-    approved_close: list[float] = field(default_factory=list)
-    rejected_close: list[float] = field(default_factory=list)
-
-    def open_floor(self) -> float | None:
-        return min(self.approved_open) * 0.995 if self.approved_open else None
-
-    def close_floor(self) -> float | None:
-        return min(self.approved_close) * 0.995 if self.approved_close else None
+class _UndoEntry:
+    stem: str
+    kind: str
+    action: str
+    segment: Segment
+    target_list: list[Segment]
 
 
-def _review_bundle(
-    matches: list[MatchCandidate],
+def _next_uncertain(
+    state: PipelineState, exclude: set[tuple[str, str]] | None = None
+) -> tuple[str, str] | None:
+    """Return (stem, kind) of the highest-scoring uncertain target, or None."""
+    candidates = []
+    for stem, ep in state.episodes.items():
+        not_skipped_open = exclude is None or ("open", stem) not in exclude
+        not_skipped_close = exclude is None or ("close", stem) not in exclude
+        if ep.open_class == _UNC and ep.open_score > 0 and not_skipped_open:
+            candidates.append((ep.open_score, stem, "open"))
+        if ep.close_class == _UNC and ep.close_score > 0 and not_skipped_close:
+            candidates.append((ep.close_score, stem, "close"))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    _, stem, kind = candidates[0]
+    return stem, kind
+
+
+def _review_one_target(
+    state: PipelineState,
+    stem: str,
     kind: str,
-    source_path: Path,
-    session_scores: SessionScores,
     *,
-    snippet_path: Path,
-    ep_state: EpisodeState,
-) -> None:
-    """Present each match for interactive review; update ep_state in-place."""
-    if not matches:
-        print(f"  [{kind}] No matches found.", file=sys.stderr)
-        return
+    open_sample: Path,
+    close_sample: Path,
+    history: list[_UndoEntry],
+    default_floor: float,
+) -> str:
+    """Review one uncertain target interactively. Returns 'classified', 'skipped', or 'undone'."""
+    ep_state = state.episodes[stem]
+    source = Path(ep_state.source)
+    snippet = open_sample if kind == "open" else close_sample
+    target = state.open_target if kind == "open" else state.close_target
+    score = ep_state.open_score if kind == "open" else ep_state.close_score
+    start = ep_state.open_start if kind == "open" else ep_state.close_start
+    end = ep_state.open_end if kind == "open" else ep_state.close_end
 
-    approved: list[int] = []
-    rejected: list[int] = []
-    n_skipped = 0
-    history: list[tuple[str, int, float]] = []
+    undo_hint = "  [u]ndo" if history else ""
+    legend = f"  [a]pprove  [r]eject  [p]replay  [c]ompare  [s]kip  [q]uit{undo_hint}  "
+    print(f"\n  [{kind}]  score={score:.4f}  start={start:.1f}s", file=sys.stderr)
+    print(legend, end="", flush=True, file=sys.stderr)
+    current_proc: Any | None = _start_audio_segment(source, start, end)
 
-    i = 0
-    while i < len(matches):
-        m = matches[i]
-        print(
-            f"\n  [{kind}] Match {i + 1}/{len(matches)}  score={m.score:.4f}  start={m.start:.1f}s",
-            file=sys.stderr,
-        )
+    while True:
+        key = _getch().lower()
+        _stop_audio(current_proc)
+        current_proc = None
 
-        undo_hint = "  [u]ndo" if history else ""
-        legend = f"  [a]pprove  [r]eject  [p]replay  [c]ompare  [s]kip  [q]uit{undo_hint}  "
-
-        print(legend, end="", flush=True, file=sys.stderr)
-        current_proc: Any | None = _start_audio_segment(source_path, m.start, m.end)
-
-        while True:
-            key = _getch().lower()
-            _stop_audio(current_proc)
-            current_proc = None
-
-            if key == "p":
-                current_proc = _start_audio_segment(source_path, m.start, m.end)
-                print(f"\r{legend}", end="", flush=True, file=sys.stderr)
-            elif key == "c":
-                current_proc = _start_audio(snippet_path)
-                print(f"\r{legend}", end="", flush=True, file=sys.stderr)
-            elif key == "a":
-                approved.append(m.index)
-                (
-                    session_scores.approved_open
-                    if kind == "open"
-                    else session_scores.approved_close
-                ).append(m.score)
-                history.append(("approved", m.index, m.score))
+        if key == "p":
+            current_proc = _start_audio_segment(source, start, end)
+            print(f"\r{legend}", end="", flush=True, file=sys.stderr)
+        elif key == "c":
+            current_proc = _start_audio(snippet)
+            print(f"\r{legend}", end="", flush=True, file=sys.stderr)
+        elif key in ("a", "r"):
+            seg = Segment(source=str(source), start=start, end=end, score=score)
+            if key == "a":
+                target.positives.append(seg)
+                ep_class, lst = _POS, target.positives
                 print("\n✓ approved", file=sys.stderr)
-                i += 1
-                break
-            elif key == "r":
-                rejected.append(m.index)
-                (
-                    session_scores.rejected_open
-                    if kind == "open"
-                    else session_scores.rejected_close
-                ).append(m.score)
-                history.append(("rejected", m.index, m.score))
+            else:
+                target.negatives.append(seg)
+                ep_class, lst = _NEG, target.negatives
                 print("\n✗ rejected", file=sys.stderr)
-                i += 1
-                break
-            elif key == "s":
-                history.append(("skipped", m.index, m.score))
-                n_skipped += 1
-                print("\n— skipped", file=sys.stderr)
-                i += 1
-                break
-            elif key == "u" and history:
-                prev_action, prev_index, prev_score = history.pop()
-                if prev_action == "approved":
-                    approved.remove(prev_index)
-                    scores_list = (
-                        session_scores.approved_open
-                        if kind == "open"
-                        else session_scores.approved_close
-                    )
-                    scores_list.remove(prev_score)
-                elif prev_action == "rejected":
-                    rejected.remove(prev_index)
-                    scores_list = (
-                        session_scores.rejected_open
-                        if kind == "open"
-                        else session_scores.rejected_close
-                    )
-                    scores_list.remove(prev_score)
-                elif prev_action == "skipped":
-                    n_skipped -= 1
-                print(f"\n↩ undone ({prev_action})", file=sys.stderr)
-                i -= 1
-                break
-            elif key == "q":
-                print("\nQuitting review.", file=sys.stderr)
-                raise KeyboardInterrupt
+            if kind == "open":
+                ep_state.open_class = ep_class
+            else:
+                ep_state.close_class = ep_class
+            history.append(
+                _UndoEntry(stem=stem, kind=kind, action=key, segment=seg, target_list=lst)
+            )
+            _reclassify_all(state, default_floor)
+            return "classified"
+        elif key == "s":
+            print("\n— skipped", file=sys.stderr)
+            return "skipped"
+        elif key == "u" and history:
+            entry = history.pop()
+            entry.target_list.remove(entry.segment)
+            prev_ep = state.episodes[entry.stem]
+            if entry.kind == "open":
+                prev_ep.open_class = _UNC
+            else:
+                prev_ep.close_class = _UNC
+            _reclassify_all(state, default_floor)
+            print(
+                f"\n↩ undone ({entry.action} {entry.kind} for {entry.stem[:16]})",
+                file=sys.stderr,
+            )
+            return "undone"
+        elif key == "q":
+            print("\nQuitting review.", file=sys.stderr)
+            raise KeyboardInterrupt
 
-    if kind == "open":
-        ep_state.open_approved = approved
-        ep_state.open_rejected = rejected
-    else:
-        ep_state.close_approved = approved
-        ep_state.close_rejected = rejected
 
-    print(
-        f"\n  [{kind}] {len(approved)} approved  {len(rejected)} rejected  {n_skipped} skipped",
-        file=sys.stderr,
+def _count_uncertain(state: PipelineState) -> int:
+    return sum(
+        1
+        for ep in state.episodes.values()
+        for cls in (ep.open_class, ep.close_class)
+        if cls == _UNC
     )
 
 
-def _interactive_review_episode(
-    ep: Path,
-    session_scores: SessionScores,
+def _run_review_loop(
     state: PipelineState,
     *,
     open_sample: Path,
     close_sample: Path,
+    default_floor: float,
+    state_path: Path,
+    max_decisions: int | None = None,
 ) -> None:
-    ep_state = state.episode(ep.stem)
-    source_path = Path(ep_state.source) if ep_state.source else ep
-    _review_bundle(
-        ep_state.open_matches,
-        "open",
-        source_path,
-        session_scores,
-        snippet_path=open_sample,
-        ep_state=ep_state,
-    )
-    _review_bundle(
-        ep_state.close_matches,
-        "close",
-        source_path,
-        session_scores,
-        snippet_path=close_sample,
-        ep_state=ep_state,
-    )
-
-
-def _print_batch_summary(
-    batch_num: int,
-    session_scores: SessionScores,
-    open_threshold: float,
-    close_threshold: float,
-) -> None:
-    apo, rpo = session_scores.approved_open, session_scores.rejected_open
-    apc, rpc = session_scores.approved_close, session_scores.rejected_close
-    min_open = f"  min score {min(apo):.4f}" if apo else ""
-    min_close = f"  min score {min(apc):.4f}" if apc else ""
-    print(f"\nBatch {batch_num} summary:")
-    print(f"  open:   {len(apo)} approved{min_open}  {len(rpo)} rejected")
-    print(f"  close:  {len(apc)} approved{min_close}  {len(rpc)} rejected")
-    print(f"  Thresholds → open: {open_threshold:.4f}  close: {close_threshold:.4f}")
+    """Review uncertain targets until the queue is empty, the user quits, or max_decisions reached."""
+    history: list[_UndoEntry] = []
+    skipped: set[tuple[str, str]] = set()
+    decisions = 0
+    while max_decisions is None or decisions < max_decisions:
+        next_t = _next_uncertain(state, exclude=skipped)
+        if next_t is None:
+            n_uncertain = _count_uncertain(state)
+            if n_uncertain:
+                _emit(f"\n{n_uncertain} uncertain target(s) skipped — restart to revisit.")
+            break
+        stem, kind = next_t
+        ep_state = state.episodes[stem]
+        n_unc = _count_uncertain(state)
+        _emit(f"\n{'=' * 60}")
+        _emit(f"Episode: {stem}  ({n_unc} uncertain remaining)")
+        _emit("=" * 60)
+        result = _review_one_target(
+            state,
+            stem,
+            kind,
+            open_sample=open_sample,
+            close_sample=close_sample,
+            history=history,
+            default_floor=default_floor,
+        )
+        if result == "classified":
+            decisions += 1
+            skipped.discard((kind, stem))
+            state.save(state_path)
+        elif result == "skipped":
+            skipped.add((kind, stem))
+        else:  # undone
+            state.save(state_path)
+        del ep_state  # avoid unused-variable lint
+    if max_decisions is not None and decisions >= max_decisions:
+        n_unc = _count_uncertain(state)
+        if n_unc:
+            _emit(f"\nBatch complete ({decisions} decisions). {n_unc} uncertain remaining — run again.")
 
 
 # ---------------------------------------------------------------------------
 # Cut helpers
 # ---------------------------------------------------------------------------
-
-
-def _candidates_to_audio_matches(
-    candidates: list[MatchCandidate], approved: list[int]
-) -> list[AudioMatch]:
-    """Convert approved MatchCandidates to AudioMatch objects for pair_ad_segments."""
-    approved_set = frozenset(approved)
-    filtered = [c for c in candidates if not approved_set or c.index in approved_set]
-    return [
-        AudioMatch(
-            start_seconds=c.start,
-            end_seconds=c.end,
-            duration_seconds=c.end - c.start,
-            score=c.score,
-        )
-        for c in filtered
-    ]
 
 
 def _pair_and_cut(
@@ -555,17 +692,27 @@ def _pair_and_cut(
     yes: bool,
     dry_run: bool,
 ) -> str:
-    """Pair segments from ep_state and cut. Returns 'cut', 'skipped', or 'failed'."""
-    opens = _candidates_to_audio_matches(ep_state.open_matches, ep_state.open_approved)
-    closes = _candidates_to_audio_matches(ep_state.close_matches, ep_state.close_approved)
-
-    if not opens and not closes:
-        print("  No labeled matches — nothing to cut.")
+    """Pair open/close from ep_state and cut. Returns 'cut', 'skipped', or 'failed'."""
+    if not ep_state.is_cuttable():
+        print(f"  SKIP {stem}: open and close must both be classified as positive.")
         return "skipped"
+
+    open_match = AudioMatch(
+        start_seconds=ep_state.open_start,
+        end_seconds=ep_state.open_end,
+        duration_seconds=ep_state.open_end - ep_state.open_start,
+        score=ep_state.open_score,
+    )
+    close_match = AudioMatch(
+        start_seconds=ep_state.close_start,
+        end_seconds=ep_state.close_end,
+        duration_seconds=ep_state.close_end - ep_state.close_start,
+        score=ep_state.close_score,
+    )
 
     try:
         segments, unpaired_opens, unpaired_closes = pair_ad_segments(
-            opens, closes, min_gap=min_gap, max_gap=max_gap
+            [open_match], [close_match], min_gap=min_gap, max_gap=max_gap
         )
     except (ValueError, KeyError) as exc:
         print(f"  SKIP: {exc}")
@@ -577,7 +724,7 @@ def _pair_and_cut(
         print(f"  WARNING: unpaired close at {m.start_seconds:.1f}s")
 
     if not segments:
-        print("  No ad segments detected — nothing to cut.")
+        print("  No paired ad segments — nothing to cut.")
         return "skipped"
 
     try:
@@ -586,26 +733,22 @@ def _pair_and_cut(
         print(f"  SKIP: {exc}")
         return "skipped"
 
-    sorted_segs = sorted(segments, key=lambda s: s.cut_start)
-    print(f"\n  {len(sorted_segs)} ad segment(s):")
-    for i, seg in enumerate(sorted_segs, 1):
-        print(
-            f"    {i}. [{seg.cut_start:.1f}s → {seg.cut_end:.1f}s]  "
-            f"({seg.cut_end - seg.cut_start:.1f}s)"
-        )
+    seg = segments[0]
+    duration = seg.cut_end - seg.cut_start
+    print(f"\n  1 ad segment: [{seg.cut_start:.1f}s → {seg.cut_end:.1f}s]  ({duration:.1f}s)")
 
     if dry_run:
         return "skipped"
 
     if not yes:
-        resp = input(f"\n  Cut {len(sorted_segs)} ad(s) from {stem}? [y/N] ").strip().lower()
+        resp = input(f"\n  Cut ad from {stem}? [y/N] ").strip().lower()
         if resp != "y":
             print("  Skipped.")
             return "skipped"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{stem}.mp3"
-    spans = _build_keep_spans(sorted_segs)
+    spans = _build_keep_spans(segments)
     filter_complex, _ = _build_filter_complex(spans)
     exit_code = _run_ffmpeg(source, filter_complex, output_path)
 
@@ -620,27 +763,6 @@ def _pair_and_cut(
 # ---------------------------------------------------------------------------
 # review subcommand
 # ---------------------------------------------------------------------------
-
-
-def _detect_batch_job(
-    source: Path,
-    sample: Path,
-    kind: str,
-    *,
-    threshold: float,
-    z_threshold: float | None,
-    step_seconds: float,
-    max_matches: int,
-) -> tuple[str, str, list[MatchCandidate]]:
-    candidates = _detect_matches(
-        source,
-        sample,
-        threshold=threshold,
-        z_threshold=z_threshold,
-        step_seconds=step_seconds,
-        max_matches=max_matches,
-    )
-    return source.stem, kind, candidates
 
 
 def _cmd_review(args: argparse.Namespace) -> None:
@@ -663,96 +785,44 @@ def _cmd_review(args: argparse.Namespace) -> None:
         sys.exit(f"No full-length MP3s (>= 10 MB) found in {remote_dir}")
 
     state = PipelineState.load(state_path)
-    open_threshold = state.open_threshold
-    close_threshold = state.close_threshold
+    to_detect = [
+        ep for ep in all_full if args.overwrite or not state.episode(ep.stem).is_detected()
+    ]
+    n_already = len(all_full) - len(to_detect)
+    _emit(f"Episodes: {len(all_full)} total, {n_already} detected, {len(to_detect)} to detect")
 
-    episodes: list[Path] = []
-    n_already_done = 0
-    for ep in all_full:
-        if not args.overwrite and state.episode(ep.stem).is_labeled():
-            n_already_done += 1
-        else:
-            episodes.append(ep)
+    if to_detect:
+        _emit(f"\nDetecting {len(to_detect)} episode(s) with {args.workers} worker(s)...")
+        _detect_batch(
+            to_detect,
+            state,
+            open_sample,
+            close_sample,
+            threshold=args.threshold,
+            z_threshold=args.z_threshold,
+            step_seconds=args.step_seconds,
+            workers=args.workers,
+        )
+        _reclassify_all(state, args.threshold)
+        state.save(state_path)
 
-    print(f"Episodes to process: {len(episodes)}  ({n_already_done} already labeled, skipped)")
-    if not episodes:
-        print("All episodes already labeled. Use --overwrite to re-run.")
+    if args.no_interactive:
+        _emit("\nDetection complete. Run remote-review without --no-interactive to label.")
         return
 
-    session_scores = SessionScores()
+    n_unc = _count_uncertain(state)
+    _emit(f"\n{n_unc} uncertain target(s) to review.")
+    if not n_unc:
+        _emit("Nothing to review — all episodes classified.")
+        return
 
-    for batch_num, batch in enumerate(_chunks(episodes, args.batch_size), 1):
-        start_idx = (batch_num - 1) * args.batch_size + 1
-        end_idx = min(batch_num * args.batch_size, len(episodes))
-        _emit(f"\nBatch {batch_num}: episodes {start_idx}–{end_idx} of {len(episodes)}")
-
-        to_detect = [
-            ep for ep in batch if args.overwrite or not state.episode(ep.stem).has_matches()
-        ]
-
-        if to_detect:
-            jobs = [(ep, open_sample, "open", open_threshold) for ep in to_detect] + [
-                (ep, close_sample, "close", close_threshold) for ep in to_detect
-            ]
-            done = 0
-            n_jobs = len(jobs)
-            with ThreadPoolExecutor(max_workers=args.workers) as pool:
-                futures = {
-                    pool.submit(
-                        _detect_batch_job,
-                        src,
-                        smp,
-                        kind,
-                        threshold=thresh,
-                        z_threshold=args.z_threshold,
-                        step_seconds=args.step_seconds,
-                        max_matches=args.max_matches,
-                    ): (src.stem, kind)
-                    for src, smp, kind, thresh in jobs
-                }
-                for future in as_completed(futures):
-                    done += 1
-                    ep_stem, ep_kind, candidates = future.result()
-                    ep_state = state.episode(ep_stem)
-                    ep_state.source = str(remote_dir / f"{ep_stem}.mp3")
-                    if ep_kind == "open":
-                        ep_state.open_matches = candidates
-                    else:
-                        ep_state.close_matches = candidates
-                    _emit(
-                        f"  [{done}/{n_jobs}] {ep_kind:5}  {ep_stem}  ({len(candidates)} matches)"
-                    )
-            state.save(state_path)
-        else:
-            _emit(f"  All {len(batch)} episode(s) already detected — going straight to review.")
-
-        if not args.no_interactive:
-            for ep in batch:
-                print(f"\n{'=' * 60}")
-                print(f"Episode: {ep.stem}")
-                print("=" * 60)
-                _interactive_review_episode(
-                    ep,
-                    session_scores,
-                    state,
-                    open_sample=open_sample,
-                    close_sample=close_sample,
-                )
-
-            floor_open = session_scores.open_floor()
-            floor_close = session_scores.close_floor()
-            if floor_open is not None:
-                open_threshold = max(open_threshold, floor_open)
-            if floor_close is not None:
-                close_threshold = max(close_threshold, floor_close)
-
-            state.open_threshold = open_threshold
-            state.close_threshold = close_threshold
-            state.save(state_path)
-
-            _print_batch_summary(batch_num, session_scores, open_threshold, close_threshold)
-        else:
-            print("\nMatches detected. Run remote-review without --no-interactive to label them.")
+    _run_review_loop(
+        state,
+        open_sample=open_sample,
+        close_sample=close_sample,
+        default_floor=args.threshold,
+        state_path=state_path,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -767,16 +837,15 @@ def _cmd_cut(args: argparse.Namespace) -> None:
     state_path = review_root / "state.toml"
 
     state = PipelineState.load(state_path)
-
-    labeled = {stem: ep for stem, ep in state.episodes.items() if ep.is_labeled() and not ep.cut}
-    if not labeled:
-        print("No labeled episodes in state.toml. Run remote-review first.")
+    cuttable = {stem: ep for stem, ep in state.episodes.items() if ep.is_cuttable() and not ep.cut}
+    if not cuttable:
+        print("No cuttable episodes in state.toml — need open and close both positive.")
         return
 
-    print(f"Found {len(labeled)} labeled episode(s).")
+    print(f"Found {len(cuttable)} cuttable episode(s).")
     n_cut = n_skipped = n_failed = 0
 
-    for stem, ep_state in sorted(labeled.items()):
+    for stem, ep_state in sorted(cuttable.items()):
         source = Path(ep_state.source) if ep_state.source else remote_dir / f"{stem}.mp3"
         if not source.exists():
             print(f"SKIP {stem}: source not found at {source}")
@@ -809,12 +878,12 @@ def _cmd_cut(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# loop subcommand — detect → review → cut per episode in one pass
+# loop subcommand — detect → review → cut in one pass
 # ---------------------------------------------------------------------------
 
 
 def _cmd_loop(args: argparse.Namespace) -> None:
-    """One episode at a time: detect matches → review → cut → next."""
+    """Detect all undetected → review all uncertain → cut all cuttable."""
     remote_dir: Path = args.remote_dir
     review_root: Path = args.review_root
     output_dir: Path = args.output_dir
@@ -835,80 +904,54 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         sys.exit(f"No full-length MP3s (>= 10 MB) found in {remote_dir}")
 
     state = PipelineState.load(state_path)
-    open_threshold = state.open_threshold
-    close_threshold = state.close_threshold
+    to_detect = [
+        ep for ep in all_full if args.overwrite or not state.episode(ep.stem).is_detected()
+    ]
+    if to_detect:
+        _emit(f"\nDetecting {len(to_detect)} episode(s)...")
+        _detect_batch(
+            to_detect,
+            state,
+            open_sample,
+            close_sample,
+            threshold=args.threshold,
+            z_threshold=args.z_threshold,
+            step_seconds=args.step_seconds,
+            workers=args.workers,
+        )
+        _reclassify_all(state, args.threshold)
+        state.save(state_path)
 
-    episodes = [ep for ep in all_full if args.overwrite or not state.episode(ep.stem).cut]
-    n_already_done = len(all_full) - len(episodes)
-    print(f"Episodes to process: {len(episodes)}  ({n_already_done} already cut, skipped)")
-    if not episodes:
-        print("All episodes already cut. Use --overwrite to re-run.")
-        return
-
-    session_scores = SessionScores()
-    n_cut = n_skipped = n_failed = 0
-
-    for ep_num, ep in enumerate(episodes, 1):
-        print(f"\n{'=' * 60}")
-        print(f"[{ep_num}/{len(episodes)}] {ep.stem}")
-        print("=" * 60)
-
-        ep_state = state.episode(ep.stem)
-        ep_state.source = str(ep)
-        already_labeled = ep_state.is_labeled()
-
-        if args.overwrite or not ep_state.has_matches():
-            _emit("  Detecting matches...")
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                f_open = pool.submit(
-                    _detect_matches,
-                    ep,
-                    open_sample,
-                    threshold=open_threshold,
-                    z_threshold=args.z_threshold,
-                    step_seconds=args.step_seconds,
-                    max_matches=args.max_matches,
-                )
-                f_close = pool.submit(
-                    _detect_matches,
-                    ep,
-                    close_sample,
-                    threshold=close_threshold,
-                    z_threshold=args.z_threshold,
-                    step_seconds=args.step_seconds,
-                    max_matches=args.max_matches,
-                )
-                ep_state.open_matches = f_open.result()
-                ep_state.close_matches = f_close.result()
-                _emit(
-                    f"  open: {len(ep_state.open_matches)} match(es)  "
-                    f"close: {len(ep_state.close_matches)} match(es)"
-                )
-            state.save(state_path)
-
-        needs_review = not args.no_interactive and (args.overwrite or not already_labeled)
-        if needs_review:
-            _interactive_review_episode(
-                ep,
-                session_scores,
+    if not args.no_interactive:
+        n_unc = _count_uncertain(state)
+        _emit(f"\n{n_unc} uncertain target(s) to review.")
+        if n_unc:
+            _run_review_loop(
                 state,
                 open_sample=open_sample,
                 close_sample=close_sample,
+                default_floor=args.threshold,
+                state_path=state_path,
             )
-            floor_open = session_scores.open_floor()
-            floor_close = session_scores.close_floor()
-            if floor_open is not None:
-                open_threshold = max(open_threshold, floor_open)
-            if floor_close is not None:
-                close_threshold = max(close_threshold, floor_close)
-            state.open_threshold = open_threshold
-            state.close_threshold = close_threshold
-        elif already_labeled:
-            print("  Already labeled — skipping review.")
 
-        source = Path(ep_state.source)
+    cuttable = [
+        (stem, ep) for stem, ep in state.episodes.items() if ep.is_cuttable() and not ep.cut
+    ]
+    if not cuttable:
+        print("\nNo cuttable episodes.")
+        return
+
+    print(f"\nCutting {len(cuttable)} episode(s)...")
+    n_cut = n_skipped = n_failed = 0
+    for stem, ep_state in sorted(cuttable):
+        source = Path(ep_state.source) if ep_state.source else remote_dir / f"{stem}.mp3"
+        if not source.exists():
+            print(f"SKIP {stem}: source not found")
+            n_skipped += 1
+            continue
+        print(f"\n{stem}")
         result = _pair_and_cut(
-            ep.stem,
+            stem,
             source,
             output_dir=output_dir,
             ep_state=ep_state,
@@ -919,13 +962,12 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         )
         if result == "cut":
             ep_state.cut = True
+            state.save(state_path)
             n_cut += 1
         elif result == "failed":
             n_failed += 1
         else:
             n_skipped += 1
-
-        state.save(state_path)
 
     print(f"\nDone: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
     if n_failed:
@@ -938,34 +980,14 @@ def _cmd_loop(args: argparse.Namespace) -> None:
 
 
 def _add_detect_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument(
-        "--threshold",
-        type=float,
-        default=0.8,
-        help="Match score floor (adapts upward as you approve)",
-    )
-    p.add_argument(
-        "--z-threshold",
-        type=float,
-        default=3.0,
-        help="Z-score cutoff: keep scores >= mean + N*std (default: 3.0)",
-    )
+    p.add_argument("--threshold", type=float, default=0.8, help="Initial theta_plus floor")
+    p.add_argument("--z-threshold", type=float, default=3.0, help="Z-score cutoff (mean + N*std)")
     p.add_argument("--step-seconds", type=float, default=0.1)
-    p.add_argument(
-        "--max-matches",
-        type=int,
-        default=10,
-        help="Max candidates per snippet type per episode (default: 10)",
-    )
+    p.add_argument("--workers", type=int, default=2, help="Parallel workers for detection")
 
 
 def _add_cut_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument(
-        "--min-gap",
-        type=float,
-        default=-15.0,
-        help="Min seconds between open end and close start (default: -15)",
-    )
+    p.add_argument("--min-gap", type=float, default=-15.0, help="Min gap: open end → close start")
     p.add_argument("--max-gap", type=float, default=600.0)
     p.add_argument("--yes", action="store_true", help="Cut without confirmation prompt")
     p.add_argument("--dry-run", action="store_true", help="Show cut plan without running ffmpeg")
@@ -979,12 +1001,8 @@ def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--close-sample", default="close.mp3")
     p.add_argument("--review-root", type=Path, default=Path("downloads/review"))
     _add_detect_args(p)
-    p.add_argument("--batch-size", type=int, default=10)
-    p.add_argument("--workers", type=int, default=2)
     p.add_argument("--overwrite", action="store_true")
-    p.add_argument(
-        "--no-interactive", action="store_true", help="Detect only — skip interactive review"
-    )
+    p.add_argument("--no-interactive", action="store_true", help="Detect only, skip review")
 
 
 def _build_cut_parser(sub: argparse._SubParsersAction) -> None:
@@ -996,10 +1014,7 @@ def _build_cut_parser(sub: argparse._SubParsersAction) -> None:
 
 
 def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
-        "loop",
-        help="Detect → review → cut one episode at a time until done",
-    )
+    p = sub.add_parser("loop", help="Detect → review → cut until done")
     p.add_argument("--remote-dir", type=Path, default=Path("downloads/remote"))
     p.add_argument("--snippets-dir", type=Path, default=Path("downloads/snippets"))
     p.add_argument("--open-sample", default="open.mp3")
@@ -1008,16 +1023,8 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--output-dir", type=Path, default=Path("downloads/remove"))
     _add_detect_args(p)
     _add_cut_args(p)
-    p.add_argument(
-        "--no-interactive",
-        action="store_true",
-        help="Skip interactive review (use existing labels)",
-    )
-    p.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Re-detect, re-review, and re-cut already-processed episodes",
-    )
+    p.add_argument("--no-interactive", action="store_true", help="Skip interactive review")
+    p.add_argument("--overwrite", action="store_true", help="Re-detect and re-cut episodes")
 
 
 def main() -> None:
