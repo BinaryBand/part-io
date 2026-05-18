@@ -43,32 +43,33 @@ class AdSegment:
 def load_manifest_matches(
     manifest_path: Path,
     labels_path: Path | None = None,
+    *,
+    approved_indices: frozenset[int] | None = None,
 ) -> list[AudioMatch]:
     """Read matches from a manifest CSV, optionally filtered to labeled true positives.
 
-    When *labels_path* is given and its ``true_positive_indices`` list is
-    non-empty, only those rows are returned.  If the list is empty (labels not
-    yet filled in) all manifest rows are returned with a warning logged to the
-    caller via the second element of the returned tuple.
+    Pass *approved_indices* (a frozenset of CSV index values) to filter without
+    a JSON labels file — takes precedence over *labels_path* when provided.
+    When neither source supplies non-empty indices, all manifest rows are returned.
     """
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest not found: {manifest_path}")
 
-    true_positive_indices: frozenset[int] = frozenset()
-    labels_filled = False
+    filter_indices: frozenset[int] = frozenset()
 
-    if labels_path is not None and labels_path.exists():
+    if approved_indices is not None:
+        filter_indices = approved_indices
+    elif labels_path is not None and labels_path.exists():
         data = json.loads(labels_path.read_text(encoding="utf-8"))
         raw = data.get("true_positive_indices", [])
         if raw:
-            true_positive_indices = frozenset(int(i) for i in raw)
-            labels_filled = True
+            filter_indices = frozenset(int(i) for i in raw)
 
     matches: list[AudioMatch] = []
     with manifest_path.open(newline="", encoding="utf-8-sig") as f:
         for row in DictReader(f):
             idx = int(row["index"])
-            if labels_filled and idx not in true_positive_indices:
+            if filter_indices and idx not in filter_indices:
                 continue
             matches.append(
                 AudioMatch(

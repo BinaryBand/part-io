@@ -34,6 +34,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--open-sample", type=str, default="open.mp3", help="Open sample filename")
     parser.add_argument("--threshold", type=float, default=0.8, help="Match score threshold")
     parser.add_argument(
+        "--z-threshold",
+        type=float,
+        default=None,
+        help="Z-score cutoff: only keep matches scoring >= mean + N*std (e.g. 3.0)",
+    )
+    parser.add_argument(
         "--step-seconds", type=float, default=0.1, help="Sliding-window step in seconds"
     )
     add_review_export_arguments(parser)

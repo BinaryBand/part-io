@@ -51,6 +51,9 @@ def _print_help() -> None:
     print("  audio-review-batch  Run batch audio review generation")
     print("  audio-ad-detect     Pair open/close detections into ad_segments.json")
     print("  audio-ad-remove     Cut detected ad segments from an episode MP3")
+    print("  remote-review       Generate open/close review bundles from downloads/remote/")
+    print("  remote-cut          Cut ad segments from labeled remote episodes")
+    print("  remote-loop         Generate → review → cut one episode at a time (streamlined)")
     print("  generate-tasks  Regenerate config/generated.mk")
     print("  check-tasks     Verify config/generated.mk is current")
     print("  lint            Run declared lint tasks")
@@ -161,6 +164,9 @@ def main() -> None:
     sub.add_parser("audio-review-batch")
     sub.add_parser("audio-ad-detect")
     sub.add_parser("audio-ad-remove")
+    sub.add_parser("remote-review")
+    sub.add_parser("remote-cut")
+    sub.add_parser("remote-loop")
     generate = sub.add_parser("generate-tasks")
     generate.add_argument("--profile", help="Registry profile to generate task targets for")
 
@@ -176,7 +182,7 @@ def main() -> None:
 
     args, extra = parser.parse_known_args()
 
-    _passthrough_cmds = {"audio-review-batch", "audio-ad-detect", "audio-ad-remove"}
+    _passthrough_cmds = {"audio-review-batch", "audio-ad-detect", "audio-ad-remove", "remote-review", "remote-cut", "remote-loop"}
     if args.command not in _passthrough_cmds and extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
@@ -193,6 +199,12 @@ def main() -> None:
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_detect", *extra]))
     if args.command == "audio-ad-remove":
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_remove", *extra]))
+    if args.command == "remote-review":
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", "review", *extra]))
+    if args.command == "remote-cut":
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", "cut", *extra]))
+    if args.command == "remote-loop":
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", "loop", *extra]))
     if args.command == "generate-tasks":
         sys.exit(_run_generate_tasks(args.profile))
     if args.command == "check-tasks":
