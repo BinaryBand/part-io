@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from part_io.adapters.audio.ad_segments import AdSegment
@@ -20,9 +21,7 @@ from part_io.adapters.process.runner import run_resolved
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Remove detected ad segments from an episode MP3."
-    )
+    parser = argparse.ArgumentParser(description="Remove detected ad segments from an episode MP3.")
     parser.add_argument("--source", type=Path, required=True, help="Source episode MP3")
     parser.add_argument(
         "--segments",
@@ -91,7 +90,7 @@ def _build_keep_spans(segments: list[AdSegment]) -> list[tuple[float, float | No
     return spans
 
 
-def _build_filter_complex(spans: list[tuple[float, float | None]]) -> tuple[str, int]:
+def _build_filter_complex(spans: "Sequence[tuple[float, float | None]]") -> tuple[str, int]:
     """Build ffmpeg filter_complex string and return (filter_str, n_segments)."""
     parts: list[str] = []
     labels: list[str] = []
@@ -165,7 +164,10 @@ def main() -> None:
     print(f"Source: {args.source}")
     print(f"Ad segments to cut: {len(sorted_segs)}")
     for i, seg in enumerate(sorted_segs, 1):
-        print(f"  {i}. cut [{seg.cut_start:.3f}s, {seg.cut_end:.3f}s]  ({seg.cut_end - seg.cut_start:.1f}s)")
+        print(
+            f"  {i}. cut [{seg.cut_start:.3f}s, {seg.cut_end:.3f}s]"
+            f"  ({seg.cut_end - seg.cut_start:.1f}s)"
+        )
     print(f"Keep spans: {len(spans)}")
     for start, end in spans:
         end_str = f"{end:.3f}s" if end is not None else "EOF"

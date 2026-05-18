@@ -14,19 +14,17 @@ from __future__ import annotations
 
 import argparse
 import csv
-import subprocess
+import os
 import sys
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import subprocess  # nosemgrep: no-direct-subprocess-import-except-in-utils
+
+import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-
-try:
-    import tomllib
-except ModuleNotFoundError:
-    try:
-        import tomli as tomllib  # type: ignore[no-redef]
-    except ModuleNotFoundError:
-        tomllib = None  # type: ignore[assignment]
 
 from part_io.adapters.audio.ad_segments import load_manifest_matches, pair_ad_segments
 from part_io.adapters.process.runner import run_resolved
@@ -36,6 +34,7 @@ from part_io.cli.audio_ad_remove import (
     _run_ffmpeg,
     _validate_segments,
 )
+from part_io.utils.exec import launch_resolved
 
 _MIN_EPISODE_BYTES = 10 * 1024 * 1024  # skip promos — < 10 MB ≈ < 5 min at 128 kbps
 
@@ -55,8 +54,7 @@ class EpisodeState:
 
     def is_labeled(self) -> bool:
         return bool(
-            self.open_approved or self.open_rejected
-            or self.close_approved or self.close_rejected
+            self.open_approved or self.open_rejected or self.close_approved or self.close_rejected
         )
 
 
@@ -128,7 +126,8 @@ class PipelineState:
 
 def _full_episodes(remote_dir: Path) -> list[Path]:
     return sorted(
-        p for p in remote_dir.glob("*.mp3")
+        p
+        for p in remote_dir.glob("*.mp3")
         if p.is_file() and p.stat().st_size >= _MIN_EPISODE_BYTES
     )
 
@@ -167,26 +166,27 @@ try:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 except ImportError:
+
     def _getch() -> str:  # type: ignore[misc]
         line = input()
         return line[0].lower() if line else ""
 
 
-def _start_audio(path: Path) -> "subprocess.Popen[bytes]":
+def _start_audio(path: Path) -> "subprocess.Popen[Any]":
     """Start ffplay non-blocking; returns the process so the caller can stop it."""
-    return subprocess.Popen(
+    return launch_resolved(
         ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=open(os.devnull, "wb"),
+        stderr=open(os.devnull, "wb"),
     )
 
 
-def _stop_audio(proc: "subprocess.Popen[bytes] | None") -> None:
+def _stop_audio(proc: "subprocess.Popen[Any] | None") -> None:
     if proc is not None and proc.poll() is None:
         proc.terminate()
         try:
             proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
+        except OSError:
             proc.kill()
 
 
@@ -204,6 +204,124 @@ class SessionScores:
 
     def close_floor(self) -> float | None:
         return min(self.approved_close) * 0.995 if self.approved_close else None
+
+
+def _scores_list_for(session_scores: SessionScores, kind: str, action: str) -> list[float]:
+    if action == "approved":
+        return session_scores.approved_open if kind == "open" else session_scores.approved_close
+    return session_scores.rejected_open if kind == "open" else session_scores.rejected_close
+
+
+def _undo_action(
+    history: list[tuple[str, int, float]],
+    approved: list[int],
+    rejected: list[int],
+    session_scores: SessionScores,
+    kind: str,
+) -> tuple[int, str]:
+    """Pop history, undo last action. Returns (i_delta, prev_action)."""
+    prev_action, prev_index, prev_score = history.pop()
+    if prev_action in ("approved", "rejected"):
+        lst = approved if prev_action == "approved" else rejected
+        lst.remove(prev_index)
+        _scores_list_for(session_scores, kind, prev_action).remove(prev_score)
+    print(f"↩ undone ({prev_action})")
+    return -1, prev_action
+
+
+def _handle_review_key(
+    key: str,
+    *,
+    index: int,
+    score: float,
+    clip_path: Path,
+    snippet_path: Path,
+    kind: str,
+    approved: list[int],
+    rejected: list[int],
+    history: list[tuple[str, int, float]],
+    session_scores: SessionScores,
+) -> tuple[int, "subprocess.Popen[Any] | None"]:
+    """Handle one keypress. Returns (i_delta, new_proc); i_delta!=0 means advance row."""
+    if key in ("p", "c"):
+        proc = _start_audio(clip_path if key == "p" else snippet_path)
+        return 0, proc
+    if key == "a":
+        approved.append(index)
+        _scores_list_for(session_scores, kind, "approved").append(score)
+        history.append(("approved", index, score))
+        print("✓ approved")
+        return 1, None
+    if key == "r":
+        rejected.append(index)
+        _scores_list_for(session_scores, kind, "rejected").append(score)
+        history.append(("rejected", index, score))
+        print("✗ rejected")
+        return 1, None
+    if key == "s":
+        history.append(("skipped", index, score))
+        print("— skipped")
+        return 1, None
+    if key == "u" and history:
+        i_delta, _ = _undo_action(history, approved, rejected, session_scores, kind)
+        return i_delta, None
+    if key == "q":
+        print("\nQuitting review.")
+        raise KeyboardInterrupt
+    return 0, None
+
+
+def _review_clip(
+    *,
+    row: dict,
+    kind: str,
+    n_rows: int,
+    row_num: int,
+    snippet_path: Path,
+    approved: list[int],
+    rejected: list[int],
+    history: list[tuple[str, int, float]],
+    session_scores: SessionScores,
+    n_skipped: int,
+) -> tuple[int, int]:
+    """Review a single clip; returns (i_delta, n_skipped_delta)."""
+    index = int(row["index"])
+    score = float(row["score"])
+    start = float(row["start_seconds"])
+    clip_path = Path(row["clip_path"])
+
+    print(f"\n  [{kind}] Clip {row_num}/{n_rows}  score={score:.4f}  start={start:.1f}s")
+
+    if not clip_path.exists():
+        print("  (clip file missing) — skipped")
+        history.append(("skipped", index, score))
+        return 1, n_skipped + 1
+
+    undo_hint = "  [u]ndo" if history else ""
+    legend = f"  [a]pprove  [r]eject  [p]replay  [c]ompare  [s]kip  [q]uit{undo_hint}  "
+    current_proc: subprocess.Popen[Any] | None = _start_audio(clip_path)
+    print(legend, end="", flush=True)
+
+    while True:
+        key = _getch().lower()
+        _stop_audio(current_proc)
+        current_proc = None
+        i_delta, current_proc = _handle_review_key(
+            key,
+            index=index,
+            score=score,
+            clip_path=clip_path,
+            snippet_path=snippet_path,
+            kind=kind,
+            approved=approved,
+            rejected=rejected,
+            history=history,
+            session_scores=session_scores,
+        )
+        if key == "s":
+            n_skipped += 1
+        if i_delta != 0 or key in ("s",):
+            return i_delta, n_skipped
 
 
 def _review_bundle(
@@ -229,83 +347,24 @@ def _review_bundle(
     approved: list[int] = []
     rejected: list[int] = []
     n_skipped = 0
-    # Each entry: ("approved" | "rejected" | "skipped", index, score)
     history: list[tuple[str, int, float]] = []
 
     i = 0
     while i < len(rows):
-        row = rows[i]
-        index = int(row["index"])
-        score = float(row["score"])
-        start = float(row["start_seconds"])
-        clip_path = Path(row["clip_path"])
+        i_delta, n_skipped = _review_clip(
+            row=rows[i],
+            kind=kind,
+            n_rows=len(rows),
+            row_num=i + 1,
+            snippet_path=snippet_path,
+            approved=approved,
+            rejected=rejected,
+            history=history,
+            session_scores=session_scores,
+            n_skipped=n_skipped,
+        )
+        i += i_delta
 
-        print(f"\n  [{kind}] Clip {i + 1}/{len(rows)}  score={score:.4f}  start={start:.1f}s")
-
-        if not clip_path.exists():
-            print("  (clip file missing) — skipped")
-            history.append(("skipped", index, score))
-            n_skipped += 1
-            i += 1
-            continue
-
-        undo_hint = "  [u]ndo" if history else ""
-        legend = f"  [a]pprove  [r]eject  [p]replay  [c]ompare  [s]kip  [q]uit{undo_hint}  "
-
-        current_proc: subprocess.Popen[bytes] | None = _start_audio(clip_path)
-        print(legend, end="", flush=True)
-
-        while True:
-            key = _getch().lower()
-            _stop_audio(current_proc)
-            current_proc = None
-
-            if key == "p":
-                current_proc = _start_audio(clip_path)
-                print(f"\r{legend}", end="", flush=True)
-            elif key == "c":
-                current_proc = _start_audio(snippet_path)
-                print(f"\r{legend}", end="", flush=True)
-            elif key == "a":
-                approved.append(index)
-                (session_scores.approved_open if kind == "open" else session_scores.approved_close).append(score)
-                history.append(("approved", index, score))
-                print("✓ approved")
-                i += 1
-                break
-            elif key == "r":
-                rejected.append(index)
-                (session_scores.rejected_open if kind == "open" else session_scores.rejected_close).append(score)
-                history.append(("rejected", index, score))
-                print("✗ rejected")
-                i += 1
-                break
-            elif key == "s":
-                history.append(("skipped", index, score))
-                n_skipped += 1
-                print("— skipped")
-                i += 1
-                break
-            elif key == "u" and history:
-                prev_action, prev_index, prev_score = history.pop()
-                if prev_action == "approved":
-                    approved.remove(prev_index)
-                    scores_list = session_scores.approved_open if kind == "open" else session_scores.approved_close
-                    scores_list.remove(prev_score)
-                elif prev_action == "rejected":
-                    rejected.remove(prev_index)
-                    scores_list = session_scores.rejected_open if kind == "open" else session_scores.rejected_close
-                    scores_list.remove(prev_score)
-                elif prev_action == "skipped":
-                    n_skipped -= 1
-                print(f"↩ undone ({prev_action})")
-                i -= 1
-                break
-            elif key == "q":
-                print("\nQuitting review.")
-                raise KeyboardInterrupt
-
-    # Persist into episode state (caller saves to TOML)
     if kind == "open":
         ep_state.open_approved = approved
         ep_state.open_rejected = rejected
@@ -331,12 +390,18 @@ def _interactive_review_batch(
         print("=" * 60)
         ep_state = state.episode(ep.stem)
         _review_bundle(
-            review_root / "open" / ep.stem, "open", session_scores,
-            snippet_path=open_sample, ep_state=ep_state,
+            review_root / "open" / ep.stem,
+            "open",
+            session_scores,
+            snippet_path=open_sample,
+            ep_state=ep_state,
         )
         _review_bundle(
-            review_root / "close" / ep.stem, "close", session_scores,
-            snippet_path=close_sample, ep_state=ep_state,
+            review_root / "close" / ep.stem,
+            "close",
+            session_scores,
+            snippet_path=close_sample,
+            ep_state=ep_state,
         )
 
 
@@ -377,14 +442,23 @@ def _review_one(
     overwrite: bool,
 ) -> int:
     command = [
-        sys.executable, "-m", "part_io.cli.audio_review",
-        str(source), str(sample),
-        "--threshold", str(threshold),
-        "--z-threshold", str(z_threshold),
-        "--step-seconds", str(step_seconds),
-        "--max-clips", str(max_clips),
-        "--output-root", str(review_root),
-        "--bundle-name", bundle_name,
+        sys.executable,
+        "-m",
+        "part_io.cli.audio_review",
+        str(source),
+        str(sample),
+        "--threshold",
+        str(threshold),
+        "--z-threshold",
+        str(z_threshold),
+        "--step-seconds",
+        str(step_seconds),
+        "--max-clips",
+        str(max_clips),
+        "--output-root",
+        str(review_root),
+        "--bundle-name",
+        bundle_name,
     ]
     if refine:
         command.append("--refine")
@@ -402,6 +476,83 @@ def _clips_exist(review_root: Path, stem: str) -> bool:
     return manifest.exists() and any(manifest.parent.glob("*.mp3"))
 
 
+def _filter_unlabeled(
+    all_full: list[Path],
+    state: "PipelineState",
+    overwrite: bool,
+) -> tuple[list[Path], int]:
+    """Return (episodes_to_process, n_already_done)."""
+    episodes: list[Path] = []
+    n_already_done = 0
+    for ep in all_full:
+        if not overwrite and state.episode(ep.stem).is_labeled():
+            n_already_done += 1
+        else:
+            episodes.append(ep)
+    return episodes, n_already_done
+
+
+def _validate_remote_inputs(remote_dir: Path, open_sample: Path, close_sample: Path) -> None:
+    """Validate required paths for remote review/cut workflows."""
+    for path, label in [
+        (remote_dir, "Remote dir"),
+        (open_sample, "Open sample"),
+        (close_sample, "Close sample"),
+    ]:
+        if not path.exists():
+            sys.exit(f"{label} not found: {path}")
+
+
+def _process_batch(
+    batch_num: int,
+    batch: list[Path],
+    episodes: list[Path],
+    *,
+    args: argparse.Namespace,
+    review_root: Path,
+    open_sample: Path,
+    close_sample: Path,
+    open_threshold: float,
+    close_threshold: float,
+    session_scores: "SessionScores",
+    state: "PipelineState",
+    state_path: Path,
+) -> tuple[float, float]:
+    """Generate clips + optional interactive review for one batch. Returns updated thresholds."""
+    start_idx = (batch_num - 1) * args.batch_size + 1
+    end_idx = min(batch_num * args.batch_size, len(episodes))
+    _emit(f"\nBatch {batch_num}: episodes {start_idx}–{end_idx} of {len(episodes)}")
+
+    to_generate = [ep for ep in batch if args.overwrite or not _clips_exist(review_root, ep.stem)]
+    if to_generate:
+        _generate_batch_clips(
+            to_generate,
+            open_sample=open_sample,
+            close_sample=close_sample,
+            open_threshold=open_threshold,
+            close_threshold=close_threshold,
+            review_root=review_root,
+            args=args,
+        )
+    else:
+        _emit(f"  All {len(batch)} episode(s) have existing clips — going straight to review.")
+
+    if not args.no_interactive:
+        _interactive_review_batch(
+            batch,
+            review_root,
+            session_scores,
+            state,
+            open_sample=open_sample,
+            close_sample=close_sample,
+        )
+        return _update_thresholds(
+            session_scores, state, state_path, batch_num, open_threshold, close_threshold
+        )
+    print("\nClips generated. Run remote-review without --no-interactive to label them.")
+    return open_threshold, close_threshold
+
+
 def _cmd_review(args: argparse.Namespace) -> None:
     remote_dir: Path = args.remote_dir
     review_root: Path = args.review_root
@@ -409,9 +560,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
     close_sample = args.snippets_dir / args.close_sample
     state_path = review_root / "state.toml"
 
-    for path, label in [(remote_dir, "Remote dir"), (open_sample, "Open sample"), (close_sample, "Close sample")]:
-        if not path.exists():
-            sys.exit(f"{label} not found: {path}")
+    _validate_remote_inputs(remote_dir, open_sample, close_sample)
 
     all_full = _full_episodes(remote_dir)
     if not all_full:
@@ -421,78 +570,103 @@ def _cmd_review(args: argparse.Namespace) -> None:
     open_threshold = state.open_threshold
     close_threshold = state.close_threshold
 
-    episodes: list[Path] = []
-    n_already_done = 0
-    for ep in all_full:
-        if not args.overwrite and state.episode(ep.stem).is_labeled():
-            n_already_done += 1
-        else:
-            episodes.append(ep)
-
+    episodes, n_already_done = _filter_unlabeled(all_full, state, args.overwrite)
     print(f"Episodes to process: {len(episodes)}  ({n_already_done} already labeled, skipped)")
     if not episodes:
         print("All episodes already labeled. Use --overwrite to re-run.")
         return
 
     session_scores = SessionScores()
-
     for batch_num, batch in enumerate(_chunks(episodes, args.batch_size), 1):
-        start_idx = (batch_num - 1) * args.batch_size + 1
-        end_idx = min(batch_num * args.batch_size, len(episodes))
-        _emit(f"\nBatch {batch_num}: episodes {start_idx}–{end_idx} of {len(episodes)}")
+        open_threshold, close_threshold = _process_batch(
+            batch_num,
+            batch,
+            episodes,
+            args=args,
+            review_root=review_root,
+            open_sample=open_sample,
+            close_sample=close_sample,
+            open_threshold=open_threshold,
+            close_threshold=close_threshold,
+            session_scores=session_scores,
+            state=state,
+            state_path=state_path,
+        )
 
-        to_generate = [ep for ep in batch if args.overwrite or not _clips_exist(review_root, ep.stem)]
 
-        if to_generate:
-            jobs: list[tuple[Path, Path, str, float]] = (
-                [(ep, open_sample, f"open/{ep.stem}", open_threshold) for ep in to_generate] +
-                [(ep, close_sample, f"close/{ep.stem}", close_threshold) for ep in to_generate]
-            )
-            done = failed = 0
-            with ThreadPoolExecutor(max_workers=args.workers) as pool:
-                futures = {
-                    pool.submit(
-                        _review_one,
-                        source=src, sample=smp, bundle_name=bn,
-                        review_root=review_root, threshold=thresh,
-                        z_threshold=args.z_threshold, step_seconds=args.step_seconds,
-                        max_clips=args.max_clips, refine=args.refine, overwrite=args.overwrite,
-                    ): bn
-                    for src, smp, bn, thresh in jobs
-                }
-                n_jobs = len(futures)
-                for future in as_completed(futures):
-                    bundle = futures[future]
-                    code = future.result()
-                    done += 1
-                    if code != 0:
-                        failed += 1
-                    _emit(f"  [{done}/{n_jobs}] {'FAILED' if code != 0 else 'done  '}  {bundle}")
-            if failed:
-                _emit(f"Warning: {failed} job(s) failed in this batch.")
-        else:
-            _emit(f"  All {len(batch)} episode(s) have existing clips — going straight to review.")
+def _update_thresholds(
+    session_scores: SessionScores,
+    state: PipelineState,
+    state_path: Path,
+    batch_num: int,
+    open_threshold: float,
+    close_threshold: float,
+) -> tuple[float, float]:
+    """Raise thresholds based on session scores and persist state. Returns updated thresholds."""
+    floor_open = session_scores.open_floor()
+    floor_close = session_scores.close_floor()
+    if floor_open is not None:
+        open_threshold = max(open_threshold, floor_open)
+    if floor_close is not None:
+        close_threshold = max(close_threshold, floor_close)
+    state.open_threshold = open_threshold
+    state.close_threshold = close_threshold
+    state.save(state_path)
+    _print_batch_summary(batch_num, session_scores, open_threshold, close_threshold)
+    return open_threshold, close_threshold
 
-        if not args.no_interactive:
-            _interactive_review_batch(
-                batch, review_root, session_scores, state,
-                open_sample=open_sample, close_sample=close_sample,
-            )
 
-            floor_open = session_scores.open_floor()
-            floor_close = session_scores.close_floor()
-            if floor_open is not None:
-                open_threshold = max(open_threshold, floor_open)
-            if floor_close is not None:
-                close_threshold = max(close_threshold, floor_close)
+def _generate_batch_clips(
+    to_generate: list[Path],
+    *,
+    open_sample: Path,
+    close_sample: Path,
+    open_threshold: float,
+    close_threshold: float,
+    review_root: Path,
+    args: argparse.Namespace,
+) -> None:
+    """Generate review clips for a batch of episodes using a thread pool."""
+    jobs: list[tuple[Path, Path, str, float]] = [
+        (ep, open_sample, f"open/{ep.stem}", open_threshold) for ep in to_generate
+    ] + [(ep, close_sample, f"close/{ep.stem}", close_threshold) for ep in to_generate]
+    _run_clip_pool(jobs, review_root=review_root, args=args)
 
-            state.open_threshold = open_threshold
-            state.close_threshold = close_threshold
-            state.save(state_path)
 
-            _print_batch_summary(batch_num, session_scores, open_threshold, close_threshold)
-        else:
-            print("\nClips generated. Run remote-review without --no-interactive to label them.")
+def _run_clip_pool(
+    jobs: list[tuple[Path, Path, str, float]],
+    *,
+    review_root: Path,
+    args: argparse.Namespace,
+) -> None:
+    done = failed = 0
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {
+            pool.submit(
+                _review_one,
+                source=src,
+                sample=smp,
+                bundle_name=bn,
+                review_root=review_root,
+                threshold=thresh,
+                z_threshold=args.z_threshold,
+                step_seconds=args.step_seconds,
+                max_clips=args.max_clips,
+                refine=args.refine,
+                overwrite=args.overwrite,
+            ): bn
+            for src, smp, bn, thresh in jobs
+        }
+        n_jobs = len(futures)
+        for future in as_completed(futures):
+            bundle = futures[future]
+            code = future.result()
+            done += 1
+            if code != 0:
+                failed += 1
+            _emit(f"  [{done}/{n_jobs}] {'FAILED' if code != 0 else 'done  '}  {bundle}")
+    if failed:
+        _emit(f"Warning: {failed} job(s) failed in this batch.")
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +677,37 @@ def _cmd_review(args: argparse.Namespace) -> None:
 def _cleanup_clips(bundle_dir: Path) -> None:
     for clip in bundle_dir.glob("*.mp3"):
         clip.unlink(missing_ok=True)
+
+
+def _load_ad_segments(
+    open_manifest: Path,
+    close_manifest: Path,
+    ep_state: "EpisodeState",
+    min_gap: float,
+    max_gap: float,
+) -> "list[Any] | str":
+    """Load and pair ad segments. Returns segment list or a skip-reason string."""
+    try:
+        open_indices = frozenset(ep_state.open_approved) or None
+        close_indices = frozenset(ep_state.close_approved) or None
+        opens = load_manifest_matches(open_manifest, approved_indices=open_indices)
+        closes = load_manifest_matches(close_manifest, approved_indices=close_indices)
+        segments, unpaired_opens, unpaired_closes = pair_ad_segments(
+            opens, closes, min_gap=min_gap, max_gap=max_gap
+        )
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        return f"  SKIP: {exc}"
+    for m in unpaired_opens:
+        print(f"  WARNING: unpaired open at {m.start_seconds:.1f}s")
+    for m in unpaired_closes:
+        print(f"  WARNING: unpaired close at {m.start_seconds:.1f}s")
+    if not segments:
+        return "  No ad segments detected — nothing to cut."
+    try:
+        _validate_segments(segments)
+    except ValueError as exc:
+        return f"  SKIP: {exc}"
+    return segments
 
 
 def _pair_and_cut(
@@ -522,37 +727,19 @@ def _pair_and_cut(
     open_manifest = review_root / "open" / stem / "matches_manifest.csv"
     close_manifest = review_root / "close" / stem / "matches_manifest.csv"
 
-    try:
-        open_indices = frozenset(ep_state.open_approved) or None
-        close_indices = frozenset(ep_state.close_approved) or None
-        opens = load_manifest_matches(open_manifest, approved_indices=open_indices)
-        closes = load_manifest_matches(close_manifest, approved_indices=close_indices)
-        segments, unpaired_opens, unpaired_closes = pair_ad_segments(
-            opens, closes, min_gap=min_gap, max_gap=max_gap
-        )
-    except (FileNotFoundError, ValueError, KeyError) as exc:
-        print(f"  SKIP: {exc}")
+    result = _load_ad_segments(open_manifest, close_manifest, ep_state, min_gap, max_gap)
+    if isinstance(result, str):
+        print(result)
         return "skipped"
-
-    for m in unpaired_opens:
-        print(f"  WARNING: unpaired open at {m.start_seconds:.1f}s")
-    for m in unpaired_closes:
-        print(f"  WARNING: unpaired close at {m.start_seconds:.1f}s")
-
-    if not segments:
-        print("  No ad segments detected — nothing to cut.")
-        return "skipped"
-
-    try:
-        _validate_segments(segments)
-    except ValueError as exc:
-        print(f"  SKIP: {exc}")
-        return "skipped"
+    segments = result
 
     sorted_segs = sorted(segments, key=lambda s: s.cut_start)
     print(f"\n  {len(sorted_segs)} ad segment(s):")
     for i, seg in enumerate(sorted_segs, 1):
-        print(f"    {i}. [{seg.cut_start:.1f}s → {seg.cut_end:.1f}s]  ({seg.cut_end - seg.cut_start:.1f}s)")
+        print(
+            f"    {i}. [{seg.cut_start:.1f}s → {seg.cut_end:.1f}s]"
+            f"  ({seg.cut_end - seg.cut_start:.1f}s)"
+        )
 
     if dry_run:
         return "skipped"
@@ -590,10 +777,7 @@ def _cmd_cut(args: argparse.Namespace) -> None:
 
     state = PipelineState.load(state_path)
 
-    labeled = {
-        stem: ep for stem, ep in state.episodes.items()
-        if ep.is_labeled() and not ep.cut
-    }
+    labeled = {stem: ep for stem, ep in state.episodes.items() if ep.is_labeled() and not ep.cut}
     if not labeled:
         print("No labeled episodes found in state.toml. Run remote-review to label clips first.")
         return
@@ -610,10 +794,16 @@ def _cmd_cut(args: argparse.Namespace) -> None:
 
         print(f"\n{stem}")
         result = _pair_and_cut(
-            stem, source,
-            review_root=review_root, output_dir=output_dir, ep_state=ep_state,
-            min_gap=args.min_gap, max_gap=args.max_gap,
-            yes=args.yes, dry_run=args.dry_run, cleanup=args.cleanup,
+            stem,
+            source,
+            review_root=review_root,
+            output_dir=output_dir,
+            ep_state=ep_state,
+            min_gap=args.min_gap,
+            max_gap=args.max_gap,
+            yes=args.yes,
+            dry_run=args.dry_run,
+            cleanup=args.cleanup,
         )
         if result == "cut":
             ep_state.cut = True
@@ -632,6 +822,19 @@ def _cmd_cut(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 # loop subcommand — generate → review → cut per episode in one pass
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class LoopContext:
+    args: argparse.Namespace
+    state: PipelineState
+    state_path: Path
+    review_root: Path
+    remote_dir: Path
+    output_dir: Path
+    open_sample: Path
+    close_sample: Path
+    session_scores: SessionScores
 
 
 def _generate_episode_clips(
@@ -656,10 +859,16 @@ def _generate_episode_clips(
         futures = {
             pool.submit(
                 _review_one,
-                source=src, sample=smp, bundle_name=bn,
-                review_root=review_root, threshold=thresh,
-                z_threshold=z_threshold, step_seconds=step_seconds,
-                max_clips=max_clips, refine=refine, overwrite=overwrite,
+                source=src,
+                sample=smp,
+                bundle_name=bn,
+                review_root=review_root,
+                threshold=thresh,
+                z_threshold=z_threshold,
+                step_seconds=step_seconds,
+                max_clips=max_clips,
+                refine=refine,
+                overwrite=overwrite,
             ): bn
             for src, smp, bn, thresh in jobs
         }
@@ -667,6 +876,117 @@ def _generate_episode_clips(
             code = future.result()
             if code != 0:
                 _emit(f"  WARNING: clip generation failed for {futures[future]}")
+
+
+def _review_loop_episode(
+    ep: Path,
+    *,
+    ctx: "LoopContext",
+    ep_state: "EpisodeState",
+    already_labeled: bool,
+    open_threshold: float,
+    close_threshold: float,
+) -> tuple[float, float]:
+    """Review one episode and update thresholds if new labels were recorded."""
+    needs_review = not ctx.args.no_interactive and (ctx.args.overwrite or not already_labeled)
+    if needs_review:
+        _review_bundle(
+            ctx.review_root / "open" / ep.stem,
+            "open",
+            ctx.session_scores,
+            snippet_path=ctx.open_sample,
+            ep_state=ep_state,
+        )
+        _review_bundle(
+            ctx.review_root / "close" / ep.stem,
+            "close",
+            ctx.session_scores,
+            snippet_path=ctx.close_sample,
+            ep_state=ep_state,
+        )
+        floor_open = ctx.session_scores.open_floor()
+        floor_close = ctx.session_scores.close_floor()
+        if floor_open is not None:
+            open_threshold = max(open_threshold, floor_open)
+        if floor_close is not None:
+            close_threshold = max(close_threshold, floor_close)
+        ctx.state.open_threshold = open_threshold
+        ctx.state.close_threshold = close_threshold
+    elif already_labeled:
+        print("  Already labeled — skipping review.")
+    return open_threshold, close_threshold
+
+
+def _cut_loop_episode(
+    ep: Path,
+    *,
+    ctx: "LoopContext",
+    ep_state: "EpisodeState",
+) -> str:
+    """Pair approved labels and run the audio cut step for one episode."""
+    source = ctx.remote_dir / f"{ep.stem}.mp3"
+    return _pair_and_cut(
+        ep.stem,
+        source,
+        review_root=ctx.review_root,
+        output_dir=ctx.output_dir,
+        ep_state=ep_state,
+        min_gap=ctx.args.min_gap,
+        max_gap=ctx.args.max_gap,
+        yes=ctx.args.yes,
+        dry_run=ctx.args.dry_run,
+        cleanup=ctx.args.cleanup,
+    )
+
+
+def _process_loop_episode(
+    ep: Path,
+    ep_num: int,
+    n_total: int,
+    *,
+    ctx: "LoopContext",
+    open_threshold: float,
+    close_threshold: float,
+) -> tuple[str, float, float]:
+    """Generate, review, and cut one episode. Returns (result, open_threshold, close_threshold)."""
+    print(f"\n{'=' * 60}")
+    print(f"[{ep_num}/{n_total}] {ep.stem}")
+    print("=" * 60)
+
+    ep_state = ctx.state.episode(ep.stem)
+    already_labeled = ep_state.is_labeled()
+    needs_gen = ctx.args.overwrite or not _clips_exist(ctx.review_root, ep.stem)
+
+    if needs_gen:
+        _emit("  Generating clips...")
+        _generate_episode_clips(
+            ep,
+            open_sample=ctx.open_sample,
+            close_sample=ctx.close_sample,
+            review_root=ctx.review_root,
+            open_threshold=open_threshold,
+            close_threshold=close_threshold,
+            z_threshold=ctx.args.z_threshold,
+            step_seconds=ctx.args.step_seconds,
+            max_clips=ctx.args.max_clips,
+            refine=ctx.args.refine,
+            overwrite=ctx.args.overwrite,
+        )
+
+    open_threshold, close_threshold = _review_loop_episode(
+        ep,
+        ctx=ctx,
+        ep_state=ep_state,
+        already_labeled=already_labeled,
+        open_threshold=open_threshold,
+        close_threshold=close_threshold,
+    )
+
+    result = _cut_loop_episode(ep, ctx=ctx, ep_state=ep_state)
+    if result == "cut":
+        ep_state.cut = True
+    ctx.state.save(ctx.state_path)
+    return result, open_threshold, close_threshold
 
 
 def _cmd_loop(args: argparse.Namespace) -> None:
@@ -678,13 +998,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     close_sample = args.snippets_dir / args.close_sample
     state_path = review_root / "state.toml"
 
-    for path, label in [
-        (remote_dir, "Remote dir"),
-        (open_sample, "Open sample"),
-        (close_sample, "Close sample"),
-    ]:
-        if not path.exists():
-            sys.exit(f"{label} not found: {path}")
+    _validate_remote_inputs(remote_dir, open_sample, close_sample)
 
     all_full = _full_episodes(remote_dir)
     if not all_full:
@@ -694,10 +1008,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     open_threshold = state.open_threshold
     close_threshold = state.close_threshold
 
-    episodes = [
-        ep for ep in all_full
-        if args.overwrite or not state.episode(ep.stem).cut
-    ]
+    episodes = [ep for ep in all_full if args.overwrite or not state.episode(ep.stem).cut]
     n_already_done = len(all_full) - len(episodes)
     print(f"Episodes to process: {len(episodes)}  ({n_already_done} already cut, skipped)")
     if not episodes:
@@ -705,67 +1016,34 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         return
 
     session_scores = SessionScores()
+    ctx = LoopContext(
+        args=args,
+        state=state,
+        state_path=state_path,
+        review_root=review_root,
+        remote_dir=remote_dir,
+        output_dir=output_dir,
+        open_sample=open_sample,
+        close_sample=close_sample,
+        session_scores=session_scores,
+    )
     n_cut = n_skipped = n_failed = 0
 
     for ep_num, ep in enumerate(episodes, 1):
-        print(f"\n{'=' * 60}")
-        print(f"[{ep_num}/{len(episodes)}] {ep.stem}")
-        print("=" * 60)
-
-        ep_state = state.episode(ep.stem)
-        already_labeled = ep_state.is_labeled()
-        needs_gen = args.overwrite or not _clips_exist(review_root, ep.stem)
-
-        if needs_gen:
-            _emit("  Generating clips...")
-            _generate_episode_clips(
-                ep,
-                open_sample=open_sample, close_sample=close_sample,
-                review_root=review_root,
-                open_threshold=open_threshold, close_threshold=close_threshold,
-                z_threshold=args.z_threshold, step_seconds=args.step_seconds,
-                max_clips=args.max_clips, refine=args.refine, overwrite=args.overwrite,
-            )
-
-        needs_review = not args.no_interactive and (args.overwrite or not already_labeled)
-        if needs_review:
-            _review_bundle(
-                review_root / "open" / ep.stem, "open", session_scores,
-                snippet_path=open_sample, ep_state=ep_state,
-            )
-            _review_bundle(
-                review_root / "close" / ep.stem, "close", session_scores,
-                snippet_path=close_sample, ep_state=ep_state,
-            )
-
-            floor_open = session_scores.open_floor()
-            floor_close = session_scores.close_floor()
-            if floor_open is not None:
-                open_threshold = max(open_threshold, floor_open)
-            if floor_close is not None:
-                close_threshold = max(close_threshold, floor_close)
-
-            state.open_threshold = open_threshold
-            state.close_threshold = close_threshold
-        elif already_labeled:
-            print("  Already labeled — skipping review.")
-
-        source = remote_dir / f"{ep.stem}.mp3"
-        result = _pair_and_cut(
-            ep.stem, source,
-            review_root=review_root, output_dir=output_dir, ep_state=ep_state,
-            min_gap=args.min_gap, max_gap=args.max_gap,
-            yes=args.yes, dry_run=args.dry_run, cleanup=args.cleanup,
+        result, open_threshold, close_threshold = _process_loop_episode(
+            ep,
+            ep_num,
+            len(episodes),
+            ctx=ctx,
+            open_threshold=open_threshold,
+            close_threshold=close_threshold,
         )
         if result == "cut":
-            ep_state.cut = True
             n_cut += 1
         elif result == "failed":
             n_failed += 1
         else:
             n_skipped += 1
-
-        state.save(state_path)
 
     print(f"\nDone: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
     if n_failed:
@@ -778,46 +1056,82 @@ def _cmd_loop(args: argparse.Namespace) -> None:
 
 
 def _build_review_parser(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser("review", help="Generate open/close review bundles and label them interactively")
-    p.add_argument("--remote-dir", type=Path, default=Path("downloads/remote"),
-                   help="Source MP3 directory (rclone mount)")
+    p = sub.add_parser(
+        "review", help="Generate open/close review bundles and label them interactively"
+    )
+    p.add_argument(
+        "--remote-dir",
+        type=Path,
+        default=Path("downloads/remote"),
+        help="Source MP3 directory (rclone mount)",
+    )
     p.add_argument("--snippets-dir", type=Path, default=Path("downloads/snippets"))
     p.add_argument("--open-sample", default="open.mp3")
     p.add_argument("--close-sample", default="close.mp3")
     p.add_argument("--review-root", type=Path, default=Path("downloads/review"))
-    p.add_argument("--threshold", type=float, default=0.8,
-                   help="Initial match score floor (adapts upward after each batch)")
-    p.add_argument("--z-threshold", type=float, default=3.0,
-                   help="Z-score cutoff: keep scores >= mean + N*std (default: 3.0)")
+    p.add_argument(
+        "--threshold",
+        type=float,
+        default=0.8,
+        help="Initial match score floor (adapts upward after each batch)",
+    )
+    p.add_argument(
+        "--z-threshold",
+        type=float,
+        default=3.0,
+        help="Z-score cutoff: keep scores >= mean + N*std (default: 3.0)",
+    )
     p.add_argument("--step-seconds", type=float, default=0.1)
     p.add_argument("--max-clips", type=int, default=10)
-    p.add_argument("--batch-size", type=int, default=10,
-                   help="Episodes per batch (default: 10)")
-    p.add_argument("--workers", type=int, default=2,
-                   help="Parallel clip-generation workers (default: 2)")
-    p.add_argument("--overwrite", action="store_true",
-                   help="Re-generate clips and re-review already-labeled episodes")
-    p.add_argument("--no-interactive", action="store_true",
-                   help="Generate clips only — skip interactive review session")
-    p.add_argument("--refine", action="store_true",
-                   help="Fine-grained local refinement of coarse matches")
+    p.add_argument("--batch-size", type=int, default=10, help="Episodes per batch (default: 10)")
+    p.add_argument(
+        "--workers", type=int, default=2, help="Parallel clip-generation workers (default: 2)"
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-generate clips and re-review already-labeled episodes",
+    )
+    p.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Generate clips only — skip interactive review session",
+    )
+    p.add_argument(
+        "--refine", action="store_true", help="Fine-grained local refinement of coarse matches"
+    )
 
 
 def _build_cut_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("cut", help="Detect ad segments from labeled bundles and write cleaned MP3s")
     p.add_argument("--remote-dir", type=Path, default=Path("downloads/remote"))
     p.add_argument("--review-root", type=Path, default=Path("downloads/review"))
-    p.add_argument("--output-dir", type=Path, default=Path("downloads/remove"),
-                   help="Destination for cleaned MP3s (default: downloads/remove)")
-    p.add_argument("--min-gap", type=float, default=-15.0,
-                   help="Min seconds between open end and close start (default: -15)")
+    p.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("downloads/remove"),
+        help="Destination for cleaned MP3s (default: downloads/remove)",
+    )
+    p.add_argument(
+        "--min-gap",
+        type=float,
+        default=-15.0,
+        help="Min seconds between open end and close start (default: -15)",
+    )
     p.add_argument("--max-gap", type=float, default=600.0)
-    p.add_argument("--cleanup", action="store_true",
-                   help="Delete clip files after a successful cut (keeps manifests)")
-    p.add_argument("--yes", action="store_true",
-                   help="Non-interactive: cut without confirmation prompt")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Show cut plan for all labeled episodes without running ffmpeg")
+    p.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Delete clip files after a successful cut (keeps manifests)",
+    )
+    p.add_argument(
+        "--yes", action="store_true", help="Non-interactive: cut without confirmation prompt"
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show cut plan for all labeled episodes without running ffmpeg",
+    )
 
 
 def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
@@ -831,24 +1145,35 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--close-sample", default="close.mp3")
     p.add_argument("--review-root", type=Path, default=Path("downloads/review"))
     p.add_argument("--output-dir", type=Path, default=Path("downloads/remove"))
-    p.add_argument("--threshold", type=float, default=0.8,
-                   help="Initial match score floor (adapts upward as you approve clips)")
+    p.add_argument(
+        "--threshold",
+        type=float,
+        default=0.8,
+        help="Initial match score floor (adapts upward as you approve clips)",
+    )
     p.add_argument("--z-threshold", type=float, default=3.0)
     p.add_argument("--step-seconds", type=float, default=0.1)
     p.add_argument("--max-clips", type=int, default=10)
     p.add_argument("--refine", action="store_true")
     p.add_argument("--min-gap", type=float, default=-15.0)
     p.add_argument("--max-gap", type=float, default=600.0)
-    p.add_argument("--yes", action="store_true",
-                   help="Cut without asking for confirmation after each review")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Show cut plan but do not run ffmpeg")
-    p.add_argument("--cleanup", action="store_true",
-                   help="Delete clip files after a successful cut")
-    p.add_argument("--no-interactive", action="store_true",
-                   help="Skip interactive review (use existing labels or all manifest rows)")
-    p.add_argument("--overwrite", action="store_true",
-                   help="Re-generate, re-review, and re-cut already-processed episodes")
+    p.add_argument(
+        "--yes", action="store_true", help="Cut without asking for confirmation after each review"
+    )
+    p.add_argument("--dry-run", action="store_true", help="Show cut plan but do not run ffmpeg")
+    p.add_argument(
+        "--cleanup", action="store_true", help="Delete clip files after a successful cut"
+    )
+    p.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Skip interactive review (use existing labels or all manifest rows)",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-generate, re-review, and re-cut already-processed episodes",
+    )
 
 
 def main() -> None:

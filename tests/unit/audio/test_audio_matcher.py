@@ -151,7 +151,11 @@ def test_z_threshold_none_leaves_results_unchanged(tmp_path: Path) -> None:
     source_path = tmp_path / "source.wav"
 
     _write_mono_wav(sample_path, burst, sample_rate)
-    source_samples = [*_make_noise(sample_rate * 2, seed=9), *burst, *_make_noise(sample_rate * 2, seed=7)]
+    source_samples = [
+        *_make_noise(sample_rate * 2, seed=9),
+        *burst,
+        *_make_noise(sample_rate * 2, seed=7),
+    ]
     _write_mono_wav(source_path, source_samples, sample_rate)
 
     matches_default = find_audio_sample_matches(

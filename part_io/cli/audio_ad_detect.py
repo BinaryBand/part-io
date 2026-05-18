@@ -132,38 +132,27 @@ def _match_to_dict(m) -> dict:
     }
 
 
-def main() -> None:
-    parser = _build_parser()
-    args = parser.parse_args()
+def _detect_segments(
+    args: argparse.Namespace, episode_dir: Path
+) -> tuple[list, list, list, list[str]]:
+    """Load bundles and pair ad segments.
 
-    episode_dir = _resolve_episode_dir(args.review_root, args.episode)
-    if not episode_dir.exists():
-        parser.exit(2, f"Episode directory not found: {episode_dir}\n")
-
+    Returns (segments, unpaired_opens, unpaired_closes, warnings).
+    """
     all_warnings: list[str] = []
-
-    try:
-        opens, open_warnings = _load_bundle(episode_dir, args.open_bundle, use_labels=args.use_labels)
-        closes, close_warnings = _load_bundle(episode_dir, args.close_bundle, use_labels=args.use_labels)
-    except FileNotFoundError as exc:
-        parser.exit(2, f"{exc}\n")
-        return
-
+    opens, open_warnings = _load_bundle(episode_dir, args.open_bundle, use_labels=args.use_labels)
+    closes, close_warnings = _load_bundle(
+        episode_dir, args.close_bundle, use_labels=args.use_labels
+    )
     all_warnings.extend(open_warnings)
     all_warnings.extend(close_warnings)
-
     if not opens:
         all_warnings.append("No open matches found — no segments will be detected")
     if not closes:
         all_warnings.append("No close matches found — no segments will be detected")
-
     segments, unpaired_opens, unpaired_closes = pair_ad_segments(
-        opens,
-        closes,
-        min_gap=args.min_gap,
-        max_gap=args.max_gap,
+        opens, closes, min_gap=args.min_gap, max_gap=args.max_gap
     )
-
     for m in unpaired_opens:
         all_warnings.append(
             f"Unpaired open at {m.start_seconds}s (score={m.score}) — no close within"
@@ -173,10 +162,18 @@ def main() -> None:
         all_warnings.append(
             f"Unpaired close at {m.start_seconds}s (score={m.score}) — no preceding open; skipping"
         )
+    return segments, unpaired_opens, unpaired_closes, all_warnings
 
-    for w in all_warnings:
-        print(f"WARNING: {w}", file=sys.stderr)
 
+def _write_output(
+    args: argparse.Namespace,
+    episode_dir: Path,
+    segments,
+    unpaired_opens,
+    unpaired_closes,
+    all_warnings,
+) -> Path:  # noqa: E501
+    """Write detected segments to JSON and return the output path."""
     output_path = args.output or (episode_dir / "ad_segments.json")
     payload = {
         "episode": args.episode,
@@ -186,6 +183,31 @@ def main() -> None:
         "warnings": all_warnings,
     }
     output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return output_path
+
+
+def main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    episode_dir = _resolve_episode_dir(args.review_root, args.episode)
+    if not episode_dir.exists():
+        parser.exit(2, f"Episode directory not found: {episode_dir}\n")
+
+    try:
+        segments, unpaired_opens, unpaired_closes, all_warnings = _detect_segments(
+            args, episode_dir
+        )
+    except FileNotFoundError as exc:
+        parser.exit(2, f"{exc}\n")
+        return
+
+    for w in all_warnings:
+        print(f"WARNING: {w}", file=sys.stderr)
+
+    output_path = _write_output(
+        args, episode_dir, segments, unpaired_opens, unpaired_closes, all_warnings
+    )
 
     print(f"Detected {len(segments)} ad segment(s)")
     for i, seg in enumerate(segments, 1):

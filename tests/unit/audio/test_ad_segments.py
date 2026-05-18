@@ -30,7 +30,14 @@ def _write_manifest(path: Path, rows: list[dict]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["index", "score", "start_seconds", "end_seconds", "duration_seconds", "clip_path"],
+            fieldnames=[
+                "index",
+                "score",
+                "start_seconds",
+                "end_seconds",
+                "duration_seconds",
+                "clip_path",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -59,10 +66,27 @@ def _match(start: float, duration: float = 10.0, score: float = 0.9) -> AudioMat
 
 def test_load_manifest_matches_returns_all_rows_without_labels(tmp_path: Path) -> None:
     manifest = tmp_path / "matches_manifest.csv"
-    _write_manifest(manifest, [
-        {"index": 1, "score": 0.9, "start_seconds": 100.0, "end_seconds": 110.0, "duration_seconds": 10.0, "clip_path": ""},
-        {"index": 2, "score": 0.8, "start_seconds": 200.0, "end_seconds": 210.0, "duration_seconds": 10.0, "clip_path": ""},
-    ])
+    _write_manifest(
+        manifest,
+        [
+            {
+                "index": 1,
+                "score": 0.9,
+                "start_seconds": 100.0,
+                "end_seconds": 110.0,
+                "duration_seconds": 10.0,
+                "clip_path": "",
+            },
+            {
+                "index": 2,
+                "score": 0.8,
+                "start_seconds": 200.0,
+                "end_seconds": 210.0,
+                "duration_seconds": 10.0,
+                "clip_path": "",
+            },
+        ],
+    )
 
     matches = load_manifest_matches(manifest)
 
@@ -74,11 +98,35 @@ def test_load_manifest_matches_returns_all_rows_without_labels(tmp_path: Path) -
 def test_load_manifest_matches_filters_to_true_positives(tmp_path: Path) -> None:
     manifest = tmp_path / "matches_manifest.csv"
     labels = tmp_path / "match_labels.json"
-    _write_manifest(manifest, [
-        {"index": 1, "score": 0.9, "start_seconds": 100.0, "end_seconds": 110.0, "duration_seconds": 10.0, "clip_path": ""},
-        {"index": 2, "score": 0.8, "start_seconds": 200.0, "end_seconds": 210.0, "duration_seconds": 10.0, "clip_path": ""},
-        {"index": 3, "score": 0.85, "start_seconds": 300.0, "end_seconds": 310.0, "duration_seconds": 10.0, "clip_path": ""},
-    ])
+    _write_manifest(
+        manifest,
+        [
+            {
+                "index": 1,
+                "score": 0.9,
+                "start_seconds": 100.0,
+                "end_seconds": 110.0,
+                "duration_seconds": 10.0,
+                "clip_path": "",
+            },
+            {
+                "index": 2,
+                "score": 0.8,
+                "start_seconds": 200.0,
+                "end_seconds": 210.0,
+                "duration_seconds": 10.0,
+                "clip_path": "",
+            },
+            {
+                "index": 3,
+                "score": 0.85,
+                "start_seconds": 300.0,
+                "end_seconds": 310.0,
+                "duration_seconds": 10.0,
+                "clip_path": "",
+            },
+        ],
+    )
     _write_labels(labels, true_positive_indices=[1, 3])
 
     matches = load_manifest_matches(manifest, labels)
@@ -90,9 +138,19 @@ def test_load_manifest_matches_filters_to_true_positives(tmp_path: Path) -> None
 def test_load_manifest_matches_falls_back_when_labels_empty(tmp_path: Path) -> None:
     manifest = tmp_path / "matches_manifest.csv"
     labels = tmp_path / "match_labels.json"
-    _write_manifest(manifest, [
-        {"index": 1, "score": 0.9, "start_seconds": 100.0, "end_seconds": 110.0, "duration_seconds": 10.0, "clip_path": ""},
-    ])
+    _write_manifest(
+        manifest,
+        [
+            {
+                "index": 1,
+                "score": 0.9,
+                "start_seconds": 100.0,
+                "end_seconds": 110.0,
+                "duration_seconds": 10.0,
+                "clip_path": "",
+            },
+        ],
+    )
     _write_labels(labels, true_positive_indices=[])
 
     matches = load_manifest_matches(manifest, labels)
@@ -173,7 +231,7 @@ def test_pair_ad_segments_each_close_used_at_most_once() -> None:
 
 
 def test_pair_ad_segments_returns_gap_seconds() -> None:
-    opens = [_match(100.0, duration=10.0)]   # ends at 110
+    opens = [_match(100.0, duration=10.0)]  # ends at 110
     closes = [_match(200.0, duration=10.0)]  # starts at 200, gap = 200 - 110 = 90
 
     segments, _, _ = pair_ad_segments(opens, closes)

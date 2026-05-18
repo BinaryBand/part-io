@@ -153,39 +153,37 @@ def _clean() -> int:
     return 0
 
 
-def main() -> None:
-    """Parse CLI args and execute project tasks."""
+_PASSTHROUGH_CMDS = {
+    "audio-review-batch",
+    "audio-ad-detect",
+    "audio-ad-remove",
+    "remote-review",
+    "remote-cut",
+    "remote-loop",
+}
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Cross-platform project task runner.")
     sub = parser.add_subparsers(dest="command", required=True)
-
     sub.add_parser("help")
     sub.add_parser("install")
     sub.add_parser("test")
-    sub.add_parser("audio-review-batch")
-    sub.add_parser("audio-ad-detect")
-    sub.add_parser("audio-ad-remove")
-    sub.add_parser("remote-review")
-    sub.add_parser("remote-cut")
-    sub.add_parser("remote-loop")
+    for cmd in sorted(_PASSTHROUGH_CMDS):
+        sub.add_parser(cmd)
     generate = sub.add_parser("generate-tasks")
     generate.add_argument("--profile", help="Registry profile to generate task targets for")
-
     check = sub.add_parser("check-tasks")
     check.add_argument("--profile", help="Registry profile to check generated task targets for")
-
     lint = sub.add_parser("lint")
     lint.add_argument("--profile", help="Registry profile to run when targets are not specified")
     lint.add_argument("--report-json", type=Path, help="Write lint execution report to JSON file")
     lint.add_argument("targets", nargs="*")
-
     sub.add_parser("clean")
+    return parser
 
-    args, extra = parser.parse_known_args()
 
-    _passthrough_cmds = {"audio-review-batch", "audio-ad-detect", "audio-ad-remove", "remote-review", "remote-cut", "remote-loop"}
-    if args.command not in _passthrough_cmds and extra:
-        parser.error(f"unrecognized arguments: {' '.join(extra)}")
-
+def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace, extra: list[str]) -> None:
     if args.command == "help":
         _print_help()
         return
@@ -199,12 +197,9 @@ def main() -> None:
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_detect", *extra]))
     if args.command == "audio-ad-remove":
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_remove", *extra]))
-    if args.command == "remote-review":
-        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", "review", *extra]))
-    if args.command == "remote-cut":
-        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", "cut", *extra]))
-    if args.command == "remote-loop":
-        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", "loop", *extra]))
+    if args.command in ("remote-review", "remote-cut", "remote-loop"):
+        sub = args.command.split("-", 1)[1]
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", sub, *extra]))
     if args.command == "generate-tasks":
         sys.exit(_run_generate_tasks(args.profile))
     if args.command == "check-tasks":
@@ -213,8 +208,16 @@ def main() -> None:
         sys.exit(_run_lint(args.targets, profile=args.profile, report_json=args.report_json))
     if args.command == "clean":
         sys.exit(_clean())
-
     parser.error(f"Unhandled command: {args.command}")
+
+
+def main() -> None:
+    """Parse CLI args and execute project tasks."""
+    parser = _build_parser()
+    args, extra = parser.parse_known_args()
+    if args.command not in _PASSTHROUGH_CMDS and extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
+    _dispatch(parser, args, extra)
 
 
 if __name__ == "__main__":

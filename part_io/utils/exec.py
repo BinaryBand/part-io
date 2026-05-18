@@ -61,4 +61,20 @@ def run_resolved(cmd: Iterable[str], /, **kwargs: Any) -> subprocess.CompletedPr
     return cast(subprocess.CompletedProcess[Any], subprocess.run(full_cmd, **kwargs))  # noqa: S603
 
 
-__all__ = ["resolve_executable", "run_resolved"]
+def launch_resolved(cmd: Iterable[str], /, **kwargs: Any) -> "subprocess.Popen[Any]":
+    """Resolve the command's executable and launch a persistent subprocess.
+
+    The first element of *cmd* is resolved with :func:`resolve_executable`.
+    Returns a :class:`subprocess.Popen` object for long-running processes.
+    """
+    cmd_list: list[str] = list(cmd)
+    if not cmd_list:
+        raise ValueError("empty command")
+
+    executable = cmd_list[0]
+    resolved = resolve_executable(executable)
+    full_cmd = [resolved, *cmd_list[1:]]
+    return subprocess.Popen(full_cmd, **kwargs)  # noqa: S603
+
+
+__all__ = ["resolve_executable", "run_resolved", "launch_resolved"]
