@@ -15,7 +15,6 @@ from pathlib import Path
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 from part_io.cli.audio_detect_ads import _pair_matches
 
-
 _DEFAULT_MIN_GAP = 25.0
 _DEFAULT_MAX_GAP = 300.0
 

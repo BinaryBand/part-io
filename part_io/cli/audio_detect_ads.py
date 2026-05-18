@@ -14,8 +14,7 @@ from pathlib import Path
 
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 
-
-_DEFAULT_MIN_GAP = 25.0   # seconds — shorter than this is unlikely to be a real ad
+_DEFAULT_MIN_GAP = 25.0  # seconds — shorter than this is unlikely to be a real ad
 _DEFAULT_MAX_GAP = 300.0  # seconds — 5 minutes
 
 
@@ -137,25 +136,25 @@ def main() -> None:
         parser.exit(2, f"{exc}\n")
         return
 
-    print(f"Open tags found:  {len(opens)}")
-    print(f"Close tags found: {len(closes)}")
+    sys.stderr.write(f"Open tags found:  {len(opens)}")
+    sys.stderr.write(f"Close tags found: {len(closes)}")
 
     pairs = _pair_matches(opens, closes, min_gap=args.min_gap, max_gap=args.max_gap)
 
     if not pairs:
-        print("No ad breaks detected.")
+        sys.stderr.write("No ad breaks detected.\n")
         sys.exit(1)
 
-    print(f"\nDetected {len(pairs)} ad break(s):\n")
+    sys.stderr.write(f"\nDetected {len(pairs)} ad break(s):\n")
     for i, (open_match, close_match) in enumerate(pairs, 1):
         ad_start = open_match.start_seconds
         ad_end = close_match.end_seconds
         content_gap = close_match.start_seconds - open_match.end_seconds
-        print(
+        sys.stderr.write(
             f"  Ad {i}: {ad_start:.1f}s → {ad_end:.1f}s"
             f"  (gap {content_gap:.1f}s,"
             f" open score {open_match.score:.3f},"
-            f" close score {close_match.score:.3f})"
+            f" close score {close_match.score:.3f})\n"
         )
 
 

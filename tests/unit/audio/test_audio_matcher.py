@@ -11,7 +11,6 @@ import pytest
 
 from part_io.adapters.audio.matcher import (
     AudioMatch,
-    _build_match_candidates,
     _build_spectral_profile,
     _suppress_overlapping,
     find_audio_sample_matches,
