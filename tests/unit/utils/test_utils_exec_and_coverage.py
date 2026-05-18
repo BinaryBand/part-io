@@ -97,3 +97,26 @@ def test_run_resolved_builds_command_and_handles_empty(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="empty command"):
         exec_utils.run_resolved([])
+
+
+def test_launch_resolved_builds_popen_command(monkeypatch) -> None:
+    """launch_resolved should resolve first token and call Popen with full path."""
+    launched: list[list[str]] = []
+
+    class DummyPopen:
+        def __init__(self, cmd, **kwargs):
+            launched.append(cmd)
+
+    monkeypatch.setattr(exec_utils, "resolve_executable", lambda name: f"/resolved/{name}")
+    monkeypatch.setattr(exec_utils.subprocess, "Popen", DummyPopen)
+
+    result = exec_utils.launch_resolved(["ffplay", "-nodisp", "file.mp3"])
+
+    assert launched == [["/resolved/ffplay", "-nodisp", "file.mp3"]]
+    assert isinstance(result, DummyPopen)
+
+
+def test_launch_resolved_raises_on_empty_command(monkeypatch) -> None:
+    """launch_resolved should raise ValueError for an empty command."""
+    with pytest.raises(ValueError, match="empty command"):
+        exec_utils.launch_resolved([])
