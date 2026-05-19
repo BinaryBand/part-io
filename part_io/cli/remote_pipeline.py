@@ -3,7 +3,7 @@
 Subcommands:
   review  — detect open/close matches per episode, review each interactively
   cut     — use state.toml to pair and cut ad segments
-  loop    — detect → review → cut one episode at a time until done
+    loop    - detect -> review -> cut one episode at a time until done
 
 State is stored entirely in {review_root}/state.toml.
 No clip files or manifest CSVs are written.
@@ -13,8 +13,10 @@ Delete state.toml to start fresh.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import math
+import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -342,11 +344,16 @@ def _moe(scores: list[float], k: float = 1.5) -> float:
     return k * math.sqrt(variance)
 
 
-def _compute_thresholds(target: TargetState, default_floor: float) -> tuple[float, float]:
-    """Return (theta_plus, theta_minus) for a target."""
+def _compute_thresholds(target: TargetState) -> tuple[float, float]:
+    """Return (theta_plus, theta_minus) for a target.
+
+    With no confirmed positives theta_plus = +inf so nothing auto-classifies positive.
+    With no confirmed negatives theta_minus = -inf so nothing auto-classifies negative.
+    The thresholds converge from both extremes as labelled examples accumulate.
+    """
     pos = [s.score for s in target.positives]
     neg = [s.score for s in target.negatives]
-    theta_plus = (min(pos) - _moe(pos)) if pos else default_floor
+    theta_plus = (min(pos) - _moe(pos)) if pos else math.inf
     theta_minus = (max(neg) + _moe(neg)) if neg else -math.inf
     return theta_plus, theta_minus
 
@@ -359,21 +366,14 @@ def _classify_score(score: float, theta_plus: float, theta_minus: float) -> str:
     return _UNC
 
 
-def _reclassify_all(state: PipelineState, default_floor: float) -> None:
-    """Recompute thresholds and re-classify uncertain episodes in-place.
-
-    Auto-classification only runs when there is at least one confirmed positive
-    or negative for a target type — without confirmed examples the threshold is
-    meaningless and episodes stay uncertain until the user labels one explicitly.
-    """
-    tp_o, tm_o = _compute_thresholds(state.open_target, default_floor)
-    tp_c, tm_c = _compute_thresholds(state.close_target, default_floor)
-    has_open_evidence = bool(state.open_target.positives or state.open_target.negatives)
-    has_close_evidence = bool(state.close_target.positives or state.close_target.negatives)
+def _reclassify_all(state: PipelineState) -> None:
+    """Recompute MOE-derived thresholds and re-classify uncertain episodes in-place."""
+    tp_o, tm_o = _compute_thresholds(state.open_target)
+    tp_c, tm_c = _compute_thresholds(state.close_target)
     for ep in state.episodes.values():
-        if ep.open_class == _UNC and has_open_evidence:
+        if ep.open_class == _UNC:
             ep.open_class = _classify_score(ep.open_score, tp_o, tm_o)
-        if ep.close_class == _UNC and has_close_evidence:
+        if ep.close_class == _UNC:
             ep.close_class = _classify_score(ep.close_score, tp_c, tm_c)
 
 
@@ -409,7 +409,6 @@ def _detect_matches(
     source: Path,
     sample: Path,
     *,
-    threshold: float,
     z_threshold: float | None,
     step_seconds: float,
     max_matches: int,
@@ -422,7 +421,7 @@ def _detect_matches(
         str(source),
         str(sample),
         "--threshold",
-        str(threshold),
+        "0.0",
         "--step-seconds",
         str(step_seconds),
         "--max-matches",
@@ -453,7 +452,6 @@ def _detect_batch(
     open_sample: Path,
     close_sample: Path,
     *,
-    threshold: float,
     z_threshold: float | None,
     step_seconds: float,
     workers: int,
@@ -471,7 +469,6 @@ def _detect_batch(
                 _detect_matches,
                 ep,
                 sample,
-                threshold=threshold,
                 z_threshold=z_threshold,
                 step_seconds=step_seconds,
                 max_matches=max_matches,
@@ -503,6 +500,19 @@ try:
     import termios
     import tty
 
+    _STDIN_FD = sys.stdin.fileno() if sys.stdin.isatty() else None
+    _INITIAL_TTY_ATTRS = termios.tcgetattr(_STDIN_FD) if _STDIN_FD is not None else None
+
+    def _restore_tty() -> None:
+        if _STDIN_FD is None or _INITIAL_TTY_ATTRS is None:
+            return
+        try:
+            termios.tcsetattr(_STDIN_FD, termios.TCSADRAIN, _INITIAL_TTY_ATTRS)
+        except OSError:
+            return
+
+    atexit.register(_restore_tty)
+
     def _getch() -> str:
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
@@ -520,35 +530,76 @@ except ImportError:
 
 
 def _start_audio(path: Path) -> Any:
-    return launch_resolved(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)])
+    stdin_f = open(os.devnull, "rb")
+    stdout_f = open(os.devnull, "wb")
+    stderr_f = open(os.devnull, "wb")
+    try:
+        proc = launch_resolved(
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)],
+            stdin=stdin_f,
+            stdout=stdout_f,
+            stderr=stderr_f,
+        )
+    except Exception:
+        stdin_f.close()
+        stdout_f.close()
+        stderr_f.close()
+        raise
+    proc._part_io_devnull = (stdin_f, stdout_f, stderr_f)
+    return proc
 
 
 def _start_audio_segment(source: Path, start: float, end: float) -> Any:
     """Stream a time slice from source directly through ffplay without writing to disk."""
     duration = max(0.0, end - start)
-    return launch_resolved(
-        [
-            "ffplay",
-            "-nodisp",
-            "-autoexit",
-            "-loglevel",
-            "quiet",
-            "-ss",
-            f"{start:.3f}",
-            "-t",
-            f"{duration:.3f}",
-            str(source),
-        ]
-    )
+    stdin_f = open(os.devnull, "rb")
+    stdout_f = open(os.devnull, "wb")
+    stderr_f = open(os.devnull, "wb")
+    try:
+        proc = launch_resolved(
+            [
+                "ffplay",
+                "-nodisp",
+                "-autoexit",
+                "-loglevel",
+                "quiet",
+                "-ss",
+                f"{start:.3f}",
+                "-t",
+                f"{duration:.3f}",
+                str(source),
+            ],
+            stdin=stdin_f,
+            stdout=stdout_f,
+            stderr=stderr_f,
+        )
+    except Exception:
+        stdin_f.close()
+        stdout_f.close()
+        stderr_f.close()
+        raise
+    proc._part_io_devnull = (stdin_f, stdout_f, stderr_f)
+    return proc
 
 
 def _stop_audio(proc: Any | None) -> None:
-    if proc is not None and proc.poll() is None:
+    if proc is None:
+        return
+
+    if proc.poll() is None:
         proc.terminate()
         try:
             proc.wait(timeout=1)
         except Exception:
             proc.kill()
+
+    handles = getattr(proc, "_part_io_devnull", None)
+    if handles is not None:
+        for handle in handles:
+            try:
+                handle.close()
+            except OSError:
+                continue
 
 
 @dataclass
@@ -587,7 +638,6 @@ def _review_one_target(
     open_sample: Path,
     close_sample: Path,
     history: list[_UndoEntry],
-    default_floor: float,
 ) -> str:
     """Review one uncertain target interactively. Returns 'classified', 'skipped', or 'undone'."""
     ep_state = state.episodes[stem]
@@ -620,11 +670,11 @@ def _review_one_target(
             if key == "a":
                 target.positives.append(seg)
                 ep_class, lst = _POS, target.positives
-                print("\n✓ approved", file=sys.stderr)
+                print("\napproved", file=sys.stderr)
             else:
                 target.negatives.append(seg)
                 ep_class, lst = _NEG, target.negatives
-                print("\n✗ rejected", file=sys.stderr)
+                print("\nrejected", file=sys.stderr)
             if kind == "open":
                 ep_state.open_class = ep_class
             else:
@@ -632,10 +682,10 @@ def _review_one_target(
             history.append(
                 _UndoEntry(stem=stem, kind=kind, action=key, segment=seg, target_list=lst)
             )
-            _reclassify_all(state, default_floor)
+            _reclassify_all(state)
             return "classified"
         elif key == "s":
-            print("\n— skipped", file=sys.stderr)
+            print("\nskipped", file=sys.stderr)
             return "skipped"
         elif key == "u" and history:
             entry = history.pop()
@@ -645,9 +695,9 @@ def _review_one_target(
                 prev_ep.open_class = _UNC
             else:
                 prev_ep.close_class = _UNC
-            _reclassify_all(state, default_floor)
+            _reclassify_all(state)
             print(
-                f"\n↩ undone ({entry.action} {entry.kind} for {entry.stem[:16]})",
+                f"\nundone ({entry.action} {entry.kind} for {entry.stem[:16]})",
                 file=sys.stderr,
             )
             return "undone"
@@ -670,7 +720,6 @@ def _run_review_loop(
     *,
     open_sample: Path,
     close_sample: Path,
-    default_floor: float,
     state_path: Path,
     max_decisions: int | None = None,
 ) -> None:
@@ -698,7 +747,6 @@ def _run_review_loop(
             open_sample=open_sample,
             close_sample=close_sample,
             history=history,
-            default_floor=default_floor,
         )
         if result == "classified":
             decisions += 1
@@ -774,7 +822,7 @@ def _pair_and_cut(
     if segments is None:
         n_o = len(ep_state.open_candidates)
         n_c = len(ep_state.close_candidates)
-        print(f"  No valid open→close pair ({n_o} open × {n_c} close candidates).")
+        print(f"  No valid open->close pair ({n_o} open x {n_c} close candidates).")
         return "skipped"
 
     try:
@@ -787,7 +835,7 @@ def _pair_and_cut(
     for i, seg in enumerate(segments, 1):
         cut_s = seg.cut_start if inclusive else seg.open_end
         cut_e = seg.cut_end if inclusive else seg.close_start
-        print(f"    {i}. [{cut_s:.1f}s → {cut_e:.1f}s]  ({cut_e - cut_s:.1f}s)")
+        print(f"    {i}. [{cut_s:.1f}s -> {cut_e:.1f}s]  ({cut_e - cut_s:.1f}s)")
 
     if dry_run:
         return "skipped"
@@ -910,13 +958,12 @@ def _cmd_review(args: argparse.Namespace) -> None:
             state,
             open_sample,
             close_sample,
-            threshold=args.threshold,
             z_threshold=args.z_threshold,
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
         )
-        _reclassify_all(state, args.threshold)
+        _reclassify_all(state)
         state.save(state_path)
 
     if args.no_interactive:
@@ -933,7 +980,6 @@ def _cmd_review(args: argparse.Namespace) -> None:
         state,
         open_sample=open_sample,
         close_sample=close_sample,
-        default_floor=args.threshold,
         state_path=state_path,
     )
 
@@ -973,12 +1019,12 @@ def _cmd_cut(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# loop subcommand — detect → review → cut in one pass
+# loop subcommand - detect -> review -> cut in one pass
 # ---------------------------------------------------------------------------
 
 
 def _cmd_loop(args: argparse.Namespace) -> None:
-    """Detect a batch → review up to quiz_size → cut cuttable. Run repeatedly to process all."""
+    """Detect a batch -> review up to quiz_size -> cut cuttable. Run repeatedly to process all."""
     remote_dir: Path = args.remote_dir
     output_dir: Path = args.output_dir
     open_sample = args.snippets_dir / args.open_sample
@@ -1009,13 +1055,12 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             state,
             open_sample,
             close_sample,
-            threshold=args.threshold,
             z_threshold=args.z_threshold,
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
         )
-        _reclassify_all(state, args.threshold)
+        _reclassify_all(state)
         state.save(state_path)
 
     if not args.no_interactive:
@@ -1026,7 +1071,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
                 state,
                 open_sample=open_sample,
                 close_sample=close_sample,
-                default_floor=args.threshold,
                 state_path=state_path,
                 max_decisions=args.quiz_size,
             )
@@ -1060,7 +1104,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
 
 
 def _add_detect_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--threshold", type=float, default=0.8, help="Initial theta_plus floor")
     p.add_argument("--z-threshold", type=float, default=3.0, help="Z-score cutoff (mean + N*std)")
     p.add_argument("--step-seconds", type=float, default=0.1)
     p.add_argument("--workers", type=int, default=2, help="Parallel workers for detection")
@@ -1068,7 +1111,7 @@ def _add_detect_args(p: argparse.ArgumentParser) -> None:
 
 
 def _add_cut_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--min-gap", type=float, default=-15.0, help="Min gap: open end → close start")
+    p.add_argument("--min-gap", type=float, default=-15.0, help="Min gap: open end -> close start")
     p.add_argument(
         "--max-gap", type=float, default=300.0, help="Max gap in seconds (default 5 min)"
     )
@@ -1084,9 +1127,20 @@ def _add_cut_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_remote_dir_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "remote_dir",
+        type=Path,
+        nargs="?",
+        default=Path("downloads/remote"),
+        metavar="REMOTE_DIR",
+        help="Directory of episode MP3s (default: downloads/remote)",
+    )
+
+
 def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("review", help="Detect matches and review them interactively")
-    p.add_argument("--remote-dir", type=Path, default=Path("downloads/remote"))
+    _add_remote_dir_arg(p)
     p.add_argument("--snippets-dir", type=Path, default=Path("downloads/snippets"))
     p.add_argument("--open-sample", default="open.mp3")
     p.add_argument("--close-sample", default="close.mp3")
@@ -1097,14 +1151,17 @@ def _build_review_parser(sub: argparse._SubParsersAction) -> None:
 
 def _build_cut_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("cut", help="Cut ad segments using labels from __state__.toml")
-    p.add_argument("--remote-dir", type=Path, default=Path("downloads/remote"))
+    _add_remote_dir_arg(p)
     p.add_argument("--output-dir", type=Path, default=Path("downloads/remove"))
     _add_cut_args(p)
 
 
 def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser("loop", help="Detect a batch → review → cut. Run repeatedly to process all.")
-    p.add_argument("--remote-dir", type=Path, default=Path("downloads/remote"))
+    p = sub.add_parser(
+        "loop",
+        help="Detect a batch -> review -> cut. Run repeatedly to process all.",
+    )
+    _add_remote_dir_arg(p)
     p.add_argument("--snippets-dir", type=Path, default=Path("downloads/snippets"))
     p.add_argument("--open-sample", default="open.mp3")
     p.add_argument("--close-sample", default="close.mp3")

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://part-io.local/schemas/remote_pipeline_state.schema.json",
+  "title": "Part-IO Remote Pipeline State",
+  "description": "Schema for __state__.toml written by part_io.cli.remote_pipeline.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["targets", "episodes"],
+  "properties": {
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["open", "close"],
+      "properties": {
+        "open": { "$ref": "#/$defs/targetState" },
+        "close": { "$ref": "#/$defs/targetState" }
+      }
+    },
+    "episodes": {
+      "type": "object",
+      "description": "Episode state keyed by episode stem.",
+      "minProperties": 0,
+      "additionalProperties": { "$ref": "#/$defs/episodeState" }
+    }
+  },
+  "$defs": {
+    "classification": {
+      "type": "string",
+      "enum": ["positive", "negative", "uncertain", "undetected"]
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "start", "end", "score"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "start": { "type": "number" },
+        "end": { "type": "number" },
+        "score": { "type": "number" }
+      }
+    },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "start", "end"],
+      "properties": {
+        "score": { "type": "number" },
+        "start": { "type": "number" },
+        "end": { "type": "number" }
+      }
+    },
+    "targetState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["positives", "negatives"],
+      "properties": {
+        "positives": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/segment" }
+        },
+        "negatives": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/segment" }
+        }
+      }
+    },
+    "episodeState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "open_candidates",
+        "open_class",
+        "close_candidates",
+        "close_class",
+        "cut"
+      ],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "open_candidates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/match" }
+        },
+        "open_class": { "$ref": "#/$defs/classification" },
+        "close_candidates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/match" }
+        },
+        "close_class": { "$ref": "#/$defs/classification" },
+        "cut": { "type": "boolean" }
+      }
+    }
+  }
+}

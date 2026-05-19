@@ -216,23 +216,23 @@ class TestMoe:
 
 
 class TestComputeThresholds:
-    def test_no_positives_uses_default(self):
+    def test_no_positives_returns_inf(self):
         t = TargetState()
-        tp, tm = _compute_thresholds(t, default_floor=0.8)
-        assert tp == pytest.approx(0.8)
+        tp, tm = _compute_thresholds(t)
+        assert tp == math.inf
         assert tm == pytest.approx(-math.inf)
 
     def test_positives_set_theta_plus(self):
         t = TargetState(
             positives=[Segment("a.mp3", 0.0, 1.0, 0.9), Segment("b.mp3", 0.0, 1.0, 0.85)]
         )
-        tp, _ = _compute_thresholds(t, default_floor=0.8)
+        tp, _ = _compute_thresholds(t)
         # theta_plus = min(0.9, 0.85) - moe([0.9, 0.85])
         assert tp < 0.85  # moe brings it below min
 
     def test_negatives_set_theta_minus(self):
         t = TargetState(negatives=[Segment("a.mp3", 0.0, 1.0, 0.7)])
-        _, tm = _compute_thresholds(t, default_floor=0.8)
+        _, tm = _compute_thresholds(t)
         assert tm == pytest.approx(0.7)  # single negative, moe=0
 
 
@@ -258,7 +258,7 @@ class TestReclassifyAll:
         ep.open_candidates = [_Match(score=0.95, start=0.0, end=1.0)]
         ep.open_class = _UNC
         state.open_target.positives.append(Segment("ep1.mp3", 0.0, 1.0, 0.9))
-        _reclassify_all(state, default_floor=0.8)
+        _reclassify_all(state)
         assert ep.open_class == _POS
 
     def test_does_not_reclassify_already_classified(self):
@@ -266,24 +266,24 @@ class TestReclassifyAll:
         ep = state.episode("ep1")
         ep.open_candidates = [_Match(score=0.5, start=0.0, end=1.0)]
         ep.open_class = _POS  # manually set — should not be touched
-        _reclassify_all(state, default_floor=0.8)
+        _reclassify_all(state)
         assert ep.open_class == _POS
 
     def test_does_not_reclassify_undetected(self):
         state = PipelineState()
         ep = state.episode("ep1")
         ep.open_class = _UND
-        _reclassify_all(state, default_floor=0.8)
+        _reclassify_all(state)
         assert ep.open_class == _UND
 
     def test_no_auto_classify_without_evidence(self):
-        """Episodes stay uncertain when no confirmed examples exist yet."""
+        """Episodes stay uncertain when no confirmed examples exist yet (theta_plus=inf)."""
         state = PipelineState()
         ep = state.episode("ep1")
         ep.open_candidates = [_Match(score=0.95, start=0.0, end=1.0)]
         ep.open_class = _UNC
-        _reclassify_all(state, default_floor=0.8)
-        assert ep.open_class == _UNC  # no evidence → no auto-classification
+        _reclassify_all(state)
+        assert ep.open_class == _UNC  # theta_plus=inf → nothing auto-classifies positive
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +305,6 @@ class TestDetectMatches:
             return _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
-                threshold=0.8,
                 z_threshold=z_threshold,
                 step_seconds=0.1,
                 max_matches=max_matches,
@@ -336,7 +335,6 @@ class TestDetectMatches:
             result = _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
-                threshold=0.8,
                 z_threshold=None,
                 step_seconds=0.1,
                 max_matches=3,
@@ -358,7 +356,6 @@ class TestDetectMatches:
             _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
-                threshold=0.8,
                 z_threshold=2.5,
                 step_seconds=0.1,
                 max_matches=3,
@@ -381,7 +378,6 @@ class TestDetectMatches:
             _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
-                threshold=0.8,
                 z_threshold=None,
                 step_seconds=0.1,
                 max_matches=5,
@@ -530,7 +526,6 @@ class TestReviewOneTarget:
                         open_sample=tmp_path / "open.mp3",
                         close_sample=tmp_path / "close.mp3",
                         history=history,
-                        default_floor=0.8,
                     )
 
     def test_approve_classifies_positive(self, tmp_path):
@@ -818,7 +813,6 @@ class TestRunReviewLoop:
                         state,
                         open_sample=tmp_path / "open.mp3",
                         close_sample=tmp_path / "close.mp3",
-                        default_floor=0.8,
                         state_path=state_path,
                         max_decisions=max_decisions,
                     )
