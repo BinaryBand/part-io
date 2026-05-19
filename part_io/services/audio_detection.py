@@ -82,7 +82,8 @@ def filter_matches_by_position(
 ) -> list[MatchLike]:
     """Keep only positionally valid intro/outro matches.
 
-    Intro candidates must start in the first 25% of the source duration.
+    Intro candidates must start after the first 30 seconds and within the
+    first 25% of the source duration.
     Outro candidates must start in the last 25% of the source duration.
     Open/close matches are returned unchanged.
     """
@@ -90,7 +91,13 @@ def filter_matches_by_position(
         return list(matches)
     if kind == "intro":
         max_intro_start = source_duration_seconds * 0.25
-        return [match for match in matches if float(match.start_seconds) <= max_intro_start]
+        min_intro_start = 30.0
+        return [
+            match
+            for match in matches
+            if float(match.start_seconds) > min_intro_start
+            and float(match.start_seconds) <= max_intro_start
+        ]
     if kind == "outro":
         min_outro_start = source_duration_seconds * 0.75
         return [match for match in matches if float(match.start_seconds) >= min_outro_start]

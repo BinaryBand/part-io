@@ -331,15 +331,16 @@ def test_filter_matches_by_position_limits_intro_to_first_quarter() -> None:
     matches = [
         AudioMatch(start_seconds=20.0, end_seconds=21.0, duration_seconds=1.0, score=0.8),
         AudioMatch(start_seconds=30.0, end_seconds=31.0, duration_seconds=1.0, score=0.9),
+        AudioMatch(start_seconds=31.0, end_seconds=32.0, duration_seconds=1.0, score=1.0),
     ]
 
     filtered = audio_detection.filter_matches_by_position(
         matches,
         kind="intro",
-        source_duration_seconds=100.0,
+        source_duration_seconds=200.0,
     )
 
-    assert [m.start_seconds for m in filtered] == [20.0]
+    assert [m.start_seconds for m in filtered] == [31.0]
 
 
 def test_filter_matches_by_position_limits_outro_to_last_quarter() -> None:

@@ -1261,8 +1261,11 @@ def _run_quiz(
     intro_sample: Path,
     outro_sample: Path,
     state_path: Path,
-) -> int:
-    """Review a pre-collected set of uncertain candidates. Returns number of decisions made."""
+) -> tuple[int, bool]:
+    """Review a pre-collected set of uncertain candidates.
+
+    Returns (decisions_made, interrupted_by_quit).
+    """
     history: list[_UndoEntry] = []
     skipped_keys: set[tuple[str, str, int]] = set()
     decisions = 0
@@ -1300,7 +1303,7 @@ def _run_quiz(
             )
         except KeyboardInterrupt:
             _emit("\nInterrupted. Progress saved.")
-            break
+            return decisions, True
 
         if result in ("approved", "rejected"):
             decisions += 1
@@ -1328,7 +1331,7 @@ def _run_quiz(
     n_skipped = len(skipped_keys)
     if n_skipped:
         _emit(f"\n{n_skipped} candidate(s) skipped — restart to revisit.")
-    return decisions
+    return decisions, False
 
 
 # ---------------------------------------------------------------------------
@@ -1560,6 +1563,267 @@ def _cut_cuttable(
     return n_cut, n_skipped, n_failed
 
 
+def _loop_work_counts(state: PipelineState, all_full: list[Path]) -> tuple[int, int, int]:
+    """Return remaining undetected, uncertain, and cuttable counts."""
+    n_undetected = sum(1 for ep in all_full if not state.episode(ep.stem).is_detected())
+    n_uncertain = _count_uncertain(state)
+    n_cuttable = sum(1 for ep in state.episodes.values() if ep.is_cuttable() and not ep.cut)
+    return n_undetected, n_uncertain, n_cuttable
+
+
+def _collect_loop_candidates(
+    state: PipelineState,
+    all_full: list[Path],
+    *,
+    overwrite: bool,
+    quiz_size: int,
+    z_threshold: float | None,
+    step_seconds: float,
+    workers: int,
+    max_matches: int,
+    state_path: Path,
+    open_sample: Path,
+    close_sample: Path,
+    intro_sample: Path,
+    outro_sample: Path | None,
+) -> tuple[list[_QuizItem], int]:
+    """Detect until enough uncertain candidates are available or no work remains."""
+    undetected = [ep for ep in all_full if overwrite or not state.episode(ep.stem).is_detected()]
+    n_already = len(all_full) - len(undetected)
+    _emit(f"Episodes: {len(all_full)} total, {n_already} detected, {len(undetected)} to detect")
+
+    quiz_items = _collect_uncertain_candidates(state)
+    while len(quiz_items) < quiz_size and undetected:
+        ep_path = undetected.pop(0)
+        _emit(f"\nDetecting {ep_path.stem}...")
+        _detect_batch(
+            [ep_path],
+            state,
+            open_sample,
+            close_sample,
+            intro_sample,
+            outro_sample,
+            z_threshold=z_threshold,
+            step_seconds=step_seconds,
+            workers=workers,
+            max_matches=max_matches,
+        )
+        _reclassify_all(state)
+        state.save(state_path)
+        quiz_items = _collect_uncertain_candidates(state)
+
+    return quiz_items[:quiz_size], _count_uncertain(state)
+
+
+def _run_loop_cut_pass(
+    state: PipelineState,
+    *,
+    all_full: list[Path],
+    remote_dir: Path,
+    output_dir: Path,
+    min_gap: float,
+    max_gap: float,
+    yes: bool,
+    dry_run: bool,
+    state_path: Path,
+    ad_inclusive: bool,
+    intro_exclusive: bool,
+    fade_dur: float,
+    debug: bool,
+) -> tuple[int, int, int, int, int, int]:
+    """Run a cut pass and return counts plus remaining work summary."""
+    n_cut, n_skipped, n_failed = _cut_cuttable(
+        state,
+        remote_dir=remote_dir,
+        output_dir=output_dir,
+        min_gap=min_gap,
+        max_gap=max_gap,
+        yes=yes,
+        dry_run=dry_run,
+        state_path=state_path,
+        ad_inclusive=ad_inclusive,
+        intro_exclusive=intro_exclusive,
+        fade_dur=fade_dur,
+        debug=debug,
+    )
+    n_remain_undet, n_remain_unc, n_remain_cut = _loop_work_counts(state, all_full)
+    return n_cut, n_skipped, n_failed, n_remain_undet, n_remain_unc, n_remain_cut
+
+
+def _run_loop_once(
+    state: PipelineState,
+    *,
+    all_full: list[Path],
+    remote_dir: Path,
+    output_dir: Path,
+    open_sample: Path,
+    close_sample: Path,
+    intro_sample: Path,
+    outro_sample: Path | None,
+    quiz_size: int,
+    overwrite: bool,
+    z_threshold: float | None,
+    step_seconds: float,
+    workers: int,
+    max_matches: int,
+    state_path: Path,
+    min_gap: float,
+    max_gap: float,
+    yes: bool,
+    dry_run: bool,
+    ad_inclusive: bool,
+    intro_exclusive: bool,
+    fade_dur: float,
+    debug: bool,
+) -> None:
+    """Run one detect/review/cut pass in non-interactive mode."""
+    quiz_items, n_unc = _collect_loop_candidates(
+        state,
+        all_full,
+        overwrite=overwrite,
+        quiz_size=quiz_size,
+        z_threshold=z_threshold,
+        step_seconds=step_seconds,
+        workers=workers,
+        max_matches=max_matches,
+        state_path=state_path,
+        open_sample=open_sample,
+        close_sample=close_sample,
+        intro_sample=intro_sample,
+        outro_sample=outro_sample,
+    )
+    if quiz_items:
+        _emit(f"\n{len(quiz_items)} candidate(s) to review ({n_unc} uncertain total).")
+    else:
+        msg = (
+            f"{n_unc} uncertain remaining — nothing new to review."
+            if n_unc
+            else "Nothing to review."
+        )
+        _emit(f"\n{msg}")
+
+    n_cut, n_skipped, n_failed, n_remain_undet, n_remain_unc, n_remain_cut = _run_loop_cut_pass(
+        state,
+        all_full=all_full,
+        remote_dir=remote_dir,
+        output_dir=output_dir,
+        min_gap=min_gap,
+        max_gap=max_gap,
+        yes=yes,
+        dry_run=dry_run,
+        state_path=state_path,
+        ad_inclusive=ad_inclusive,
+        intro_exclusive=intro_exclusive,
+        fade_dur=fade_dur,
+        debug=debug,
+    )
+    _emit(
+        f"\nProgress: {n_remain_undet} undetected, {n_remain_unc} uncertain,"
+        f" {n_remain_cut} cuttable remaining."
+    )
+    if n_cut or n_skipped or n_failed:
+        print(f"Cut: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
+    if n_failed:
+        sys.exit(1)
+
+
+def _run_loop_until_clean(
+    state: PipelineState,
+    *,
+    all_full: list[Path],
+    remote_dir: Path,
+    output_dir: Path,
+    open_sample: Path,
+    close_sample: Path,
+    intro_sample: Path,
+    outro_sample: Path | None,
+    quiz_size: int,
+    overwrite: bool,
+    z_threshold: float | None,
+    step_seconds: float,
+    workers: int,
+    max_matches: int,
+    state_path: Path,
+    min_gap: float,
+    max_gap: float,
+    yes: bool,
+    dry_run: bool,
+    ad_inclusive: bool,
+    intro_exclusive: bool,
+    fade_dur: float,
+    debug: bool,
+) -> None:
+    """Run repeat detect/review/cut passes until no work remains or the user quits."""
+    while True:
+        quiz_items, n_unc = _collect_loop_candidates(
+            state,
+            all_full,
+            overwrite=overwrite,
+            quiz_size=quiz_size,
+            z_threshold=z_threshold,
+            step_seconds=step_seconds,
+            workers=workers,
+            max_matches=max_matches,
+            state_path=state_path,
+            open_sample=open_sample,
+            close_sample=close_sample,
+            intro_sample=intro_sample,
+            outro_sample=outro_sample,
+        )
+        n_remain_undet, n_remain_unc, n_remain_cut = _loop_work_counts(state, all_full)
+        if not n_remain_undet and not n_remain_unc and not n_remain_cut:
+            _emit("\nDirectory is clean.")
+            return
+
+        if quiz_items:
+            _emit(f"\n{len(quiz_items)} candidate(s) to review ({n_unc} uncertain total).")
+            _, interrupted = _run_quiz(
+                state,
+                quiz_items,
+                open_sample=open_sample,
+                close_sample=close_sample,
+                intro_sample=intro_sample,
+                outro_sample=(outro_sample or intro_sample),
+                state_path=state_path,
+            )
+            if interrupted:
+                return
+        else:
+            msg = (
+                f"{n_unc} uncertain remaining — nothing new to review."
+                if n_unc
+                else "Nothing to review."
+            )
+            _emit(f"\n{msg}")
+
+        n_cut, n_skipped, n_failed, n_remain_undet, n_remain_unc, n_remain_cut = _run_loop_cut_pass(
+            state,
+            all_full=all_full,
+            remote_dir=remote_dir,
+            output_dir=output_dir,
+            min_gap=min_gap,
+            max_gap=max_gap,
+            yes=yes,
+            dry_run=dry_run,
+            state_path=state_path,
+            ad_inclusive=ad_inclusive,
+            intro_exclusive=intro_exclusive,
+            fade_dur=fade_dur,
+            debug=debug,
+        )
+        _emit(
+            f"\nProgress: {n_remain_undet} undetected, {n_remain_unc} uncertain,"
+            f" {n_remain_cut} cuttable remaining."
+        )
+        if n_cut or n_skipped or n_failed:
+            print(f"Cut: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
+        if n_failed:
+            sys.exit(1)
+        if not n_remain_undet and not n_remain_unc and not n_remain_cut:
+            _emit("Directory is clean.")
+            return
+
+
 # ---------------------------------------------------------------------------
 # review subcommand
 # ---------------------------------------------------------------------------
@@ -1701,83 +1965,59 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     all_full = _full_episodes(remote_dir)
     if not all_full:
         sys.exit(f"No full-length MP3s (>= 10 MB) found in {remote_dir}")
-
-    undetected = [
-        ep for ep in all_full if args.overwrite or not state.episode(ep.stem).is_detected()
-    ]
-    n_already = len(all_full) - len(undetected)
-    _emit(f"Episodes: {len(all_full)} total, {n_already} detected, {len(undetected)} to detect")
-
-    # Detect one episode at a time until we have enough uncertain candidates for a quiz.
-    quiz_items = _collect_uncertain_candidates(state)
-    while len(quiz_items) < args.quiz_size and undetected:
-        ep_path = undetected.pop(0)
-        _emit(f"\nDetecting {ep_path.stem}...")
-        _detect_batch(
-            [ep_path],
+    if args.no_interactive:
+        _run_loop_once(
             state,
-            open_sample,
-            close_sample,
-            intro_sample,
-            outro_sample,
+            all_full=all_full,
+            remote_dir=remote_dir,
+            output_dir=output_dir,
+            open_sample=open_sample,
+            close_sample=close_sample,
+            intro_sample=intro_sample,
+            outro_sample=outro_sample,
+            quiz_size=args.quiz_size,
+            overwrite=args.overwrite,
             z_threshold=args.z_threshold,
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
+            state_path=state_path,
+            min_gap=args.min_gap,
+            max_gap=args.max_gap,
+            yes=args.yes,
+            dry_run=args.dry_run,
+            ad_inclusive=args.inclusive,
+            intro_exclusive=state.settings.intro_exclusive,
+            fade_dur=args.fade,
+            debug=args.debug,
         )
-        _reclassify_all(state)
-        state.save(state_path)
-        quiz_items = _collect_uncertain_candidates(state)
+        return
 
-    quiz_items = quiz_items[: args.quiz_size]
-    n_unc = _count_uncertain(state)
-
-    if not args.no_interactive:
-        if quiz_items:
-            _emit(f"\n{len(quiz_items)} candidate(s) to review ({n_unc} uncertain total).")
-            try:
-                _run_quiz(
-                    state,
-                    quiz_items,
-                    open_sample=open_sample,
-                    close_sample=close_sample,
-                    intro_sample=intro_sample,
-                    outro_sample=(outro_sample or intro_sample),
-                    state_path=state_path,
-                )
-            except KeyboardInterrupt:
-                _emit("\nInterrupted. Progress saved.")
-        else:
-            msg = (
-                f"{n_unc} uncertain remaining — nothing new to review."
-                if n_unc
-                else "Nothing to review."
-            )
-            _emit(f"\n{msg}")
-
-    n_cut, n_skipped, n_failed = _cut_cuttable(
+    _run_loop_until_clean(
         state,
+        all_full=all_full,
         remote_dir=remote_dir,
         output_dir=output_dir,
+        open_sample=open_sample,
+        close_sample=close_sample,
+        intro_sample=intro_sample,
+        outro_sample=outro_sample,
+        quiz_size=args.quiz_size,
+        overwrite=args.overwrite,
+        z_threshold=args.z_threshold,
+        step_seconds=args.step_seconds,
+        workers=args.workers,
+        max_matches=args.max_matches,
+        state_path=state_path,
         min_gap=args.min_gap,
         max_gap=args.max_gap,
         yes=args.yes,
         dry_run=args.dry_run,
-        state_path=state_path,
         ad_inclusive=args.inclusive,
         intro_exclusive=state.settings.intro_exclusive,
         fade_dur=args.fade,
         debug=args.debug,
     )
-    n_remain_undet = sum(1 for ep in all_full if not state.episode(ep.stem).is_detected())
-    n_remain_unc = _count_uncertain(state)
-    _emit(f"\nProgress: {n_remain_undet} undetected, {n_remain_unc} uncertain remaining.")
-    if n_cut or n_skipped or n_failed:
-        print(f"Cut: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
-    if n_remain_undet + n_remain_unc > 0:
-        _emit("Run again to continue.")
-    if n_failed:
-        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
