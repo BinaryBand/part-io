@@ -133,7 +133,8 @@ def _run_ffmpeg(
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
-        "error",
+        # Keep CLI output quiet for recoverable decoder noise in imperfect source MP3s.
+        "fatal",
         "-y",
         "-i",
         str(source),

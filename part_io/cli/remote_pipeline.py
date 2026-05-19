@@ -54,6 +54,10 @@ else:
 tomllib: Any = _tomllib_runtime
 
 _MIN_EPISODE_BYTES = 10 * 1024 * 1024  # skip promos — < 10 MB ≈ < 5 min at 128 kbps
+_STATE_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1] / "models" / "schemas" / "remote_pipeline_state.schema.json"
+)
+_AUDIO_IO: dict[int, tuple[Any, Any, Any]] = {}
 
 # Classification labels
 _POS = "positive"
@@ -306,7 +310,14 @@ class PipelineState:
         return state
 
     def save(self, path: Path) -> None:
+        try:
+            schema_ref = os.path.relpath(_STATE_SCHEMA_PATH, path.parent)
+            schema_ref = schema_ref.replace("\\", "/")
+        except ValueError:
+            schema_ref = _STATE_SCHEMA_PATH.resolve().as_uri()
+
         lines: list[str] = [
+            f"#:schema {schema_ref}\n",
             "# Remote episode pipeline state.\n",
             "# Edit freely — delete this file to start fresh.\n",
         ]
@@ -409,6 +420,7 @@ def _detect_matches(
     source: Path,
     sample: Path,
     *,
+    floor: float = 0.0,
     z_threshold: float | None,
     step_seconds: float,
     max_matches: int,
@@ -421,7 +433,7 @@ def _detect_matches(
         str(source),
         str(sample),
         "--threshold",
-        "0.0",
+        str(floor),
         "--step-seconds",
         str(step_seconds),
         "--max-matches",
@@ -458,9 +470,16 @@ def _detect_batch(
     max_matches: int,
 ) -> None:
     """Detect open+close for a batch of episodes in parallel, updating state in-place."""
+    _, tm_o = _compute_thresholds(state.open_target)
+    _, tm_c = _compute_thresholds(state.close_target)
+    open_floor = tm_o if math.isfinite(tm_o) else 0.0
+    close_floor = tm_c if math.isfinite(tm_c) else 0.0
+    if open_floor > 0 or close_floor > 0:
+        _emit(f"  Floors from negatives: open={open_floor:.4f}  close={close_floor:.4f}")
+
     ep_by_stem = {ep.stem: ep for ep in episodes}
-    jobs = [(ep, open_sample, "open") for ep in episodes] + [
-        (ep, close_sample, "close") for ep in episodes
+    jobs = [(ep, open_sample, "open", open_floor) for ep in episodes] + [
+        (ep, close_sample, "close", close_floor) for ep in episodes
     ]
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -469,11 +488,12 @@ def _detect_batch(
                 _detect_matches,
                 ep,
                 sample,
+                floor=floor,
                 z_threshold=z_threshold,
                 step_seconds=step_seconds,
                 max_matches=max_matches,
             ): (ep.stem, kind)
-            for ep, sample, kind in jobs
+            for ep, sample, kind, floor in jobs
         }
         for future in as_completed(futures):
             done += 1
@@ -545,7 +565,7 @@ def _start_audio(path: Path) -> Any:
         stdout_f.close()
         stderr_f.close()
         raise
-    proc._part_io_devnull = (stdin_f, stdout_f, stderr_f)
+    _AUDIO_IO[id(proc)] = (stdin_f, stdout_f, stderr_f)
     return proc
 
 
@@ -578,7 +598,7 @@ def _start_audio_segment(source: Path, start: float, end: float) -> Any:
         stdout_f.close()
         stderr_f.close()
         raise
-    proc._part_io_devnull = (stdin_f, stdout_f, stderr_f)
+    _AUDIO_IO[id(proc)] = (stdin_f, stdout_f, stderr_f)
     return proc
 
 
@@ -593,7 +613,7 @@ def _stop_audio(proc: Any | None) -> None:
         except Exception:
             proc.kill()
 
-    handles = getattr(proc, "_part_io_devnull", None)
+    handles = _AUDIO_IO.pop(id(proc), None)
     if handles is not None:
         for handle in handles:
             try:
@@ -1104,7 +1124,13 @@ def _cmd_loop(args: argparse.Namespace) -> None:
 
 
 def _add_detect_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--z-threshold", type=float, default=3.0, help="Z-score cutoff (mean + N*std)")
+    p.add_argument(
+        "--z-threshold",
+        type=float,
+        default=None,
+        metavar="N",
+        help="Optional z-score filter: only keep windows > mean + N*std (default: off)",
+    )
     p.add_argument("--step-seconds", type=float, default=0.1)
     p.add_argument("--workers", type=int, default=2, help="Parallel workers for detection")
     p.add_argument("--max-matches", type=int, default=3, help="Top-N candidate positions to store")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -35,6 +36,9 @@ from part_io.cli.remote_pipeline import (
     _reclassify_all,
     _review_one_target,
     _run_review_loop,
+    _start_audio,
+    _start_audio_segment,
+    _stop_audio,
     _UndoEntry,
     main,
 )
@@ -108,6 +112,13 @@ class TestPipelineState:
         path = tmp_path / "sub" / "state.toml"
         PipelineState().save(path)
         assert path.exists()
+
+    def test_save_writes_schema_directive_header(self, tmp_path):
+        path = tmp_path / "__state__.toml"
+        PipelineState().save(path)
+        first_line = path.read_text(encoding="utf-8").splitlines()[0]
+        assert first_line.startswith("#:schema ")
+        assert "part_io/models/schemas/remote_pipeline_state.schema.json" in first_line
 
     def test_roundtrip_episode_fields(self, tmp_path):
         path = tmp_path / "state.toml"
@@ -299,12 +310,13 @@ class TestDetectMatches:
         r.stderr = b""
         return r
 
-    def _call(self, tmp_path, payload, returncode=0, z_threshold=None, max_matches=3):
+    def _call(self, tmp_path, payload, returncode=0, z_threshold=None, max_matches=3, floor=0.0):
         r = self._mock_run(payload, returncode=returncode)
         with patch("part_io.cli.remote_pipeline.run_resolved", return_value=r):
             return _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
+                floor=floor,
                 z_threshold=z_threshold,
                 step_seconds=0.1,
                 max_matches=max_matches,
@@ -335,11 +347,35 @@ class TestDetectMatches:
             result = _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
+                floor=0.0,
                 z_threshold=None,
                 step_seconds=0.1,
                 max_matches=3,
             )
         assert result == []
+
+    def test_floor_passed_as_threshold(self, tmp_path):
+        captured: list[str] = []
+        r = MagicMock()
+        r.returncode = 0
+        r.stdout = b"[]"
+        r.stderr = b""
+
+        def fake_run(cmd, **kwargs):
+            captured.extend(cmd)
+            return r
+
+        with patch("part_io.cli.remote_pipeline.run_resolved", side_effect=fake_run):
+            _detect_matches(
+                tmp_path / "ep.mp3",
+                tmp_path / "open.mp3",
+                floor=0.65,
+                z_threshold=None,
+                step_seconds=0.1,
+                max_matches=3,
+            )
+        idx = captured.index("--threshold")
+        assert captured[idx + 1] == "0.65"
 
     def test_z_threshold_appended(self, tmp_path):
         captured: list[str] = []
@@ -356,6 +392,7 @@ class TestDetectMatches:
             _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
+                floor=0.0,
                 z_threshold=2.5,
                 step_seconds=0.1,
                 max_matches=3,
@@ -378,6 +415,7 @@ class TestDetectMatches:
             _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
+                floor=0.0,
                 z_threshold=None,
                 step_seconds=0.1,
                 max_matches=5,
@@ -959,6 +997,48 @@ class TestEmit:
     def test_writes_to_stderr(self, capsys):
         _emit("hello world")
         assert "hello world" in capsys.readouterr().err
+
+
+class TestAudioLaunchSmoke:
+    def test_start_audio_redirects_stdio_and_omits_nostdin(self, tmp_path):
+        proc = MagicMock()
+        proc.poll.return_value = 0
+
+        with patch("part_io.cli.remote_pipeline.launch_resolved", return_value=proc) as launch:
+            started = _start_audio(tmp_path / "snippet.mp3")
+
+        assert started is proc
+        args, kwargs = launch.call_args
+        cmd = args[0]
+        assert "-nostdin" not in cmd
+        assert kwargs["stdin"].name == os.devnull
+        assert kwargs["stdout"].name == os.devnull
+        assert kwargs["stderr"].name == os.devnull
+
+        _stop_audio(proc)
+        assert kwargs["stdin"].closed
+        assert kwargs["stdout"].closed
+        assert kwargs["stderr"].closed
+
+    def test_start_audio_segment_redirects_stdio_and_omits_nostdin(self, tmp_path):
+        proc = MagicMock()
+        proc.poll.return_value = 0
+
+        with patch("part_io.cli.remote_pipeline.launch_resolved", return_value=proc) as launch:
+            started = _start_audio_segment(tmp_path / "episode.mp3", 10.0, 15.0)
+
+        assert started is proc
+        args, kwargs = launch.call_args
+        cmd = args[0]
+        assert "-nostdin" not in cmd
+        assert kwargs["stdin"].name == os.devnull
+        assert kwargs["stdout"].name == os.devnull
+        assert kwargs["stderr"].name == os.devnull
+
+        _stop_audio(proc)
+        assert kwargs["stdin"].closed
+        assert kwargs["stdout"].closed
+        assert kwargs["stderr"].closed
 
 
 # ---------------------------------------------------------------------------
