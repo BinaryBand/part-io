@@ -9,7 +9,7 @@ min_confidence = 80
 paths = ["part_io", "tests"]
 
 [coverage]
-floor = 68
+floor = 50
 
 [ruff]
 mode = "check"

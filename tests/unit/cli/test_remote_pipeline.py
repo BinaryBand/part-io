@@ -13,6 +13,7 @@ import pytest
 from part_io.cli.remote_pipeline import (
     _NEG,
     _POS,
+    _SINGLE_SAMPLE_MOE,
     _UNC,
     _UND,
     EpisodeState,
@@ -22,6 +23,7 @@ from part_io.cli.remote_pipeline import (
     _chunks,
     _classify_score,
     _cmd_cut,
+    _collect_uncertain_candidates,
     _compute_thresholds,
     _count_uncertain,
     _cut_cuttable,
@@ -33,8 +35,11 @@ from part_io.cli.remote_pipeline import (
     _moe,
     _next_uncertain,
     _pair_and_cut,
+    _QuizItem,
     _reclassify_all,
+    _review_candidate,
     _review_one_target,
+    _run_quiz,
     _run_review_loop,
     _start_audio,
     _start_audio_segment,
@@ -213,8 +218,8 @@ class TestMoe:
     def test_empty_returns_zero(self):
         assert _moe([]) == pytest.approx(0.0)
 
-    def test_single_returns_zero(self):
-        assert _moe([0.9]) == pytest.approx(0.0)
+    def test_single_returns_single_sample_moe(self):
+        assert _moe([0.9]) == pytest.approx(_SINGLE_SAMPLE_MOE)
 
     def test_two_equal_returns_zero(self):
         assert _moe([0.9, 0.9]) == pytest.approx(0.0)
@@ -238,13 +243,14 @@ class TestComputeThresholds:
             positives=[Segment("a.mp3", 0.0, 1.0, 0.9), Segment("b.mp3", 0.0, 1.0, 0.85)]
         )
         tp, _ = _compute_thresholds(t)
-        # theta_plus = min(0.9, 0.85) - moe([0.9, 0.85])
-        assert tp < 0.85  # moe brings it below min
+        # theta_plus = min(0.9, 0.85) + moe([0.9, 0.85]) — must exceed minimum by uncertainty buffer
+        assert tp > 0.85  # moe raises it above min (worst-case threshold)
 
     def test_negatives_set_theta_minus(self):
         t = TargetState(negatives=[Segment("a.mp3", 0.0, 1.0, 0.7)])
         _, tm = _compute_thresholds(t)
-        assert tm == pytest.approx(0.7)  # single negative, moe=0
+        # single negative — moe = _SINGLE_SAMPLE_MOE; theta_minus = 0.7 - _SINGLE_SAMPLE_MOE
+        assert tm == pytest.approx(0.7 - _SINGLE_SAMPLE_MOE)
 
 
 class TestClassifyScore:
@@ -266,7 +272,8 @@ class TestReclassifyAll:
     def test_reclassifies_uncertain_episodes(self):
         state = PipelineState()
         ep = state.episode("ep1")
-        ep.open_candidates = [_Match(score=0.95, start=0.0, end=1.0)]
+        # theta_plus = 0.9 + _SINGLE_SAMPLE_MOE (0.05) = 0.95; use 0.97 to clear the bar
+        ep.open_candidates = [_Match(score=0.97, start=0.0, end=1.0)]
         ep.open_class = _UNC
         state.open_target.positives.append(Segment("ep1.mp3", 0.0, 1.0, 0.9))
         _reclassify_all(state)
@@ -532,6 +539,235 @@ class TestNextUncertain:
         assert _next_uncertain(state) is None
 
 
+class TestCollectUncertainCandidates:
+    def _make_state(self, open_score=0.9, close_score=0.85):
+        state = PipelineState()
+        ep = state.episode("ep001")
+        ep.open_candidates = [_Match(score=open_score, start=5.0, end=15.0)]
+        ep.open_class = _UNC
+        ep.close_candidates = [_Match(score=close_score, start=30.0, end=40.0)]
+        ep.close_class = _UNC
+        return state
+
+    def test_empty_state_returns_empty(self):
+        assert _collect_uncertain_candidates(PipelineState()) == []
+
+    def test_no_evidence_all_candidates_uncertain(self):
+        state = self._make_state()
+        items = _collect_uncertain_candidates(state)
+        assert len(items) == 2
+        kinds = {i.kind for i in items}
+        assert kinds == {"open", "close"}
+
+    def test_candidate_above_theta_plus_excluded(self):
+        state = self._make_state(open_score=0.99)
+        state.open_target.positives.append(Segment("ep.mp3", 0.0, 1.0, 0.92))
+        items = _collect_uncertain_candidates(state)
+        assert all(i.kind != "open" for i in items)
+
+    def test_candidate_below_theta_minus_excluded(self):
+        state = self._make_state(close_score=0.5)
+        state.close_target.negatives.append(Segment("ep.mp3", 0.0, 1.0, 0.7))
+        items = _collect_uncertain_candidates(state)
+        assert all(i.kind != "close" for i in items)
+
+    def test_sorted_by_score_descending(self):
+        state = PipelineState()
+        for stem, score in [("ep1", 0.80), ("ep2", 0.95), ("ep3", 0.88)]:
+            ep = state.episode(stem)
+            ep.open_candidates = [_Match(score=score, start=0.0, end=1.0)]
+            ep.open_class = _UNC
+        items = _collect_uncertain_candidates(state)
+        scores = [i.score for i in items]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_multiple_candidates_per_episode(self):
+        state = PipelineState()
+        ep = state.episode("ep001")
+        ep.open_candidates = [
+            _Match(score=0.92, start=5.0, end=15.0),
+            _Match(score=0.85, start=50.0, end=60.0),
+        ]
+        ep.open_class = _UNC
+        items = _collect_uncertain_candidates(state)
+        open_items = [i for i in items if i.kind == "open"]
+        assert len(open_items) == 2
+        assert open_items[0].candidate_idx == 0
+        assert open_items[1].candidate_idx == 1
+
+    def test_classified_episodes_excluded(self):
+        state = self._make_state()
+        state.episodes["ep001"].open_class = _POS
+        items = _collect_uncertain_candidates(state)
+        assert all(i.kind != "open" for i in items)
+
+
+class TestReviewCandidate:
+    def _make_state(self, tmp_path, stem="ep001"):
+        state = PipelineState()
+        ep = state.episode(stem)
+        ep.source = str(tmp_path / f"{stem}.mp3")
+        ep.open_candidates = [_Match(score=0.92, start=5.0, end=15.0)]
+        ep.open_class = _UNC
+        ep.close_candidates = [_Match(score=0.87, start=30.0, end=40.0)]
+        ep.close_class = _UNC
+        return state
+
+    def _mock_proc(self):
+        p = MagicMock()
+        p.poll.return_value = None
+        return p
+
+    def _run(self, state, item, keys, tmp_path, history=None):
+        if history is None:
+            history = []
+        with patch("part_io.cli.remote_pipeline._getch", side_effect=keys):
+            with patch(
+                "part_io.cli.remote_pipeline._start_audio_segment",
+                return_value=self._mock_proc(),
+            ):
+                with patch("part_io.cli.remote_pipeline._stop_audio"):
+                    return _review_candidate(
+                        state,
+                        item,
+                        open_sample=tmp_path / "open.mp3",
+                        close_sample=tmp_path / "close.mp3",
+                        history=history,
+                    )
+
+    def _item(self, stem="ep001", kind="open", idx=0, score=0.92):
+        return _QuizItem(stem=stem, kind=kind, candidate_idx=idx, score=score)
+
+    def test_approve_sets_positive_class(self, tmp_path):
+        state = self._make_state(tmp_path)
+        result = self._run(state, self._item(), ["a"], tmp_path)
+        assert result == "approved"
+        assert state.episodes["ep001"].open_class == _POS
+        assert len(state.open_target.positives) == 1
+
+    def test_reject_adds_negative_and_reclassifies(self, tmp_path):
+        state = self._make_state(tmp_path)
+        result = self._run(state, self._item(), ["r"], tmp_path)
+        assert result == "rejected"
+        assert len(state.open_target.negatives) == 1
+        # With one negative and single-sample MOE, theta_minus = 0.92 - 0.05 = 0.87.
+        # ep.open_score = 0.92 is above theta_minus, so it stays uncertain.
+        assert state.episodes["ep001"].open_class == _UNC
+
+    def test_reject_preserves_uncertain_when_top_score_above_theta_minus(self, tmp_path):
+        state = self._make_state(tmp_path)
+        # Keep two candidates and reject idx=0.
+        # open_score is still candidate[0] (0.92), and with one negative,
+        # theta_minus = 0.92 - 0.05 = 0.87, so episode remains uncertain.
+        ep = state.episodes["ep001"]
+        ep.open_candidates = [
+            _Match(score=0.92, start=5.0, end=15.0),
+            _Match(score=0.97, start=100.0, end=110.0),
+        ]
+        item = self._item(idx=0, score=0.92)
+        result = self._run(state, item, ["r"], tmp_path)
+        assert result == "rejected"
+        assert state.episodes["ep001"].open_class == _UNC
+
+    def test_skip_returns_skipped(self, tmp_path):
+        state = self._make_state(tmp_path)
+        result = self._run(state, self._item(), ["s"], tmp_path)
+        assert result == "skipped"
+        assert state.episodes["ep001"].open_class == _UNC
+
+    def test_quit_raises_keyboard_interrupt(self, tmp_path):
+        state = self._make_state(tmp_path)
+        with pytest.raises(KeyboardInterrupt):
+            self._run(state, self._item(), ["q"], tmp_path)
+
+    def test_undo_restores_prev_class(self, tmp_path):
+        state = self._make_state(tmp_path)
+        history: list[_UndoEntry] = []
+        self._run(state, self._item(kind="open"), ["a"], tmp_path, history=history)
+        assert state.episodes["ep001"].open_class == _POS
+        self._run(state, self._item(kind="close", score=0.87), ["u"], tmp_path, history=history)
+        assert state.episodes["ep001"].open_class == _UNC
+        assert len(state.open_target.positives) == 0
+
+    def test_candidate_idx_selects_correct_position(self, tmp_path):
+        state = self._make_state(tmp_path)
+        state.episodes["ep001"].open_candidates = [
+            _Match(score=0.92, start=5.0, end=15.0),
+            _Match(score=0.85, start=50.0, end=60.0),
+        ]
+        item = self._item(idx=1, score=0.85)
+        result = self._run(state, item, ["a"], tmp_path)
+        assert result == "approved"
+        assert state.open_target.positives[0].start == pytest.approx(50.0)
+
+
+class TestRunQuiz:
+    def _make_state(self, tmp_path, n=2):
+        state = PipelineState()
+        for i in range(n):
+            stem = f"ep{i:03d}"
+            ep = state.episode(stem)
+            ep.source = str(tmp_path / f"{stem}.mp3")
+            ep.open_candidates = [_Match(score=0.9 - i * 0.01, start=5.0, end=15.0)]
+            ep.open_class = _UNC
+        return state
+
+    def _mock_proc(self):
+        p = MagicMock()
+        p.poll.return_value = None
+        return p
+
+    def _quiz(self, state, items, keys, tmp_path):
+        state_path = tmp_path / "state.toml"
+        with patch("part_io.cli.remote_pipeline._getch", side_effect=keys):
+            with patch(
+                "part_io.cli.remote_pipeline._start_audio_segment",
+                return_value=self._mock_proc(),
+            ):
+                with patch("part_io.cli.remote_pipeline._stop_audio"):
+                    return _run_quiz(
+                        state,
+                        items,
+                        open_sample=tmp_path / "open.mp3",
+                        close_sample=tmp_path / "close.mp3",
+                        state_path=state_path,
+                    )
+
+    def test_empty_items_returns_zero(self, tmp_path):
+        state = self._make_state(tmp_path)
+        assert self._quiz(state, [], [], tmp_path) == 0
+
+    def test_approve_counts_as_decision(self, tmp_path):
+        state = self._make_state(tmp_path, n=1)
+        items = _collect_uncertain_candidates(state)
+        decisions = self._quiz(state, items, ["a"], tmp_path)
+        assert decisions == 1
+        assert state.episodes["ep000"].open_class == _POS
+
+    def test_skip_does_not_count_as_decision(self, tmp_path):
+        state = self._make_state(tmp_path, n=1)
+        items = _collect_uncertain_candidates(state)
+        decisions = self._quiz(state, items, ["s"], tmp_path)
+        assert decisions == 0
+
+    def test_auto_classified_items_pruned_from_queue(self, tmp_path):
+        state = self._make_state(tmp_path, n=2)
+        # ep000=0.90, ep001=0.89 both uncertain; approve ep000 → theta_plus=0.90
+        # ep001 (0.89 < 0.90) stays uncertain; but let's use close scores to verify pruning
+        items = _collect_uncertain_candidates(state)
+        # Add ep002 at 0.95 which will auto-classify once ep000 approved (theta_plus=0.90)
+        ep2 = state.episode("ep002")
+        ep2.source = str(tmp_path / "ep002.mp3")
+        ep2.open_candidates = [_Match(score=0.95, start=0.0, end=1.0)]
+        ep2.open_class = _UNC
+        items = _collect_uncertain_candidates(state)
+        # Approve ep002 (highest score 0.95) → theta_plus = 0.95 → ep000 (0.90) still uncertain
+        # After approving ep002, ep001 (0.89 < 0.95) stays uncertain, ep000 (0.90 < 0.95) uncertain
+        decisions = self._quiz(state, items, ["a", "q"], tmp_path)
+        assert decisions == 1
+        assert state.episodes["ep002"].open_class == _POS
+
+
 class TestReviewOneTarget:
     def _make_state(self, tmp_path, stem="ep001"):
         state = PipelineState()
@@ -573,12 +809,13 @@ class TestReviewOneTarget:
         assert state.episodes["ep001"].open_class == _POS
         assert len(state.open_target.positives) == 1
 
-    def test_reject_classifies_negative(self, tmp_path):
+    def test_reject_adds_to_negatives(self, tmp_path):
         state = self._make_state(tmp_path)
         result = self._review(state, "ep001", "close", ["r"], tmp_path)
         assert result == "classified"
-        assert state.episodes["ep001"].close_class == _NEG
         assert len(state.close_target.negatives) == 1
+        # theta_minus = 0.87 - _SINGLE_SAMPLE_MOE = 0.82; ep.close_score=0.87 > 0.82 → stays UNC
+        assert state.episodes["ep001"].close_class == _UNC
 
     def test_skip_returns_skipped_and_leaves_uncertain(self, tmp_path):
         state = self._make_state(tmp_path)
@@ -593,11 +830,11 @@ class TestReviewOneTarget:
 
     def test_approve_triggers_reclassify(self, tmp_path):
         state = self._make_state(tmp_path)
-        # ep001 open_score = 0.92; after approval theta_plus = 0.92 (moe=0 with one point)
-        # ep002 at 0.95 is above theta_plus and should auto-classify positive
+        # ep001 open_score=0.92; after approval theta_plus = 0.92 + _SINGLE_SAMPLE_MOE (0.05) = 0.97
+        # ep002 at 0.98 exceeds theta_plus and auto-classifies positive
         ep2 = state.episode("ep002")
         ep2.source = str(tmp_path / "ep002.mp3")
-        ep2.open_candidates = [_Match(score=0.95, start=0.0, end=1.0)]
+        ep2.open_candidates = [_Match(score=0.98, start=0.0, end=1.0)]
         ep2.open_class = _UNC
         self._review(state, "ep001", "open", ["a"], tmp_path)
         assert state.episodes["ep002"].open_class == _POS
@@ -868,11 +1105,16 @@ class TestRunReviewLoop:
         assert all(ep.open_class == _POS for ep in state.episodes.values())
 
     def test_skips_do_not_count_toward_max(self, tmp_path):
-        # ep000=0.90, ep001=0.89, ep002=0.88 (descending order of review)
-        state = self._make_state(tmp_path, n=3)
-        # Skip ep000 (0.90), approve ep001 (0.89) → decisions=1, loop stops.
-        # theta_plus becomes 0.89 → ep000 auto-classifies positive (0.90 >= 0.89).
-        # ep002 (0.88 < 0.89) stays uncertain.
+        # ep000=0.95, ep001=0.89, ep002=0.80 (ep000 highest so it's skipped first)
+        state = PipelineState()
+        for stem, score in [("ep000", 0.95), ("ep001", 0.89), ("ep002", 0.80)]:
+            ep = state.episode(stem)
+            ep.source = str(tmp_path / f"{stem}.mp3")
+            ep.open_candidates = [_Match(score=score, start=5.0, end=15.0)]
+            ep.open_class = _UNC
+        # Skip ep000 (0.95, highest), approve ep001 (0.89) → decisions=1, loop stops.
+        # theta_plus = 0.89 + _SINGLE_SAMPLE_MOE (0.05) = 0.94
+        # ep000 (0.95 >= 0.94) auto-classifies positive; ep002 (0.80 < 0.94) stays uncertain.
         self._loop(state, tmp_path, keys=["s", "a"], max_decisions=1)
         n_pos = sum(1 for ep in state.episodes.values() if ep.open_class == _POS)
         n_unc = sum(1 for ep in state.episodes.values() if ep.open_class == _UNC)

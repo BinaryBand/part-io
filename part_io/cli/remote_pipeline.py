@@ -347,25 +347,37 @@ class PipelineState:
 # ---------------------------------------------------------------------------
 
 
+# Epistemic uncertainty applied when only one confirmed example exists per class.
+# With a single sample, variance is undefined, so we conservatively assume this buffer.
+# After two or more samples, variance-based MoE takes over and this floor is irrelevant.
+_SINGLE_SAMPLE_MOE = 0.05
+
+
 def _moe(scores: list[float], k: float = 1.5) -> float:
-    if len(scores) < 2:
+    n = len(scores)
+    if n == 0:
         return 0.0
-    mean = sum(scores) / len(scores)
-    variance = sum((s - mean) ** 2 for s in scores) / len(scores)
+    if n == 1:
+        return _SINGLE_SAMPLE_MOE
+    mean = sum(scores) / n
+    variance = sum((s - mean) ** 2 for s in scores) / n
     return k * math.sqrt(variance)
 
 
 def _compute_thresholds(target: TargetState) -> tuple[float, float]:
     """Return (theta_plus, theta_minus) for a target.
 
-    With no confirmed positives theta_plus = +inf so nothing auto-classifies positive.
-    With no confirmed negatives theta_minus = -inf so nothing auto-classifies negative.
-    The thresholds converge from both extremes as labelled examples accumulate.
+    θ⁺ = min(positives) + moe  — auto-positive requires exceeding the minimum confirmed
+                                  positive BY the uncertainty buffer (worst-case threshold).
+    θ⁻ = max(negatives) - moe  — auto-negative requires falling below the maximum confirmed
+                                  negative BY the uncertainty buffer.
+    The uncertain zone (θ⁻, θ⁺) widens with high variance and narrows as evidence accumulates.
+    With no positives: θ⁺ = +inf. With no negatives: θ⁻ = -inf.
     """
     pos = [s.score for s in target.positives]
     neg = [s.score for s in target.negatives]
-    theta_plus = (min(pos) - _moe(pos)) if pos else math.inf
-    theta_minus = (max(neg) + _moe(neg)) if neg else -math.inf
+    theta_plus = (min(pos) + _moe(pos)) if pos else math.inf
+    theta_minus = (max(neg) - _moe(neg)) if neg else -math.inf
     return theta_plus, theta_minus
 
 
@@ -629,6 +641,15 @@ class _UndoEntry:
     action: str
     segment: Segment
     target_list: list[Segment]
+    prev_class: str = _UNC
+
+
+@dataclass(frozen=True)
+class _QuizItem:
+    stem: str
+    kind: str  # "open" or "close"
+    candidate_idx: int  # index into open_candidates / close_candidates
+    score: float  # candidate score (for sorting)
 
 
 def _next_uncertain(
@@ -650,29 +671,34 @@ def _next_uncertain(
     return stem, kind
 
 
-def _review_one_target(
+def _review_candidate(
     state: PipelineState,
-    stem: str,
-    kind: str,
+    item: _QuizItem,
     *,
     open_sample: Path,
     close_sample: Path,
     history: list[_UndoEntry],
 ) -> str:
-    """Review one uncertain target interactively. Returns 'classified', 'skipped', or 'undone'."""
-    ep_state = state.episodes[stem]
+    """Review one candidate interactively.
+
+    Returns 'approved', 'rejected', 'skipped', or 'undone'.
+    """
+    ep_state = state.episodes[item.stem]
     source = Path(ep_state.source)
-    snippet = open_sample if kind == "open" else close_sample
-    target = state.open_target if kind == "open" else state.close_target
-    score = ep_state.open_score if kind == "open" else ep_state.close_score
-    start = ep_state.open_start if kind == "open" else ep_state.close_start
-    end = ep_state.open_end if kind == "open" else ep_state.close_end
+    snippet = open_sample if item.kind == "open" else close_sample
+    target = state.open_target if item.kind == "open" else state.close_target
+    all_candidates = ep_state.open_candidates if item.kind == "open" else ep_state.close_candidates
+    candidate = all_candidates[item.candidate_idx]
+    prev_class = ep_state.open_class if item.kind == "open" else ep_state.close_class
+    n_total = len(all_candidates)
+    position_label = f" [{item.candidate_idx + 1}/{n_total}]" if n_total > 1 else ""
 
     undo_hint = "  [u]ndo" if history else ""
     legend = f"  [a]pprove  [r]eject  [p]replay  [c]ompare  [s]kip  [q]uit{undo_hint}  "
-    print(f"\n  [{kind}]  score={score:.4f}  start={start:.1f}s", file=sys.stderr)
+    score_str = f"score={candidate.score:.4f}  start={candidate.start:.1f}s"
+    print(f"\n  [{item.kind}]{position_label}  {score_str}", file=sys.stderr)
     print(legend, end="", flush=True, file=sys.stderr)
-    current_proc: Any | None = _start_audio_segment(source, start, end)
+    current_proc: Any | None = _start_audio_segment(source, candidate.start, candidate.end)
 
     while True:
         key = _getch().lower()
@@ -680,30 +706,41 @@ def _review_one_target(
         current_proc = None
 
         if key == "p":
-            current_proc = _start_audio_segment(source, start, end)
+            current_proc = _start_audio_segment(source, candidate.start, candidate.end)
             print(f"\r{legend}", end="", flush=True, file=sys.stderr)
         elif key == "c":
             current_proc = _start_audio(snippet)
             print(f"\r{legend}", end="", flush=True, file=sys.stderr)
         elif key in ("a", "r"):
-            seg = Segment(source=str(source), start=start, end=end, score=score)
+            seg = Segment(
+                source=str(source), start=candidate.start, end=candidate.end, score=candidate.score
+            )
             if key == "a":
                 target.positives.append(seg)
-                ep_class, lst = _POS, target.positives
+                if item.kind == "open":
+                    ep_state.open_class = _POS
+                else:
+                    ep_state.close_class = _POS
+                lst = target.positives
                 print("\napproved", file=sys.stderr)
+                action = "approved"
             else:
                 target.negatives.append(seg)
-                ep_class, lst = _NEG, target.negatives
+                lst = target.negatives
                 print("\nrejected", file=sys.stderr)
-            if kind == "open":
-                ep_state.open_class = ep_class
-            else:
-                ep_state.close_class = ep_class
+                action = "rejected"
             history.append(
-                _UndoEntry(stem=stem, kind=kind, action=key, segment=seg, target_list=lst)
+                _UndoEntry(
+                    stem=item.stem,
+                    kind=item.kind,
+                    action=key,
+                    segment=seg,
+                    target_list=lst,
+                    prev_class=prev_class,
+                )
             )
             _reclassify_all(state)
-            return "classified"
+            return action
         elif key == "s":
             print("\nskipped", file=sys.stderr)
             return "skipped"
@@ -712,9 +749,9 @@ def _review_one_target(
             entry.target_list.remove(entry.segment)
             prev_ep = state.episodes[entry.stem]
             if entry.kind == "open":
-                prev_ep.open_class = _UNC
+                prev_ep.open_class = entry.prev_class
             else:
-                prev_ep.close_class = _UNC
+                prev_ep.close_class = entry.prev_class
             _reclassify_all(state)
             print(
                 f"\nundone ({entry.action} {entry.kind} for {entry.stem[:16]})",
@@ -726,6 +763,27 @@ def _review_one_target(
             raise KeyboardInterrupt
 
 
+def _review_one_target(
+    state: PipelineState,
+    stem: str,
+    kind: str,
+    *,
+    open_sample: Path,
+    close_sample: Path,
+    history: list[_UndoEntry],
+) -> str:
+    """Review the top candidate for (stem, kind). Returns 'classified', 'skipped', or 'undone'."""
+    ep_state = state.episodes[stem]
+    all_candidates = ep_state.open_candidates if kind == "open" else ep_state.close_candidates
+    if not all_candidates:
+        return "skipped"
+    item = _QuizItem(stem=stem, kind=kind, candidate_idx=0, score=all_candidates[0].score)
+    result = _review_candidate(
+        state, item, open_sample=open_sample, close_sample=close_sample, history=history
+    )
+    return "classified" if result in ("approved", "rejected") else result
+
+
 def _count_uncertain(state: PipelineState) -> int:
     return sum(
         1
@@ -733,6 +791,24 @@ def _count_uncertain(state: PipelineState) -> int:
         for cls in (ep.open_class, ep.close_class)
         if cls == _UNC
     )
+
+
+def _collect_uncertain_candidates(state: PipelineState) -> list[_QuizItem]:
+    """Return all candidates in the uncertain zone (θ⁻, θ⁺), sorted by score descending."""
+    tp_o, tm_o = _compute_thresholds(state.open_target)
+    tp_c, tm_c = _compute_thresholds(state.close_target)
+    items: list[_QuizItem] = []
+    for stem, ep in state.episodes.items():
+        if ep.open_class == _UNC:
+            for i, c in enumerate(ep.open_candidates):
+                if tm_o < c.score < tp_o:
+                    items.append(_QuizItem(stem=stem, kind="open", candidate_idx=i, score=c.score))
+        if ep.close_class == _UNC:
+            for i, c in enumerate(ep.close_candidates):
+                if tm_c < c.score < tp_c:
+                    items.append(_QuizItem(stem=stem, kind="close", candidate_idx=i, score=c.score))
+    items.sort(key=lambda x: x.score, reverse=True)
+    return items
 
 
 def _run_review_loop(
@@ -770,8 +846,14 @@ def _run_review_loop(
         )
         if result == "classified":
             decisions += 1
-            skipped.discard((kind, stem))
             state.save(state_path)
+            ep = state.episodes[stem]
+            ep_class = ep.open_class if kind == "open" else ep.close_class
+            if ep_class == _UNC:
+                # Rejection didn't auto-classify (conservative MoE); defer until re-run.
+                skipped.add((kind, stem))
+            else:
+                skipped.discard((kind, stem))
         elif result == "skipped":
             skipped.add((kind, stem))
         else:  # undone
@@ -784,6 +866,87 @@ def _run_review_loop(
                 f"\nBatch complete ({decisions} decisions)."
                 f" {n_unc} uncertain remaining — run again."
             )
+
+
+def _run_quiz(
+    state: PipelineState,
+    items: list[_QuizItem],
+    *,
+    open_sample: Path,
+    close_sample: Path,
+    state_path: Path,
+) -> int:
+    """Review a pre-collected set of uncertain candidates. Returns number of decisions made."""
+    history: list[_UndoEntry] = []
+    skipped_keys: set[tuple[str, str, int]] = set()
+    decisions = 0
+    remaining = list(items)
+
+    while remaining:
+        active = next(
+            (
+                item
+                for item in remaining
+                if (item.stem, item.kind, item.candidate_idx) not in skipped_keys
+                and state.episodes.get(item.stem) is not None
+                and (
+                    state.episodes[item.stem].open_class
+                    if item.kind == "open"
+                    else state.episodes[item.stem].close_class
+                )
+                == _UNC
+                and item.candidate_idx
+                < len(
+                    state.episodes[item.stem].open_candidates
+                    if item.kind == "open"
+                    else state.episodes[item.stem].close_candidates
+                )
+            ),
+            None,
+        )
+        if active is None:
+            break
+
+        n_unc = _count_uncertain(state)
+        _emit(f"\n{'=' * 60}")
+        _emit(f"Episode: {active.stem}  [{active.kind}]  ({n_unc} uncertain remaining)")
+        _emit("=" * 60)
+
+        result = _review_candidate(
+            state,
+            active,
+            open_sample=open_sample,
+            close_sample=close_sample,
+            history=history,
+        )
+
+        if result in ("approved", "rejected"):
+            decisions += 1
+            state.save(state_path)
+            decided_key = (active.stem, active.kind, active.candidate_idx)
+            uncertain_keys = {
+                (i.stem, i.kind, i.candidate_idx) for i in _collect_uncertain_candidates(state)
+            }
+            remaining = [
+                i
+                for i in remaining
+                if (i.stem, i.kind, i.candidate_idx) in uncertain_keys
+                and (i.stem, i.kind, i.candidate_idx) != decided_key
+            ]
+        elif result == "skipped":
+            skipped_keys.add((active.stem, active.kind, active.candidate_idx))
+        else:  # undone
+            state.save(state_path)
+            remaining = [
+                i
+                for i in _collect_uncertain_candidates(state)
+                if (i.stem, i.kind, i.candidate_idx) not in skipped_keys
+            ]
+
+    n_skipped = len(skipped_keys)
+    if n_skipped:
+        _emit(f"\n{n_skipped} candidate(s) skipped — restart to revisit.")
+    return decisions
 
 
 # ---------------------------------------------------------------------------
@@ -1044,7 +1207,7 @@ def _cmd_cut(args: argparse.Namespace) -> None:
 
 
 def _cmd_loop(args: argparse.Namespace) -> None:
-    """Detect a batch -> review up to quiz_size -> cut cuttable. Run repeatedly to process all."""
+    """Detect one episode at a time, accumulate uncertain candidates, quiz, then cut."""
     remote_dir: Path = args.remote_dir
     output_dir: Path = args.output_dir
     open_sample = args.snippets_dir / args.open_sample
@@ -1064,14 +1227,19 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         sys.exit(f"No full-length MP3s (>= 10 MB) found in {remote_dir}")
 
     state = PipelineState.load(state_path)
-    to_detect_all = [
+    undetected = [
         ep for ep in all_full if args.overwrite or not state.episode(ep.stem).is_detected()
     ]
-    to_detect = to_detect_all[: args.batch_size]
-    if to_detect:
-        _emit(f"\nDetecting {len(to_detect)} of {len(to_detect_all)} undetected episode(s)...")
+    n_already = len(all_full) - len(undetected)
+    _emit(f"Episodes: {len(all_full)} total, {n_already} detected, {len(undetected)} to detect")
+
+    # Detect one episode at a time until we have enough uncertain candidates for a quiz.
+    quiz_items = _collect_uncertain_candidates(state)
+    while len(quiz_items) < args.quiz_size and undetected:
+        ep_path = undetected.pop(0)
+        _emit(f"\nDetecting {ep_path.stem}...")
         _detect_batch(
-            to_detect,
+            [ep_path],
             state,
             open_sample,
             close_sample,
@@ -1082,18 +1250,31 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         )
         _reclassify_all(state)
         state.save(state_path)
+        quiz_items = _collect_uncertain_candidates(state)
+
+    quiz_items = quiz_items[: args.quiz_size]
+    n_unc = _count_uncertain(state)
 
     if not args.no_interactive:
-        n_unc = _count_uncertain(state)
-        _emit(f"\n{n_unc} uncertain target(s) to review.")
-        if n_unc:
-            _run_review_loop(
-                state,
-                open_sample=open_sample,
-                close_sample=close_sample,
-                state_path=state_path,
-                max_decisions=args.quiz_size,
+        if quiz_items:
+            _emit(f"\n{len(quiz_items)} candidate(s) to review ({n_unc} uncertain total).")
+            try:
+                _run_quiz(
+                    state,
+                    quiz_items,
+                    open_sample=open_sample,
+                    close_sample=close_sample,
+                    state_path=state_path,
+                )
+            except KeyboardInterrupt:
+                _emit("\nInterrupted. Progress saved.")
+        else:
+            msg = (
+                f"{n_unc} uncertain remaining — nothing new to review."
+                if n_unc
+                else "Nothing to review."
             )
+            _emit(f"\n{msg}")
 
     n_cut, n_skipped, n_failed = _cut_cuttable(
         state,
@@ -1185,7 +1366,7 @@ def _build_cut_parser(sub: argparse._SubParsersAction) -> None:
 def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "loop",
-        help="Detect a batch -> review -> cut. Run repeatedly to process all.",
+        help="Detect one episode at a time, quiz uncertain candidates, then cut. Run repeatedly.",
     )
     _add_remote_dir_arg(p)
     p.add_argument("--snippets-dir", type=Path, default=Path("downloads/snippets"))
@@ -1194,8 +1375,12 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--output-dir", type=Path, default=Path("downloads/remove"))
     _add_detect_args(p)
     _add_cut_args(p)
-    p.add_argument("--batch-size", type=int, default=10, help="New episodes to detect per run")
-    p.add_argument("--quiz-size", type=int, default=10, help="Max uncertain targets per run")
+    p.add_argument(
+        "--quiz-size",
+        type=int,
+        default=10,
+        help="Target number of uncertain candidates to collect before quizzing (default: 10)",
+    )
     p.add_argument("--no-interactive", action="store_true", help="Skip interactive review")
     p.add_argument("--overwrite", action="store_true", help="Re-detect and re-cut episodes")
 
