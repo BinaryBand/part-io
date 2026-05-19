@@ -56,7 +56,8 @@ class RunSettingsModel(BaseModel):
     snippets_dir: str = "downloads/snippets"  # directory containing open/close/intro snippet files
     open_sample: str = "open.mp3"  # filename of the ad-open snippet inside snippets_dir
     close_sample: str = "close.mp3"  # filename of the ad-close snippet inside snippets_dir
-    intro_sample: str = "intro.mp3"  # filename of the intro snippet inside snippets_dir; if detected, trim before it
+    intro_sample: str = "intro.mp3"  # intro snippet filename in snippets_dir
+    # if intro is detected, trim everything before it
     output_dir: str = "downloads/remove"  # destination directory for cut MP3s
     debug: bool = False  # export planned ad-cut clips into output_dir/debug_ads for inspection
 
@@ -69,6 +70,8 @@ class EpisodeStateModel(BaseModel):
     open_class: Classification = "undetected"
     close_candidates: list[MatchModel] = Field(default_factory=list)
     close_class: Classification = "undetected"
+    intro_candidates: list[MatchModel] = Field(default_factory=list)
+    intro_class: Classification = "undetected"
     cut: bool = False
 
 

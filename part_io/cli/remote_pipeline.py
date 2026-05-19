@@ -104,6 +104,8 @@ class EpisodeState:
     open_class: str = _UND
     close_candidates: list[_Match] = field(default_factory=list)
     close_class: str = _UND
+    intro_candidates: list[_Match] = field(default_factory=list)
+    intro_class: str = _UND
     cut: bool = False
 
     # Read-only convenience properties so all existing callers of open_score etc. still work.
@@ -131,8 +133,20 @@ class EpisodeState:
     def close_end(self) -> float:
         return self.close_candidates[0].end if self.close_candidates else 0.0
 
+    @property
+    def intro_score(self) -> float:
+        return self.intro_candidates[0].score if self.intro_candidates else 0.0
+
+    @property
+    def intro_start(self) -> float:
+        return self.intro_candidates[0].start if self.intro_candidates else 0.0
+
+    @property
+    def intro_end(self) -> float:
+        return self.intro_candidates[0].end if self.intro_candidates else 0.0
+
     def is_detected(self) -> bool:
-        return self.open_class != _UND or self.close_class != _UND
+        return self.open_class != _UND or self.close_class != _UND or self.intro_class != _UND
 
     def is_cuttable(self) -> bool:
         return self.open_class == _POS and self.close_class == _POS
@@ -156,6 +170,7 @@ class RunSettings:
     snippets_dir: str = "downloads/snippets"
     open_sample: str = "open.mp3"
     close_sample: str = "close.mp3"
+    intro_sample: str = "intro.mp3"
     output_dir: str = "downloads/remove"
     debug: bool = False
 
@@ -203,6 +218,7 @@ def _load_episode(raw: dict) -> EpisodeState:
         source=str(raw.get("source", "")),
         open_class=str(raw.get("open_class", _UND)),
         close_class=str(raw.get("close_class", _UND)),
+        intro_class=str(raw.get("intro_class", _UND)),
         cut=bool(raw.get("cut", False)),
     )
     # New format: candidates list
@@ -227,6 +243,8 @@ def _load_episode(raw: dict) -> EpisodeState:
                 end=float(raw.get("close_end", 0.0)),
             )
         ]
+    if "intro_candidates" in raw:
+        ep.intro_candidates = [_load_match(m) for m in raw["intro_candidates"]]
     return ep
 
 
@@ -248,6 +266,7 @@ def _load_settings(raw: dict) -> RunSettings:
         snippets_dir=str(raw.get("snippets_dir", "downloads/snippets")),
         open_sample=str(raw.get("open_sample", "open.mp3")),
         close_sample=str(raw.get("close_sample", "close.mp3")),
+        intro_sample=str(raw.get("intro_sample", "intro.mp3")),
         output_dir=str(raw.get("output_dir", "downloads/remove")),
         debug=bool(raw.get("debug", False)),
     )
@@ -389,6 +408,7 @@ class PipelineState:
             f"snippets_dir = {json.dumps(settings.snippets_dir)}\n",
             f"open_sample = {json.dumps(settings.open_sample)}\n",
             f"close_sample = {json.dumps(settings.close_sample)}\n",
+            f"intro_sample = {json.dumps(settings.intro_sample)}\n",
             f"output_dir = {json.dumps(settings.output_dir)}\n",
             f"debug = {str(settings.debug).lower()}\n",
         ]
@@ -402,11 +422,14 @@ class PipelineState:
             lines.append(f"source           = {json.dumps(ep.source)}\n")
             oc = ", ".join(_fmt_match(m) for m in ep.open_candidates)
             cc = ", ".join(_fmt_match(m) for m in ep.close_candidates)
+            ic = ", ".join(_fmt_match(m) for m in ep.intro_candidates)
             lines += [
                 f"open_candidates  = [{oc}]\n",
                 f'open_class       = "{ep.open_class}"\n',
                 f"close_candidates = [{cc}]\n",
                 f'close_class      = "{ep.close_class}"\n',
+                f"intro_candidates = [{ic}]\n",
+                f'intro_class      = "{ep.intro_class}"\n',
                 f"cut = {str(ep.cut).lower()}\n",
             ]
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -418,29 +441,29 @@ class PipelineState:
 # ---------------------------------------------------------------------------
 
 
-# Two-tailed 95% t-critical values indexed by sample size n (df = n-1).
-# For n >= 31 the normal approximation (1.960) is used.
+# Two-tailed 98% t-critical values indexed by sample size n (df = n-1).
+# For n >= 31 the normal approximation (2.326) is used.
 # n < 2 is not in this table; _moe handles those by returning math.inf.
 _T_CRIT: dict[int, float] = {
-    2: 12.706,
-    3: 4.303,
-    4: 3.182,
-    5: 2.776,
-    6: 2.571,
-    7: 2.447,
-    8: 2.365,
-    9: 2.306,
-    10: 2.262,
-    15: 2.131,
-    20: 2.086,
-    25: 2.060,
-    30: 2.042,
+    2: 31.821,
+    3: 6.965,
+    4: 4.541,
+    5: 3.747,
+    6: 3.365,
+    7: 3.143,
+    8: 2.998,
+    9: 2.896,
+    10: 2.821,
+    15: 2.624,
+    20: 2.539,
+    25: 2.492,
+    30: 2.462,
 }
-_T_CRIT_LARGE = 1.960
+_T_CRIT_LARGE = 2.326
 
 
 def _t_critical(n: int) -> float:
-    """95% two-tailed t-critical value for n samples (df = n-1)."""
+    """98% two-tailed t-critical value for n samples (df = n-1)."""
     if n < 2:
         return math.inf
     if n >= 31:
@@ -455,7 +478,7 @@ _SINGLE_SAMPLE_MOE = 0.05
 
 
 def _moe(scores: list[float], k: float | None = None) -> float:
-    """Margin of error using the t-distribution (95% CI on the sample mean).
+    """Margin of error using the t-distribution (98% CI on the sample mean).
 
     Returns math.inf for n < 2 so that a single confirmed example never
     triggers auto-classification — the uncertain zone collapses only as
@@ -550,6 +573,7 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     args.snippets_dir = Path(_resolve_opt(args.snippets_dir, s.snippets_dir))
     args.open_sample = str(_resolve_opt(args.open_sample, s.open_sample))
     args.close_sample = str(_resolve_opt(args.close_sample, s.close_sample))
+    args.intro_sample = str(_resolve_opt(args.intro_sample, s.intro_sample))
     args.z_threshold = _resolve_opt(args.z_threshold, s.z_threshold)
     args.step_seconds = float(_resolve_opt(args.step_seconds, s.step_seconds))
     args.workers = int(_resolve_opt(args.workers, s.workers))
@@ -560,6 +584,7 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     s.snippets_dir = str(args.snippets_dir)
     s.open_sample = args.open_sample
     s.close_sample = args.close_sample
+    s.intro_sample = args.intro_sample
     s.z_threshold = args.z_threshold
     s.step_seconds = args.step_seconds
     s.workers = args.workers
@@ -649,13 +674,17 @@ def _detect_batch(
     state: PipelineState,
     open_sample: Path,
     close_sample: Path,
+    intro_sample: Path | None = None,
     *,
     z_threshold: float | None,
     step_seconds: float,
     workers: int,
     max_matches: int,
 ) -> None:
-    """Detect open+close for a batch of episodes in parallel, updating state in-place."""
+    """Detect open+close (and optional intro) matches for a batch.
+
+    Updates pipeline state in-place.
+    """
     _, tm_o = _compute_thresholds(state.open_target)
     _, tm_c = _compute_thresholds(state.close_target)
     open_floor = tm_o if math.isfinite(tm_o) else 0.0
@@ -667,6 +696,9 @@ def _detect_batch(
     jobs = [(ep, open_sample, "open", open_floor) for ep in episodes] + [
         (ep, close_sample, "close", close_floor) for ep in episodes
     ]
+    if intro_sample is not None and intro_sample.exists():
+        jobs += [(ep, intro_sample, "intro", 0.0) for ep in episodes]
+
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
@@ -691,9 +723,12 @@ def _detect_batch(
             if kind == "open":
                 ep_state.open_candidates = matches
                 ep_state.open_class = _UNC if matches else _UND
-            else:
+            elif kind == "close":
                 ep_state.close_candidates = matches
                 ep_state.close_class = _UNC if matches else _UND
+            else:  # intro
+                ep_state.intro_candidates = matches
+                ep_state.intro_class = _UNC if matches else _UND
             _emit(f"  [{done}/{len(jobs)}] {kind:5}  {stem}  ({score_str})")
 
 
@@ -1255,6 +1290,12 @@ def _pair_and_cut(
         print(f"  Debug clips written: {wrote} -> {clip_dir}")
 
     spans = _spans_from_cuts(cuts)
+    # If intro is detected, add a trim span to remove everything before it
+    if ep_state.intro_class != _UND and ep_state.intro_candidates:
+        intro_end = ep_state.intro_end
+        print(f"  Intro detected at {intro_end:.1f}s - trimming preroll before it")
+        # Insert intro trim at the beginning of spans
+        spans.insert(0, (0.0, intro_end))
     filter_complex, _ = _build_filter_complex(spans, fade_dur=fade_dur)
 
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
@@ -1348,6 +1389,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
 
     open_sample = args.snippets_dir / args.open_sample
     close_sample = args.snippets_dir / args.close_sample
+    intro_sample = args.snippets_dir / args.intro_sample
 
     for path, label in [
         (remote_dir, "Remote dir"),
@@ -1374,6 +1416,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
             state,
             open_sample,
             close_sample,
+            intro_sample,
             z_threshold=args.z_threshold,
             step_seconds=args.step_seconds,
             workers=args.workers,
@@ -1453,6 +1496,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     output_dir: Path = args.output_dir
     open_sample = args.snippets_dir / args.open_sample
     close_sample = args.snippets_dir / args.close_sample
+    intro_sample = args.snippets_dir / args.intro_sample
 
     for path, label in [
         (remote_dir, "Remote dir"),
@@ -1482,6 +1526,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             state,
             open_sample,
             close_sample,
+            intro_sample,
             z_threshold=args.z_threshold,
             step_seconds=args.step_seconds,
             workers=args.workers,
@@ -1624,6 +1669,7 @@ def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--snippets-dir", type=Path, default=None)
     p.add_argument("--open-sample", default=None)
     p.add_argument("--close-sample", default=None)
+    p.add_argument("--intro-sample", default=None)
     _add_detect_args(p)
     p.add_argument("--overwrite", action="store_true", default=None)
     p.add_argument(
@@ -1647,6 +1693,7 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--snippets-dir", type=Path, default=None)
     p.add_argument("--open-sample", default=None)
     p.add_argument("--close-sample", default=None)
+    p.add_argument("--intro-sample", default=None)
     p.add_argument("--output-dir", type=Path, default=None)
     _add_detect_args(p)
     _add_cut_args(p)

@@ -243,7 +243,7 @@
 #             positives=[Segment("a.mp3", 0.0, 1.0, 0.9), Segment("b.mp3", 0.0, 1.0, 0.85)]
 #         )
 #         tp, _ = _compute_thresholds(t)
-#         # theta_plus = min(0.9, 0.85) + moe([0.9, 0.85]) — must exceed minimum by uncertainty buffer
+#         # theta_plus = min(0.9, 0.85) + moe([0.9, 0.85]) — must exceed minimum by buffer
 #         assert tp > 0.85  # moe raises it above min (worst-case threshold)
 
 #     def test_negatives_set_theta_minus(self):
@@ -762,7 +762,8 @@
 #         ep2.open_class = _UNC
 #         items = _collect_uncertain_candidates(state)
 #         # Approve ep002 (highest score 0.95) → theta_plus = 0.95 → ep000 (0.90) still uncertain
-#         # After approving ep002, ep001 (0.89 < 0.95) stays uncertain, ep000 (0.90 < 0.95) uncertain
+#         # After approving ep002, ep001 (0.89 < 0.95) stays uncertain,
+#         #     ep000 (0.90 < 0.95) uncertain
 #         decisions = self._quiz(state, items, ["a", "q"], tmp_path)
 #         assert decisions == 1
 #         assert state.episodes["ep002"].open_class == _POS
@@ -830,7 +831,8 @@
 
 #     def test_approve_triggers_reclassify(self, tmp_path):
 #         state = self._make_state(tmp_path)
-#         # ep001 open_score=0.92; after approval theta_plus = 0.92 + _SINGLE_SAMPLE_MOE (0.05) = 0.97
+#         # ep001 open_score=0.92;
+#         #     after approval theta_plus = 0.92 + _SINGLE_SAMPLE_MOE (0.05) = 0.97
 #         # ep002 at 0.98 exceeds theta_plus and auto-classifies positive
 #         ep2 = state.episode("ep002")
 #         ep2.source = str(tmp_path / "ep002.mp3")
