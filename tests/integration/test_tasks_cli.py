@@ -225,6 +225,24 @@ def test_main_help_command(monkeypatch) -> None:
     assert called["help"] is True
 
 
+def test_main_compile_dispatch(monkeypatch) -> None:
+    """Compile command should dispatch to schema compiler module."""
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str]) -> int:
+        seen.append(cmd)
+        return 0
+
+    monkeypatch.setattr(tasks_cli, "_run_cmd", fake_run)
+    monkeypatch.setattr("sys.argv", ["part_io-tasks", "compile"])
+
+    with pytest.raises(SystemExit) as exc:
+        tasks_cli.main()
+
+    assert exc.value.code == 0
+    assert seen == [[tasks_cli.sys.executable, "-m", "part_io.cli.compile"]]
+
+
 def test_main_lint_and_check_tasks_dispatch(monkeypatch) -> None:
     """Lint and check-tasks should dispatch to their dedicated handlers."""
     called = {"lint": False, "check": False}

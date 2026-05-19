@@ -1,17 +1,23 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://part-io.local/schemas/generic_state.schema.json",
-  "title": "Part-IO Generic State",
-  "description": "Base schema for other __state__.toml files under part_io/models. Use a per-file #:schema directive to override with a stricter schema when available.",
-  "type": "object",
+  "additionalProperties": true,
+  "description": "Lenient base model for future state files without a strict schema yet.",
   "properties": {
     "schema_version": {
-      "description": "Optional semantic version or integer revision for state file evolution.",
-      "oneOf": [
-        { "type": "integer", "minimum": 1 },
-        { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+){0,2}$" }
-      ]
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Schema Version"
     }
   },
-  "additionalProperties": true
+  "title": "GenericStateModel",
+  "type": "object"
 }

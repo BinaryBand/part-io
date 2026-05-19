@@ -62,15 +62,7 @@ class TestSemgrep:
     def test_semgrep(self):
         """Fail if Semgrep reports any architecture or process violations."""
         result = run_resolved(
-            [
-                "poetry",
-                "run",
-                "semgrep",
-                "scan",
-                "--config",
-                "config/semgrep/",
-                "--error",
-            ],
+            ["poetry", "run", "python", "-m", "part_io.cli.lint.semgrep"],
             capture_output=True,
             text=True,
             encoding="utf-8",

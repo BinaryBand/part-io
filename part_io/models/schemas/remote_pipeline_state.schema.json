@@ -1,94 +1,261 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://part-io.local/schemas/remote_pipeline_state.schema.json",
-  "title": "Part-IO Remote Pipeline State",
-  "description": "Schema for __state__.toml written by part_io.cli.remote_pipeline.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["targets", "episodes"],
-  "properties": {
-    "targets": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["open", "close"],
-      "properties": {
-        "open": { "$ref": "#/$defs/targetState" },
-        "close": { "$ref": "#/$defs/targetState" }
-      }
-    },
-    "episodes": {
-      "type": "object",
-      "description": "Episode state keyed by episode stem.",
-      "minProperties": 0,
-      "additionalProperties": { "$ref": "#/$defs/episodeState" }
-    }
-  },
   "$defs": {
-    "classification": {
-      "type": "string",
-      "enum": ["positive", "negative", "uncertain", "undetected"]
-    },
-    "segment": {
-      "type": "object",
+    "EpisodeStateModel": {
       "additionalProperties": false,
-      "required": ["source", "start", "end", "score"],
       "properties": {
-        "source": { "type": "string", "minLength": 1 },
-        "start": { "type": "number" },
-        "end": { "type": "number" },
-        "score": { "type": "number" }
-      }
-    },
-    "match": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["score", "start", "end"],
-      "properties": {
-        "score": { "type": "number" },
-        "start": { "type": "number" },
-        "end": { "type": "number" }
-      }
-    },
-    "targetState": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["positives", "negatives"],
-      "properties": {
-        "positives": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/segment" }
+        "close_candidates": {
+          "items": {
+            "$ref": "#/$defs/MatchModel"
+          },
+          "title": "Close Candidates",
+          "type": "array"
         },
-        "negatives": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/segment" }
+        "close_class": {
+          "default": "undetected",
+          "enum": [
+            "positive",
+            "negative",
+            "uncertain",
+            "undetected"
+          ],
+          "title": "Close Class",
+          "type": "string"
+        },
+        "cut": {
+          "default": false,
+          "title": "Cut",
+          "type": "boolean"
+        },
+        "open_candidates": {
+          "items": {
+            "$ref": "#/$defs/MatchModel"
+          },
+          "title": "Open Candidates",
+          "type": "array"
+        },
+        "open_class": {
+          "default": "undetected",
+          "enum": [
+            "positive",
+            "negative",
+            "uncertain",
+            "undetected"
+          ],
+          "title": "Open Class",
+          "type": "string"
+        },
+        "source": {
+          "default": "",
+          "title": "Source",
+          "type": "string"
         }
-      }
+      },
+      "title": "EpisodeStateModel",
+      "type": "object"
     },
-    "episodeState": {
-      "type": "object",
+    "MatchModel": {
       "additionalProperties": false,
+      "properties": {
+        "end": {
+          "title": "End",
+          "type": "number"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "start": {
+          "title": "Start",
+          "type": "number"
+        }
+      },
+      "required": [
+        "score",
+        "start",
+        "end"
+      ],
+      "title": "MatchModel",
+      "type": "object"
+    },
+    "RemotePipelineTargetsModel": {
+      "additionalProperties": false,
+      "properties": {
+        "close": {
+          "$ref": "#/$defs/TargetStateModel"
+        },
+        "open": {
+          "$ref": "#/$defs/TargetStateModel"
+        }
+      },
+      "title": "RemotePipelineTargetsModel",
+      "type": "object"
+    },
+    "RunSettingsModel": {
+      "additionalProperties": false,
+      "properties": {
+        "close_sample": {
+          "default": "close.mp3",
+          "title": "Close Sample",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": false,
+          "title": "Dry Run",
+          "type": "boolean"
+        },
+        "fade": {
+          "default": 0.5,
+          "title": "Fade",
+          "type": "number"
+        },
+        "inclusive": {
+          "default": false,
+          "title": "Inclusive",
+          "type": "boolean"
+        },
+        "max_gap": {
+          "default": 300.0,
+          "title": "Max Gap",
+          "type": "number"
+        },
+        "max_matches": {
+          "default": 3,
+          "title": "Max Matches",
+          "type": "integer"
+        },
+        "min_gap": {
+          "default": -15.0,
+          "title": "Min Gap",
+          "type": "number"
+        },
+        "no_interactive": {
+          "default": false,
+          "title": "No Interactive",
+          "type": "boolean"
+        },
+        "open_sample": {
+          "default": "open.mp3",
+          "title": "Open Sample",
+          "type": "string"
+        },
+        "output_dir": {
+          "default": "downloads/remove",
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
+          "type": "boolean"
+        },
+        "quiz_size": {
+          "default": 10,
+          "title": "Quiz Size",
+          "type": "integer"
+        },
+        "snippets_dir": {
+          "default": "downloads/snippets",
+          "title": "Snippets Dir",
+          "type": "string"
+        },
+        "step_seconds": {
+          "default": 0.1,
+          "title": "Step Seconds",
+          "type": "number"
+        },
+        "workers": {
+          "default": 2,
+          "title": "Workers",
+          "type": "integer"
+        },
+        "yes": {
+          "default": false,
+          "title": "Yes",
+          "type": "boolean"
+        },
+        "z_threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Z Threshold"
+        }
+      },
+      "title": "RunSettingsModel",
+      "type": "object"
+    },
+    "SegmentModel": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "title": "End",
+          "type": "number"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "start": {
+          "title": "Start",
+          "type": "number"
+        }
+      },
       "required": [
         "source",
-        "open_candidates",
-        "open_class",
-        "close_candidates",
-        "close_class",
-        "cut"
+        "start",
+        "end",
+        "score"
       ],
+      "title": "SegmentModel",
+      "type": "object"
+    },
+    "TargetStateModel": {
+      "additionalProperties": false,
       "properties": {
-        "source": { "type": "string", "minLength": 1 },
-        "open_candidates": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/match" }
+        "negatives": {
+          "items": {
+            "$ref": "#/$defs/SegmentModel"
+          },
+          "title": "Negatives",
+          "type": "array"
         },
-        "open_class": { "$ref": "#/$defs/classification" },
-        "close_candidates": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/match" }
-        },
-        "close_class": { "$ref": "#/$defs/classification" },
-        "cut": { "type": "boolean" }
-      }
+        "positives": {
+          "items": {
+            "$ref": "#/$defs/SegmentModel"
+          },
+          "title": "Positives",
+          "type": "array"
+        }
+      },
+      "title": "TargetStateModel",
+      "type": "object"
     }
-  }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "episodes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/EpisodeStateModel"
+      },
+      "title": "Episodes",
+      "type": "object"
+    },
+    "settings": {
+      "$ref": "#/$defs/RunSettingsModel"
+    },
+    "targets": {
+      "$ref": "#/$defs/RemotePipelineTargetsModel"
+    }
+  },
+  "title": "RemotePipelineStateModel",
+  "type": "object"
 }

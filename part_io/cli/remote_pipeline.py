@@ -137,6 +137,27 @@ class EpisodeState:
         return self.open_class == _POS and self.close_class == _POS
 
 
+@dataclass
+class RunSettings:
+    z_threshold: float | None = None
+    step_seconds: float = 0.1
+    workers: int = 2
+    max_matches: int = 3
+    min_gap: float = -15.0
+    max_gap: float = 300.0
+    yes: bool = False
+    dry_run: bool = False
+    inclusive: bool = False
+    fade: float = 0.5
+    quiz_size: int = 10
+    no_interactive: bool = False
+    overwrite: bool = False
+    snippets_dir: str = "downloads/snippets"
+    open_sample: str = "open.mp3"
+    close_sample: str = "close.mp3"
+    output_dir: str = "downloads/remove"
+
+
 def _fmt_seg(s: Segment) -> str:
     return (
         f"{{source = {json.dumps(s.source)}, "
@@ -205,6 +226,28 @@ def _load_episode(raw: dict) -> EpisodeState:
             )
         ]
     return ep
+
+
+def _load_settings(raw: dict) -> RunSettings:
+    return RunSettings(
+        z_threshold=float(raw["z_threshold"]) if raw.get("z_threshold") is not None else None,
+        step_seconds=float(raw.get("step_seconds", 0.1)),
+        workers=int(raw.get("workers", 2)),
+        max_matches=int(raw.get("max_matches", 3)),
+        min_gap=float(raw.get("min_gap", -15.0)),
+        max_gap=float(raw.get("max_gap", 300.0)),
+        yes=bool(raw.get("yes", False)),
+        dry_run=bool(raw.get("dry_run", False)),
+        inclusive=bool(raw.get("inclusive", False)),
+        fade=float(raw.get("fade", 0.5)),
+        quiz_size=int(raw.get("quiz_size", 10)),
+        no_interactive=bool(raw.get("no_interactive", False)),
+        overwrite=bool(raw.get("overwrite", False)),
+        snippets_dir=str(raw.get("snippets_dir", "downloads/snippets")),
+        open_sample=str(raw.get("open_sample", "open.mp3")),
+        close_sample=str(raw.get("close_sample", "close.mp3")),
+        output_dir=str(raw.get("output_dir", "downloads/remove")),
+    )
 
 
 def _migrate_episode_keys(path: Path) -> None:
@@ -281,6 +324,7 @@ def _migrate_old_state(data: dict) -> "PipelineState":
 class PipelineState:
     open_target: TargetState = field(default_factory=TargetState)
     close_target: TargetState = field(default_factory=TargetState)
+    settings: RunSettings = field(default_factory=RunSettings)
     episodes: dict[str, EpisodeState] = field(default_factory=dict)
 
     def episode(self, stem: str) -> EpisodeState:
@@ -304,6 +348,7 @@ class PipelineState:
         state = cls(
             open_target=_load_target(data.get("targets", {}).get("open", {})),
             close_target=_load_target(data.get("targets", {}).get("close", {})),
+            settings=_load_settings(data.get("settings", {})),
         )
         for stem, ep_raw in episodes_raw.items():
             state.episodes[stem] = _load_episode(ep_raw)
@@ -321,14 +366,36 @@ class PipelineState:
             "# Remote episode pipeline state.\n",
             "# Edit freely — delete this file to start fresh.\n",
         ]
+        settings = self.settings
+        setting_lines = ["\n[settings]\n"]
+        if settings.z_threshold is not None:
+            setting_lines.append(f"z_threshold = {settings.z_threshold:.6g}\n")
+        setting_lines += [
+            f"step_seconds = {settings.step_seconds:.6g}\n",
+            f"workers = {settings.workers}\n",
+            f"max_matches = {settings.max_matches}\n",
+            f"min_gap = {settings.min_gap:.6g}\n",
+            f"max_gap = {settings.max_gap:.6g}\n",
+            f"yes = {str(settings.yes).lower()}\n",
+            f"dry_run = {str(settings.dry_run).lower()}\n",
+            f"inclusive = {str(settings.inclusive).lower()}\n",
+            f"fade = {settings.fade:.6g}\n",
+            f"quiz_size = {settings.quiz_size}\n",
+            f"no_interactive = {str(settings.no_interactive).lower()}\n",
+            f"overwrite = {str(settings.overwrite).lower()}\n",
+            f"snippets_dir = {json.dumps(settings.snippets_dir)}\n",
+            f"open_sample = {json.dumps(settings.open_sample)}\n",
+            f"close_sample = {json.dumps(settings.close_sample)}\n",
+            f"output_dir = {json.dumps(settings.output_dir)}\n",
+        ]
+        lines += setting_lines
         for kind, target in [("open", self.open_target), ("close", self.close_target)]:
             pos = ", ".join(_fmt_seg(s) for s in target.positives)
             neg = ", ".join(_fmt_seg(s) for s in target.negatives)
             lines += [f"\n[targets.{kind}]\n", f"positives = [{pos}]\n", f"negatives = [{neg}]\n"]
         for stem, ep in sorted(self.episodes.items()):
             lines.append(f'\n[episodes."{stem}"]\n')
-            if ep.source:
-                lines.append(f"source           = {json.dumps(ep.source)}\n")
+            lines.append(f"source           = {json.dumps(ep.source)}\n")
             oc = ", ".join(_fmt_match(m) for m in ep.open_candidates)
             cc = ", ".join(_fmt_match(m) for m in ep.close_candidates)
             lines += [
@@ -421,6 +488,60 @@ def _chunks(items: list, size: int):
 def _emit(message: str) -> None:
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
+
+
+def _resolve_opt(cli_value: Any, state_value: Any) -> Any:
+    return state_value if cli_value is None else cli_value
+
+
+def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) -> None:
+    s = state.settings
+    args.snippets_dir = Path(_resolve_opt(args.snippets_dir, s.snippets_dir))
+    args.open_sample = str(_resolve_opt(args.open_sample, s.open_sample))
+    args.close_sample = str(_resolve_opt(args.close_sample, s.close_sample))
+    args.z_threshold = _resolve_opt(args.z_threshold, s.z_threshold)
+    args.step_seconds = float(_resolve_opt(args.step_seconds, s.step_seconds))
+    args.workers = int(_resolve_opt(args.workers, s.workers))
+    args.max_matches = int(_resolve_opt(args.max_matches, s.max_matches))
+    args.no_interactive = bool(_resolve_opt(args.no_interactive, s.no_interactive))
+    args.overwrite = bool(_resolve_opt(args.overwrite, s.overwrite))
+
+    s.snippets_dir = str(args.snippets_dir)
+    s.open_sample = args.open_sample
+    s.close_sample = args.close_sample
+    s.z_threshold = args.z_threshold
+    s.step_seconds = args.step_seconds
+    s.workers = args.workers
+    s.max_matches = args.max_matches
+    s.no_interactive = args.no_interactive
+    s.overwrite = args.overwrite
+
+
+def _apply_sticky_cut_args(args: argparse.Namespace, state: PipelineState) -> None:
+    s = state.settings
+    args.output_dir = Path(_resolve_opt(args.output_dir, s.output_dir))
+    args.min_gap = float(_resolve_opt(args.min_gap, s.min_gap))
+    args.max_gap = float(_resolve_opt(args.max_gap, s.max_gap))
+    args.yes = bool(_resolve_opt(args.yes, s.yes))
+    args.dry_run = bool(_resolve_opt(args.dry_run, s.dry_run))
+    args.inclusive = bool(_resolve_opt(args.inclusive, s.inclusive))
+    args.fade = float(_resolve_opt(args.fade, s.fade))
+
+    s.output_dir = str(args.output_dir)
+    s.min_gap = args.min_gap
+    s.max_gap = args.max_gap
+    s.yes = args.yes
+    s.dry_run = args.dry_run
+    s.inclusive = args.inclusive
+    s.fade = args.fade
+
+
+def _apply_sticky_loop_args(args: argparse.Namespace, state: PipelineState) -> None:
+    _apply_sticky_review_args(args, state)
+    _apply_sticky_cut_args(args, state)
+    s = state.settings
+    args.quiz_size = int(_resolve_opt(args.quiz_size, s.quiz_size))
+    s.quiz_size = args.quiz_size
 
 
 # ---------------------------------------------------------------------------
@@ -912,13 +1033,17 @@ def _run_quiz(
         _emit(f"Episode: {active.stem}  [{active.kind}]  ({n_unc} uncertain remaining)")
         _emit("=" * 60)
 
-        result = _review_candidate(
-            state,
-            active,
-            open_sample=open_sample,
-            close_sample=close_sample,
-            history=history,
-        )
+        try:
+            result = _review_candidate(
+                state,
+                active,
+                open_sample=open_sample,
+                close_sample=close_sample,
+                history=history,
+            )
+        except KeyboardInterrupt:
+            _emit("\nInterrupted. Progress saved.")
+            break
 
         if result in ("approved", "rejected"):
             decisions += 1
@@ -1111,9 +1236,14 @@ def _cut_cuttable(
 
 def _cmd_review(args: argparse.Namespace) -> None:
     remote_dir: Path = args.remote_dir
+    state_path = remote_dir / "__state__.toml"
+
+    state = PipelineState.load(state_path)
+    _apply_sticky_review_args(args, state)
+    state.save(state_path)
+
     open_sample = args.snippets_dir / args.open_sample
     close_sample = args.snippets_dir / args.close_sample
-    state_path = remote_dir / "__state__.toml"
 
     for path, label in [
         (remote_dir, "Remote dir"),
@@ -1127,7 +1257,6 @@ def _cmd_review(args: argparse.Namespace) -> None:
     if not all_full:
         sys.exit(f"No full-length MP3s (>= 10 MB) found in {remote_dir}")
 
-    state = PipelineState.load(state_path)
     to_detect = [
         ep for ep in all_full if args.overwrite or not state.episode(ep.stem).is_detected()
     ]
@@ -1174,10 +1303,12 @@ def _cmd_review(args: argparse.Namespace) -> None:
 
 def _cmd_cut(args: argparse.Namespace) -> None:
     remote_dir: Path = args.remote_dir
-    output_dir: Path = args.output_dir
     state_path = remote_dir / "__state__.toml"
 
     state = PipelineState.load(state_path)
+    _apply_sticky_cut_args(args, state)
+    state.save(state_path)
+    output_dir: Path = args.output_dir
     n_cuttable = sum(1 for ep in state.episodes.values() if ep.is_cuttable() and not ep.cut)
     if not n_cuttable:
         print("No cuttable episodes in state.toml — need open and close both positive.")
@@ -1209,10 +1340,15 @@ def _cmd_cut(args: argparse.Namespace) -> None:
 def _cmd_loop(args: argparse.Namespace) -> None:
     """Detect one episode at a time, accumulate uncertain candidates, quiz, then cut."""
     remote_dir: Path = args.remote_dir
+    state_path = remote_dir / "__state__.toml"
+
+    state = PipelineState.load(state_path)
+    _apply_sticky_loop_args(args, state)
+    state.save(state_path)
+
     output_dir: Path = args.output_dir
     open_sample = args.snippets_dir / args.open_sample
     close_sample = args.snippets_dir / args.close_sample
-    state_path = remote_dir / "__state__.toml"
 
     for path, label in [
         (remote_dir, "Remote dir"),
@@ -1226,7 +1362,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     if not all_full:
         sys.exit(f"No full-length MP3s (>= 10 MB) found in {remote_dir}")
 
-    state = PipelineState.load(state_path)
     undetected = [
         ep for ep in all_full if args.overwrite or not state.episode(ep.stem).is_detected()
     ]
@@ -1312,23 +1447,56 @@ def _add_detect_args(p: argparse.ArgumentParser) -> None:
         metavar="N",
         help="Optional z-score filter: only keep windows > mean + N*std (default: off)",
     )
-    p.add_argument("--step-seconds", type=float, default=0.1)
-    p.add_argument("--workers", type=int, default=2, help="Parallel workers for detection")
-    p.add_argument("--max-matches", type=int, default=3, help="Top-N candidate positions to store")
+    p.add_argument("--step-seconds", type=float, default=None)
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel workers for detection",
+    )
+    p.add_argument(
+        "--max-matches",
+        type=int,
+        default=None,
+        help="Top-N candidate positions to store",
+    )
 
 
 def _add_cut_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--min-gap", type=float, default=-15.0, help="Min gap: open end -> close start")
     p.add_argument(
-        "--max-gap", type=float, default=300.0, help="Max gap in seconds (default 5 min)"
+        "--min-gap",
+        type=float,
+        default=None,
+        help="Min gap: open end -> close start",
     )
-    p.add_argument("--yes", action="store_true", help="Cut without confirmation prompt")
-    p.add_argument("--dry-run", action="store_true", help="Show cut plan without running ffmpeg")
-    p.add_argument("--inclusive", action="store_true", help="Cut jingle transitions too")
+    p.add_argument(
+        "--max-gap",
+        type=float,
+        default=None,
+        help="Max gap in seconds (default 5 min)",
+    )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        default=None,
+        help="Cut without confirmation prompt",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=None,
+        help="Show cut plan without running ffmpeg",
+    )
+    p.add_argument(
+        "--inclusive",
+        action="store_true",
+        default=None,
+        help="Cut jingle transitions too",
+    )
     p.add_argument(
         "--fade",
         type=float,
-        default=0.5,
+        default=None,
         metavar="SECONDS",
         help="Fade duration at cut points (default 0.5s, 0 to disable)",
     )
@@ -1348,18 +1516,20 @@ def _add_remote_dir_arg(p: argparse.ArgumentParser) -> None:
 def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("review", help="Detect matches and review them interactively")
     _add_remote_dir_arg(p)
-    p.add_argument("--snippets-dir", type=Path, default=Path("downloads/snippets"))
-    p.add_argument("--open-sample", default="open.mp3")
-    p.add_argument("--close-sample", default="close.mp3")
+    p.add_argument("--snippets-dir", type=Path, default=None)
+    p.add_argument("--open-sample", default=None)
+    p.add_argument("--close-sample", default=None)
     _add_detect_args(p)
-    p.add_argument("--overwrite", action="store_true")
-    p.add_argument("--no-interactive", action="store_true", help="Detect only, skip review")
+    p.add_argument("--overwrite", action="store_true", default=None)
+    p.add_argument(
+        "--no-interactive", action="store_true", default=None, help="Detect only, skip review"
+    )
 
 
 def _build_cut_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("cut", help="Cut ad segments using labels from __state__.toml")
     _add_remote_dir_arg(p)
-    p.add_argument("--output-dir", type=Path, default=Path("downloads/remove"))
+    p.add_argument("--output-dir", type=Path, default=None)
     _add_cut_args(p)
 
 
@@ -1369,20 +1539,30 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
         help="Detect one episode at a time, quiz uncertain candidates, then cut. Run repeatedly.",
     )
     _add_remote_dir_arg(p)
-    p.add_argument("--snippets-dir", type=Path, default=Path("downloads/snippets"))
-    p.add_argument("--open-sample", default="open.mp3")
-    p.add_argument("--close-sample", default="close.mp3")
-    p.add_argument("--output-dir", type=Path, default=Path("downloads/remove"))
+    p.add_argument("--snippets-dir", type=Path, default=None)
+    p.add_argument("--open-sample", default=None)
+    p.add_argument("--close-sample", default=None)
+    p.add_argument("--output-dir", type=Path, default=None)
     _add_detect_args(p)
     _add_cut_args(p)
     p.add_argument(
         "--quiz-size",
         type=int,
-        default=10,
+        default=None,
         help="Target number of uncertain candidates to collect before quizzing (default: 10)",
     )
-    p.add_argument("--no-interactive", action="store_true", help="Skip interactive review")
-    p.add_argument("--overwrite", action="store_true", help="Re-detect and re-cut episodes")
+    p.add_argument(
+        "--no-interactive",
+        action="store_true",
+        default=None,
+        help="Skip interactive review",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=None,
+        help="Re-detect and re-cut episodes",
+    )
 
 
 def main() -> None:

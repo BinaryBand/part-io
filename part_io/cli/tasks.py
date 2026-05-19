@@ -54,6 +54,7 @@ def _print_help() -> None:
     print("  remote-review       Generate open/close review bundles from downloads/remote/")
     print("  remote-cut          Cut ad segments from labeled remote episodes")
     print("  remote-loop         Generate → review → cut one episode at a time (streamlined)")
+    print("  compile         Generate Pydantic model schemas into part_io/models/schemas")
     print("  generate-tasks  Regenerate config/generated.mk")
     print("  check-tasks     Verify config/generated.mk is current")
     print("  lint            Run declared lint tasks")
@@ -179,6 +180,7 @@ def _build_parser() -> argparse.ArgumentParser:
     lint.add_argument("--profile", help="Registry profile to run when targets are not specified")
     lint.add_argument("--report-json", type=Path, help="Write lint execution report to JSON file")
     lint.add_argument("targets", nargs="*")
+    sub.add_parser("compile")
     sub.add_parser("clean")
     return parser
 
@@ -200,6 +202,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace, extra: 
     if args.command in ("remote-review", "remote-cut", "remote-loop"):
         sub = args.command.split("-", 1)[1]
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", sub, *extra]))
+    if args.command == "compile":
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.compile", *extra]))
     if args.command == "generate-tasks":
         sys.exit(_run_generate_tasks(args.profile))
     if args.command == "check-tasks":
