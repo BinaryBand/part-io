@@ -860,13 +860,12 @@ class TestCmdCut:
         ep.source = str(tmp_path / "remote" / "ep001.mp3")
         ep.open_class = _POS
         ep.close_class = _POS
-        state_path = tmp_path / "review" / "state.toml"
+        state_path = tmp_path / "remote" / "__state__.toml"
         state.save(state_path)
         return state_path
 
     def _make_args(self, tmp_path):
         return argparse.Namespace(
-            review_root=tmp_path / "review",
             remote_dir=tmp_path / "remote",
             output_dir=tmp_path / "out",
             min_gap=-15.0,
@@ -878,7 +877,7 @@ class TestCmdCut:
         )
 
     def test_no_cuttable_episodes_returns_early(self, tmp_path, capsys):
-        PipelineState().save(tmp_path / "review" / "state.toml")
+        PipelineState().save(tmp_path / "remote" / "__state__.toml")
         _cmd_cut(self._make_args(tmp_path))
         assert "No cuttable" in capsys.readouterr().out
 
@@ -892,16 +891,17 @@ class TestCmdCut:
     def test_cut_result_marks_episode_as_cut(self, tmp_path):
         self._save_cuttable_state(tmp_path)
         source = tmp_path / "remote" / "ep001.mp3"
-        source.parent.mkdir(parents=True)
+        source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(b"audio")
         with patch("part_io.cli.remote_pipeline._pair_and_cut", return_value="cut"):
             _cmd_cut(self._make_args(tmp_path))
-        assert PipelineState.load(tmp_path / "review" / "state.toml").episodes["ep001"].cut is True
+        state_path = tmp_path / "remote" / "__state__.toml"
+        assert PipelineState.load(state_path).episodes["ep001"].cut is True
 
     def test_failed_result_exits_1(self, tmp_path):
         self._save_cuttable_state(tmp_path)
         source = tmp_path / "remote" / "ep001.mp3"
-        source.parent.mkdir(parents=True)
+        source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(b"audio")
         with patch("part_io.cli.remote_pipeline._pair_and_cut", return_value="failed"):
             with pytest.raises(SystemExit) as exc:
@@ -911,11 +911,12 @@ class TestCmdCut:
     def test_skipped_not_marked_as_cut(self, tmp_path):
         self._save_cuttable_state(tmp_path)
         source = tmp_path / "remote" / "ep001.mp3"
-        source.parent.mkdir(parents=True)
+        source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(b"audio")
         with patch("part_io.cli.remote_pipeline._pair_and_cut", return_value="skipped"):
             _cmd_cut(self._make_args(tmp_path))
-        assert PipelineState.load(tmp_path / "review" / "state.toml").episodes["ep001"].cut is False
+        state_path = tmp_path / "remote" / "__state__.toml"
+        assert PipelineState.load(state_path).episodes["ep001"].cut is False
 
 
 # ---------------------------------------------------------------------------

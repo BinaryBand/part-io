@@ -1,150 +1,193 @@
-# part-io
+# PartIO - Formal Specifications
 
-A toolkit for removing ads from podcast episodes. It detects ad-break jingles (open/close snippets) inside source audio, lets you confirm matches interactively, and cuts the ad segments out with ffmpeg.
+## 1\. Target Types
 
-## Requirements
+Four target types are defined for podcast audio:
 
-- Python 3.11+
-- Poetry
-- ffmpeg / ffplay
+| Type | Description |
+| --- | --- |
+| `open` | Opening jingle of an ad break |
+| `close` | Closing jingle of an ad break |
+| `intro` | Opening of the podcast episode itself |
+| `outro` | Closing of the podcast episode itself |
 
-```bash
-poetry install --with dev
-```
+* * *
 
-## Remote pipeline (recommended)
+## 2\. Setup
 
-The remote pipeline works directly against a mounted remote directory (e.g. an rclone pCloud mount at `downloads/remote/`). All state — match candidates, labels, adaptive thresholds, cut status — lives in a single human-editable file: `downloads/review/state.toml`. No clip files are written to disk.
-
-### Streamlined: one episode at a time
-
-Detect matches, review them interactively, cut the episode, then move on:
+Point the tool at a directory $\Lambda$ whose root contains episode audio files:
 
 ```bash
-poetry run part-io-tasks remote-loop
+partio remote-loop <path-to-Λ> [--open-seed:Path] [--close-seed:Path]
 ```
 
-During review, for each match you hear a few seconds of the source audio at the detected position:
+A `__state__.toml` file is written under $\Lambda$ to persist all classification state across runs. Deleting it starts fresh.
+
+* * *
+
+## 3\. Types
+
+```python
+class State:
+    targets: list[AudioTarget]
+    output:  Path
+    max_k: int = 5   # max condidates per AudioTarget
+    max_gap: float = 60 * 5  # max seconds between open and close
+    moe_factor: float = 1.5  # 
+    threshold: float = 0.8  #
+    is_inclusive: bool = False # cut transitions too?
+    fade_dur: float = 0
+    
+class AudioTarget:
+    type: Literal['intro', 'outro', 'open', 'close']
+    positives: list[Segment]  # confirmed examples
+    negatives: list[Segment]  # confirmed non-examples
+
+class Segment:
+    source: str # path relative to Λ
+    start: float # seconds
+    end: float  # seconds
+```
+
+> `Segment.source` is always relative to $\Lambda$ so the state file is portable across machines.
+
+* * *
+
+## 4\. Similarity Score
+
+Let $B$ be the set of audio files at the root of $\Lambda$:
+
+$$
+B = \{\, \lambda \in \Lambda \mid \texttt{is\_audio}(\lambda) \,\}
+$$
+
+For a given `AudioTarget` $t$, the **per-file similarity score** $\sigma(b, t)$ is the maximum window score found by sliding the target's reference fingerprint across the episode:
+
+$$
+\sigma(b, t) = \max_{w \,\in\, \texttt{windows}(b)} \texttt{cos\_sim}(w,\, t)
+$$
+
+The fingerprint is a 32-band log-energy spectrum with first-order temporal deltas (64-dimensional, L2-normalised). Each window is scored by mean frame-wise cosine similarity.
+
+When confirmed positive segments $P_t$ are available, the reference fingerprint for $t$ is the **centroid** of their fingerprints (mean across confirmed examples, re-normalised). Before any positives are confirmed, a seed snippet supplied at startup is used as the initial reference.
+
+* * *
+
+## 5\. Threshold Derivation
+
+Let $\text{scores}(S)$ denote the set of $\sigma$ values for all segments in $S$, and let:
+
+$$
+\text{moe}(S) = k \cdot \text{std}\bigl(\text{scores}(S)\bigr)
+$$
+
+where $k = 1.5$ by default (tunable via `--moe-factor`). $\text{moe}(S) = 0$ when $|S| < 2$.
+
+The positive and negative thresholds are:
+
+$$
+\theta^+(t) = \min_{s \,\in\, P_t} \sigma(s, t) - \text{moe}(P_t)
+$$
+
+$$
+\theta^-(t) = \max_{s \,\in\, N_t} \sigma(s, t) + \text{moe}(N_t)
+$$
+
+Before $P_t$ is non-empty, $\theta^+(t)$ defaults to the configured `--threshold` (default `0.8`). Before $N_t$ is non-empty, $\theta^-(t) = -\infty$ (no lower bound).
+
+* * *
+
+## 6\. Classification
+
+The three classification regions for target $t$:
+
+$$
+B'(t) = \{\, b \in B \mid \sigma(b, t) \geq \theta^+(t) \,\}
+$$
+
+$$
+\lnot B'(t) = \{\, b \in B \mid \sigma(b, t) \leq \theta^-(t) \,\}
+$$
+
+$$
+\Diamond B'(t) = B \setminus \bigl(B'(t) \cup \lnot B'(t)\bigr)
+$$
+
+| Set | Meaning |
+| --- | --- |
+| $B'(t)$ | Classified positives — episode contains target |
+| $\lnot B'(t)$ | Classified negatives — episode does not contain target |
+| $\Diamond B'(t)$ | Uncertain — surfaced for human review |
+
+> **Overlap resolution:** if $\theta^-(t) \geq \theta^+(t)$ (the bands cross), positive wins: $\lnot B'(t) \mathrel{{-}{=}} B'(t)$ after classification.
+
+Classified episodes are **not re-presented** to the user on subsequent runs unless `--overwrite` is passed.
+
+* * *
+
+## 7\. Human-in-the-Loop Resolution
+
+Files in $\Diamond B'(t)$ are presented to the user in descending score order. For each file the tool plays the best-matching window (via `ffplay -ss -t`, no disk write) and prompts:
 
 | Key | Action |
-| --- | ------ |
-| `a` | Approve (true positive — will be used for cutting) |
-| `r` | Reject (false positive) |
-| `p` | Replay the current match |
+| --- | --- |
+| `a` | Approve — adds segment to $P_t$; folds file into $B'(t)$ |
+| `r` | Reject — adds segment to $N_t$; folds file into $\lnot B'(t)$ |
+| `p` | Replay current segment |
 | `c` | Play the reference snippet for comparison |
-| `s` | Skip (leave unlabeled) |
+| `s` | Skip — leaves file in $\Diamond B'(t)$ for the next run |
 | `u` | Undo the previous decision |
 | `q` | Quit and save progress |
 
-Progress is saved after every episode. Restart at any time — already-cut episodes are skipped automatically.
+After each decision the thresholds $\theta^\pm(t)$ are recomputed and $\Diamond B'(t)$ is re-evaluated. Files that fall outside the uncertain region after recomputation are removed from the review queue automatically.
 
-### Batch: detect many, then review
+The loop repeats until $\Diamond B'(t) = \emptyset$ or the user exits.
 
-Generate match candidates for a batch of episodes before reviewing:
+* * *
 
-```bash
-# Detect matches for 10 episodes at a time (no review yet)
-poetry run part-io-tasks remote-review --batch-size 10 --no-interactive
+## 8\. Output
 
-# Review previously detected matches
-poetry run part-io-tasks remote-review
+For episodes in $B'(\text{open}) \cap B'(\text{close})$, **all** valid open→close pairs are identified greedily and the cleaned episode is written to `output/`.
 
-# Cut all labeled episodes
-poetry run part-io-tasks remote-cut
-```
+Episodes in $B'(\text{open})$ but not $B'(\text{close})$, or vice versa, are logged as unpaired and skipped.
 
-### Key options
+### 8.1 Pairing
 
-| Flag | Default | Description |
-| ---- | ------- | ----------- |
-| `--threshold` | `0.8` | Minimum match score. Adapts upward automatically as you approve clips. |
-| `--z-threshold` | `3.0` | Z-score cutoff — keeps only matches that are statistical outliers against the full episode distribution. |
-| `--max-matches` | `10` | Maximum candidates to store per snippet type per episode. |
-| `--min-gap` | `-15.0` | Minimum seconds between open-end and close-start (negative allows back-to-back jingles). |
-| `--max-gap` | `600.0` | Maximum seconds between open-end and close-start. |
-| `--yes` | flag | Skip cut confirmation prompts. |
-| `--dry-run` | flag | Show planned cuts without running ffmpeg. |
-| `--overwrite` | flag | Re-detect, re-review, and re-cut already-processed episodes. |
+Let $O_b$ and $C_b$ denote the candidate positions (top-$k$ matches) for the open and close targets in episode $b$. The greedy pairing algorithm processes opens in ascending time order: for each open candidate $o \in O_b$, it selects the earliest unused close candidate $c \in C_b$ satisfying:
 
-### State file
+$$
+\text{min\_gap} \leq c.\text{start} - o.\text{end} \leq \text{max\_gap}
+$$
 
-`downloads/review/state.toml` is the single source of truth. It is safe to edit by hand:
+This yields an ordered sequence of pairs $\{(o_i, c_i)\}_{i=1}^{n}$ representing all $n$ ad breaks found in the episode.
 
-```toml
-# Remote episode pipeline state.
-# Edit freely — delete this file to start fresh.
+### 8.2 Cut Spans
 
-[thresholds]
-open  = 0.9503
-close = 0.8378
+Depending on `is_inclusive`, the cut region for each ad break $(o_i, c_i)$ is:
 
-[episodes.6b173fd3-0c42-45d1-806a-88ab69b861da]
-source = "downloads/remote/6b173fd3-0c42-45d1-806a-88ab69b861da.mp3"
-open_matches   = [{index = 1, score = 0.9704, start = 1190.900, end = 1200.900}]
-close_matches  = [{index = 1, score = 0.8369, start = 4396.608, end = 4406.608}]
-open_approved  = [1]
-open_rejected  = []
-close_approved = [1]
-close_rejected = []
-cut = false
-```
+$$
+\text{cut}_i = \begin{cases}
+[o_i.\text{end},\; c_i.\text{start}] & \text{if } \lnot\,\text{is\_inclusive} \quad \text{(keep jingles)} \\
+[o_i.\text{start},\; c_i.\text{end}] & \text{if } \text{is\_inclusive} \quad \text{(remove jingles)}
+\end{cases}
+$$
 
-Delete the file to treat the next run as a first-time run.
+The keep-spans are the complement of all cut regions over the episode duration $\tau_b$:
 
----
+$$
+\text{keep}(b) = [0, \tau_b] \setminus \bigcup_{i=1}^{n} \text{cut}_i
+$$
 
-## Local pipeline
+### 8.3 Fade
 
-For working with files already on disk (e.g. `downloads/media/`).
+When `fade_dur` $= \delta > 0$, each keep-span except the first gains a fade-in of duration $\delta$ at its start, and each keep-span except the last gains a fade-out of duration $\delta$ at its end, smoothing each seam.
 
-### Detect + pair + cut a single episode
+### 8.4 Reconstruction
 
-```bash
-# Pair open/close matches and write ad_segments.json
-poetry run part-io-tasks audio-ad-detect \
-  --episode ep_ce79a6d1 --use-labels
+All keep-spans are concatenated via a single `ffmpeg filter_complex` call (no temporary files):
 
-# Dry run
-poetry run part-io-tasks audio-ad-remove \
-  --source downloads/media/ep_ce79a6d1.mp3 \
-  --segments downloads/review/ep_ce79a6d1/ad_segments.json \
-  --dry-run
+$$
+\texttt{output}(b) = \bigoplus_{[s_i,\, e_i] \,\in\, \text{keep}(b)} \texttt{atrim}(b,\, s_i,\, e_i)
+$$
 
-# Cut
-poetry run part-io-tasks audio-ad-remove \
-  --source downloads/media/ep_ce79a6d1.mp3 \
-  --segments downloads/review/ep_ce79a6d1/ad_segments.json
-```
-
-### Batch review bundle generation
-
-Generates clip files and manifests under `downloads/review/` for manual inspection:
-
-```bash
-poetry run part-io-tasks audio-review-batch \
-  --threshold 0.8 --z-threshold 3.0 \
-  --max-clips 10 --refine --workers 2
-```
-
----
-
-## How it works
-
-`downloads/snippets/open.mp3` is the jingle that plays at the start of an ad break; `close.mp3` plays at the end. The matcher builds a 32-band log-energy spectral fingerprint for both the snippet and the source, then slides the snippet fingerprint across the source and scores each window by mean cosine similarity. A z-score filter keeps only windows that score as statistical outliers against the full distribution — separating genuine matches (~99% similarity) from background noise (~95%).
-
-Detected opens and closes are paired greedily: each open is matched with the nearest following close within a configurable time window. The paired spans are cut from the source with a single `ffmpeg` `atrim`+`concat` filter graph — no intermediate files.
-
----
-
-## Development
-
-```bash
-poetry run part-io-tasks test          # run tests
-poetry run part-io-tasks lint          # run declared lint tasks
-poetry run part-io-tasks generate-tasks  # regenerate config/generated.mk
-poetry run part-io-tasks clean         # remove caches and build artifacts
-```
-
-## License
-
-MIT. See `LICENSE`.
+where $\oplus$ denotes time-domain concatenation.

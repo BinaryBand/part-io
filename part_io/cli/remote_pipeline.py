@@ -880,10 +880,9 @@ def _cut_cuttable(
 
 def _cmd_review(args: argparse.Namespace) -> None:
     remote_dir: Path = args.remote_dir
-    review_root: Path = args.review_root
     open_sample = args.snippets_dir / args.open_sample
     close_sample = args.snippets_dir / args.close_sample
-    state_path = review_root / "state.toml"
+    state_path = remote_dir / "__state__.toml"
 
     for path, label in [
         (remote_dir, "Remote dir"),
@@ -945,10 +944,9 @@ def _cmd_review(args: argparse.Namespace) -> None:
 
 
 def _cmd_cut(args: argparse.Namespace) -> None:
-    review_root: Path = args.review_root
     remote_dir: Path = args.remote_dir
     output_dir: Path = args.output_dir
-    state_path = review_root / "state.toml"
+    state_path = remote_dir / "__state__.toml"
 
     state = PipelineState.load(state_path)
     n_cuttable = sum(1 for ep in state.episodes.values() if ep.is_cuttable() and not ep.cut)
@@ -982,11 +980,10 @@ def _cmd_cut(args: argparse.Namespace) -> None:
 def _cmd_loop(args: argparse.Namespace) -> None:
     """Detect a batch → review up to quiz_size → cut cuttable. Run repeatedly to process all."""
     remote_dir: Path = args.remote_dir
-    review_root: Path = args.review_root
     output_dir: Path = args.output_dir
     open_sample = args.snippets_dir / args.open_sample
     close_sample = args.snippets_dir / args.close_sample
-    state_path = review_root / "state.toml"
+    state_path = remote_dir / "__state__.toml"
 
     for path, label in [
         (remote_dir, "Remote dir"),
@@ -1093,16 +1090,14 @@ def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--snippets-dir", type=Path, default=Path("downloads/snippets"))
     p.add_argument("--open-sample", default="open.mp3")
     p.add_argument("--close-sample", default="close.mp3")
-    p.add_argument("--review-root", type=Path, default=Path("downloads/review"))
     _add_detect_args(p)
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--no-interactive", action="store_true", help="Detect only, skip review")
 
 
 def _build_cut_parser(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser("cut", help="Cut ad segments using labels from state.toml")
+    p = sub.add_parser("cut", help="Cut ad segments using labels from __state__.toml")
     p.add_argument("--remote-dir", type=Path, default=Path("downloads/remote"))
-    p.add_argument("--review-root", type=Path, default=Path("downloads/review"))
     p.add_argument("--output-dir", type=Path, default=Path("downloads/remove"))
     _add_cut_args(p)
 
@@ -1113,7 +1108,6 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--snippets-dir", type=Path, default=Path("downloads/snippets"))
     p.add_argument("--open-sample", default="open.mp3")
     p.add_argument("--close-sample", default="close.mp3")
-    p.add_argument("--review-root", type=Path, default=Path("downloads/review"))
     p.add_argument("--output-dir", type=Path, default=Path("downloads/remove"))
     _add_detect_args(p)
     _add_cut_args(p)
