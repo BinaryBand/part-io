@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from part_io.adapters.audio.matcher import find_audio_sample_matches
+from part_io.services.audio_detection import detect_top_matches, matches_to_cli_rows
 
 
 def main() -> None:
@@ -31,28 +32,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    matches = find_audio_sample_matches(
+    matches = detect_top_matches(
+        detector=find_audio_sample_matches,
         source_path=args.source,
         sample_path=args.sample,
         score_threshold=args.threshold,
         z_threshold=args.z_threshold,
         step_seconds=args.step_seconds,
+        max_matches=args.max_matches,
     )
 
-    # Sort by score descending, cap at max-matches
-    matches = sorted(matches, key=lambda m: m.score, reverse=True)
-    if args.max_matches > 0:
-        matches = matches[: args.max_matches]
-
-    result = [
-        {
-            "index": i,
-            "score": round(float(m.score), 6),
-            "start": round(float(m.start_seconds), 3),
-            "end": round(float(m.end_seconds), 3),
-        }
-        for i, m in enumerate(matches, 1)
-    ]
+    result = matches_to_cli_rows(matches)
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")
     sys.stdout.flush()

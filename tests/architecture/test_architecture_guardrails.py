@@ -17,7 +17,6 @@ ENTRYPOINT_PATHS = {
     ROOT / "part_io" / "cli" / "audio_ad_detect.py",
     ROOT / "part_io" / "cli" / "audio_ad_remove.py",
     ROOT / "part_io" / "cli" / "download_unmatched.py",
-    ROOT / "part_io" / "cli" / "generate_rss.py",
     ROOT / "part_io" / "cli" / "remote_pipeline.py",
     ROOT / "part_io" / "cli" / "remote_promote.py",
 }

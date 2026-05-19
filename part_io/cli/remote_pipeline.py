@@ -20,13 +20,12 @@ import os
 import re
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from part_io.adapters.audio.ad_segments import pair_ad_segments
-from part_io.adapters.audio.matcher import AudioMatch
+from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 from part_io.adapters.process.runner import run_resolved
 from part_io.cli.audio_ad_remove import (
     _build_filter_complex,
@@ -34,6 +33,7 @@ from part_io.cli.audio_ad_remove import (
     _spans_from_cuts,
     _validate_segments,
 )
+from part_io.services.audio_detection import DetectionBatchRequest, run_detection_batch
 from part_io.utils.exec import launch_resolved
 
 if TYPE_CHECKING:  # pragma: no cover - type-only import
@@ -623,50 +623,8 @@ def _apply_sticky_loop_args(args: argparse.Namespace, state: PipelineState) -> N
 
 
 # ---------------------------------------------------------------------------
-# Detection — runs audio_detect as subprocess, returns top-N matches
+# Detection helpers
 # ---------------------------------------------------------------------------
-
-
-def _detect_matches(
-    source: Path,
-    sample: Path,
-    *,
-    floor: float = 0.0,
-    z_threshold: float | None,
-    step_seconds: float,
-    max_matches: int,
-) -> list[_Match]:
-    """Run audio_detect subprocess; return up to max_matches top-scoring matches."""
-    command = [
-        sys.executable,
-        "-m",
-        "part_io.cli.audio_detect",
-        str(source),
-        str(sample),
-        "--threshold",
-        str(floor),
-        "--step-seconds",
-        str(step_seconds),
-        "--max-matches",
-        str(max_matches),
-    ]
-    if z_threshold is not None:
-        command.extend(["--z-threshold", str(z_threshold)])
-    result = run_resolved(command, capture_output=True)
-    if result.returncode != 0:
-        if result.stderr:
-            sys.stderr.buffer.write(result.stderr)
-            sys.stderr.flush()
-        return []
-    try:
-        data = json.loads(result.stdout)
-        return [
-            _Match(score=float(m["score"]), start=float(m["start"]), end=float(m["end"]))
-            for m in data
-        ]
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        _emit(f"  WARNING: failed to parse detect output: {exc}")
-        return []
 
 
 def _detect_batch(
@@ -693,43 +651,51 @@ def _detect_batch(
         _emit(f"  Floors from negatives: open={open_floor:.4f}  close={close_floor:.4f}")
 
     ep_by_stem = {ep.stem: ep for ep in episodes}
-    jobs = [(ep, open_sample, "open", open_floor) for ep in episodes] + [
-        (ep, close_sample, "close", close_floor) for ep in episodes
-    ]
-    if intro_sample is not None and intro_sample.exists():
-        jobs += [(ep, intro_sample, "intro", 0.0) for ep in episodes]
+    jobs, results = run_detection_batch(
+        DetectionBatchRequest(
+            episodes=episodes,
+            open_sample=open_sample,
+            close_sample=close_sample,
+            intro_sample=intro_sample,
+            open_floor=open_floor,
+            close_floor=close_floor,
+        ),
+        detector=find_audio_sample_matches,
+        z_threshold=z_threshold,
+        step_seconds=step_seconds,
+        max_matches=max_matches,
+        workers=workers,
+    )
 
-    done = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(
-                _detect_matches,
-                ep,
-                sample,
-                floor=floor,
-                z_threshold=z_threshold,
-                step_seconds=step_seconds,
-                max_matches=max_matches,
-            ): (ep.stem, kind)
-            for ep, sample, kind, floor in jobs
-        }
-        for future in as_completed(futures):
-            done += 1
-            stem, kind = futures[future]
-            matches = future.result()
-            ep_state = state.episode(stem)
-            ep_state.source = str(ep_by_stem[stem])
-            score_str = f"{matches[0].score:.4f}" if matches else "none"
-            if kind == "open":
-                ep_state.open_candidates = matches
-                ep_state.open_class = _UNC if matches else _UND
-            elif kind == "close":
-                ep_state.close_candidates = matches
-                ep_state.close_class = _UNC if matches else _UND
-            else:  # intro
-                ep_state.intro_candidates = matches
-                ep_state.intro_class = _UNC if matches else _UND
-            _emit(f"  [{done}/{len(jobs)}] {kind:5}  {stem}  ({score_str})")
+    for done, result in enumerate(results, start=1):
+        stem = result.stem
+        kind = result.kind
+        if result.error:
+            _emit(
+                "  WARNING: detection failed for "
+                f"{result.source_path.name} ({result.sample_path.name}): {result.error}"
+            )
+        matches = [
+            _Match(
+                score=float(match.score),
+                start=float(match.start_seconds),
+                end=float(match.end_seconds),
+            )
+            for match in result.matches
+        ]
+        ep_state = state.episode(stem)
+        ep_state.source = str(ep_by_stem[stem])
+        score_str = f"{matches[0].score:.4f}" if matches else "none"
+        if kind == "open":
+            ep_state.open_candidates = matches
+            ep_state.open_class = _UNC if matches else _UND
+        elif kind == "close":
+            ep_state.close_candidates = matches
+            ep_state.close_class = _UNC if matches else _UND
+        else:  # intro
+            ep_state.intro_candidates = matches
+            ep_state.intro_class = _UNC if matches else _UND
+        _emit(f"  [{done}/{len(jobs)}] {kind:5}  {stem}  ({score_str})")
 
 
 # ---------------------------------------------------------------------------
