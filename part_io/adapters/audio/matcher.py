@@ -167,6 +167,29 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
     return profile
 
 
+def _cross_correlation_search(reference: np.ndarray, source_profile: np.ndarray, hop: int):
+    n = source_profile.shape[0]
+    m = reference.shape[0]
+
+    fft_size = int(2 ** np.ceil(np.log2(n + m)))
+    src_fft = np.fft.rfft(source_profile, n=fft_size, axis=0)
+    ref_fft = np.fft.rfft(reference, n=fft_size, axis=0)
+    corr_all = np.fft.irfft((np.conj(ref_fft) * src_fft).sum(axis=1), n=fft_size)
+    scores = corr_all[: n - m + 1][::hop] / m
+    return scores
+
+
+def _windowed_search(reference: np.ndarray, source_profile: np.ndarray, hop: int):
+    windowed_profiles = np.lib.stride_tricks.sliding_window_view(
+        source_profile,
+        window_shape=reference.shape[0],
+        axis=0,
+    )
+    windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
+    scores = np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
+    return scores
+
+
 def _build_match_candidates(
     *,
     reference: np.ndarray,
@@ -178,13 +201,7 @@ def _build_match_candidates(
     frame_offset_seconds: float = 0.0,
     z_threshold: float | None = None,
 ) -> list[AudioMatch]:
-    windowed_profiles = np.lib.stride_tricks.sliding_window_view(
-        source_profile,
-        window_shape=reference.shape[0],
-        axis=0,
-    )
-    windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
-    scores = np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
+    scores = _cross_correlation_search(reference, source_profile, hop)
 
     effective_threshold = score_threshold
     if z_threshold is not None and scores.size > 1:
