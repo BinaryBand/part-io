@@ -84,14 +84,12 @@ def test_run_detection_batch_jobs_collects_results_and_errors(monkeypatch, tmp_p
             source_path=source,
             sample_path=sample_ok,
             kind="open",
-            floor=0.0,
         ),
         audio_detection.DetectionBatchJob(
             stem="ep1",
             source_path=source,
             sample_path=sample_bad,
             kind="close",
-            floor=0.0,
         ),
     ]
 
@@ -132,8 +130,6 @@ def test_build_detection_batch_jobs_includes_intro_when_present(tmp_path: Path) 
         close_sample=close_sample,
         intro_sample=intro_sample,
         outro_sample=None,
-        open_floor=0.2,
-        close_floor=0.1,
     )
 
     jobs = audio_detection.build_detection_batch_jobs(request)
@@ -158,8 +154,6 @@ def test_build_detection_batch_jobs_includes_optional_outro_when_present(tmp_pat
         close_sample=close_sample,
         intro_sample=None,
         outro_sample=outro_sample,
-        open_floor=0.2,
-        close_floor=0.1,
     )
 
     jobs = audio_detection.build_detection_batch_jobs(request)
@@ -197,8 +191,6 @@ def test_run_detection_batch_returns_jobs_and_results(monkeypatch, tmp_path: Pat
         close_sample=close_sample,
         intro_sample=None,
         outro_sample=None,
-        open_floor=0.2,
-        close_floor=0.1,
     )
 
     jobs, results = audio_detection.run_detection_batch(

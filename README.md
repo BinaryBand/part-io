@@ -25,12 +25,9 @@ A `__state__.toml` file is written under $\Lambda$ to persist all classification
 
 ### Safe Override Workflow (Staging -> Promote)
 
-To avoid writing directly into `downloads/remote` (especially when it is an Rclone mount),
-run cuts into a staging directory first, then promote them safely.
+To avoid writing directly into `downloads/remote` (especially when it is an Rclone mount), run cuts into a staging directory first, then promote them safely.
 
-**IMPORTANT**: Never use `--output-dir downloads/remote` (or the input directory).
-ffmpeg cannot read and write the same file, so this will fail. Always cut to a separate
-staging directory, then use `remote-promote` to safely replace the originals.
+**IMPORTANT**: Never use `--output-dir downloads/remote` (or the input directory). ffmpeg cannot read and write the same file, so this will fail. Always cut to a separate staging directory, then use `remote-promote` to safely replace the originals.
 
 1. Stage cleaned files locally:
 
@@ -50,9 +47,7 @@ poetry run part-io-tasks remote-promote downloads/remove downloads/remote --dry-
 poetry run part-io-tasks remote-promote downloads/remove downloads/remote
 ```
 
-This promotion step writes each replacement to a temp file in the target directory,
-optionally moves the original to a timestamped backup directory, then atomically replaces
-the target file.
+This promotion step writes each replacement to a temp file in the target directory, optionally moves the original to a timestamped backup directory, then atomically replaces the target file.
 
 * * *
 

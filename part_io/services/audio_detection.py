@@ -46,7 +46,6 @@ class DetectionBatchJob:
     source_path: Path
     sample_path: Path
     kind: DetectionKind
-    floor: float
 
 
 @dataclass(frozen=True)
@@ -70,8 +69,6 @@ class DetectionBatchRequest:
     close_sample: Path
     intro_sample: Path | None
     outro_sample: Path | None
-    open_floor: float
-    close_floor: float
 
 
 def filter_matches_by_position(
@@ -163,7 +160,7 @@ def run_detection_batch_jobs(
                 detector=detector,
                 source_path=job.source_path,
                 sample_path=job.sample_path,
-                score_threshold=job.floor,
+                score_threshold=0.0,
                 z_threshold=z_threshold,
                 step_seconds=step_seconds,
                 max_matches=max_matches,
@@ -206,7 +203,6 @@ def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[Detection
             source_path=episode,
             sample_path=request.open_sample,
             kind="open",
-            floor=request.open_floor,
         )
         for episode in request.episodes
     ] + [
@@ -215,7 +211,6 @@ def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[Detection
             source_path=episode,
             sample_path=request.close_sample,
             kind="close",
-            floor=request.close_floor,
         )
         for episode in request.episodes
     ]
@@ -227,7 +222,6 @@ def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[Detection
                 source_path=episode,
                 sample_path=request.intro_sample,
                 kind="intro",
-                floor=0.0,
             )
             for episode in request.episodes
         ]
@@ -239,7 +233,6 @@ def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[Detection
                 source_path=episode,
                 sample_path=request.outro_sample,
                 kind="outro",
-                floor=0.0,
             )
             for episode in request.episodes
         ]

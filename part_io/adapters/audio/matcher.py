@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from part_io.adapters.process.runner import run_resolved
+from part_io.utils.timing import Timer
 
 _ANALYSIS_RATE = 16000
 _FRAME_SIZE = 2048
@@ -35,7 +36,8 @@ class AudioMatch:
 
 def _run_pcm_decode(command: list[str]) -> list[int]:
     """Execute an ffmpeg PCM decode *command* and return signed 16-bit samples."""
-    result = run_resolved(command, capture_output=True)
+    with Timer("matcher._run_pcm_decode"):
+        result = run_resolved(command, capture_output=True)
     if result.returncode != 0:
         return []
     raw = getattr(result, "stdout", b"")
@@ -49,23 +51,24 @@ def _run_pcm_decode(command: list[str]) -> list[int]:
 @cache
 def _decode_pcm_mono_16k(source: Path) -> list[int]:
     """Decode *source* to signed 16-bit PCM samples at a low analysis rate."""
-    samples = _run_pcm_decode(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(source),
-            "-ac",
-            "1",
-            "-ar",
-            str(_ANALYSIS_RATE),
-            "-f",
-            "s16le",
-            "pipe:1",
-        ]
-    )
+    with Timer("matcher._decode_pcm_mono_16k"):
+        samples = _run_pcm_decode(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(source),
+                "-ac",
+                "1",
+                "-ar",
+                str(_ANALYSIS_RATE),
+                "-f",
+                "s16le",
+                "pipe:1",
+            ]
+        )
     if not samples:
         raise ValueError(f"ffmpeg failed to decode audio: {source}")
     return samples
@@ -80,27 +83,28 @@ def _decode_pcm_mono_16k_window(
     duration = max(0.0, end_seconds - start_seconds)
     if duration <= 0:
         return []
-    return _run_pcm_decode(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-ss",
-            f"{start_seconds:.3f}",
-            "-t",
-            f"{duration:.3f}",
-            "-i",
-            str(source),
-            "-ac",
-            "1",
-            "-ar",
-            str(_ANALYSIS_RATE),
-            "-f",
-            "s16le",
-            "pipe:1",
-        ]
-    )
+    with Timer("matcher._decode_pcm_mono_16k_window"):
+        return _run_pcm_decode(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                f"{start_seconds:.3f}",
+                "-t",
+                f"{duration:.3f}",
+                "-i",
+                str(source),
+                "-ac",
+                "1",
+                "-ar",
+                str(_ANALYSIS_RATE),
+                "-f",
+                "s16le",
+                "pipe:1",
+            ]
+        )
 
 
 @cache
@@ -113,7 +117,8 @@ def _build_filterbank_matrix(
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive")
 
-    nyquist = sample_rate / 2
+    with Timer("matcher._build_filterbank_matrix"):
+        nyquist = sample_rate / 2
     band_edges_hz = np.geomspace(20.0, nyquist, band_count + 1)
     freq_hz = np.fft.rfftfreq(frame_size, d=1.0 / sample_rate)
 
@@ -142,52 +147,55 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
 
     This path computes cached band energies plus first-order deltas.
     """
-    if len(samples) < _FRAME_SIZE:
-        return []
+    with Timer("matcher._build_spectral_profile"):
+        if len(samples) < _FRAME_SIZE:
+            return []
 
-    sample_array = np.asarray(samples, dtype=np.float32)
-    window = np.hanning(_FRAME_SIZE).astype(np.float32)
-    filterbank = _build_filterbank_matrix(sample_rate)
+        sample_array = np.asarray(samples, dtype=np.float32)
+        window = np.hanning(_FRAME_SIZE).astype(np.float32)
+        filterbank = _build_filterbank_matrix(sample_rate)
 
-    raw_bands: list[np.ndarray] = []
-    for index in range(0, len(sample_array) - _FRAME_SIZE + 1, _HOP_SIZE):
-        frame = sample_array[index : index + _FRAME_SIZE] * window
-        spectrum = np.abs(np.fft.rfft(frame)) ** 2
-        vector = np.log1p(spectrum @ filterbank).astype(np.float32)
-        norm = float(np.linalg.norm(vector)) or 1.0
-        raw_bands.append(vector / norm)
+        raw_bands: list[np.ndarray] = []
+        for index in range(0, len(sample_array) - _FRAME_SIZE + 1, _HOP_SIZE):
+            frame = sample_array[index : index + _FRAME_SIZE] * window
+            spectrum = np.abs(np.fft.rfft(frame)) ** 2
+            vector = np.log1p(spectrum @ filterbank).astype(np.float32)
+            norm = float(np.linalg.norm(vector)) or 1.0
+            raw_bands.append(vector / norm)
 
-    if not raw_bands:
-        return []
+        if not raw_bands:
+            return []
 
-    band_matrix = np.stack(raw_bands)
-    features = _stack_temporal_deltas(band_matrix)
+        band_matrix = np.stack(raw_bands)
+        features = _stack_temporal_deltas(band_matrix)
 
-    profile: list[list[float]] = [row.tolist() for row in features]
-    return profile
+        profile: list[list[float]] = [row.tolist() for row in features]
+        return profile
 
 
 def _cross_correlation_search(reference: np.ndarray, source_profile: np.ndarray, hop: int):
-    n = source_profile.shape[0]
-    m = reference.shape[0]
+    with Timer("matcher._cross_correlation_search"):
+        n = source_profile.shape[0]
+        m = reference.shape[0]
 
-    fft_size = int(2 ** np.ceil(np.log2(n + m)))
-    src_fft = np.fft.rfft(source_profile, n=fft_size, axis=0)
-    ref_fft = np.fft.rfft(reference, n=fft_size, axis=0)
-    corr_all = np.fft.irfft((np.conj(ref_fft) * src_fft).sum(axis=1), n=fft_size)
-    scores = corr_all[: n - m + 1][::hop] / m
-    return scores
+        fft_size = int(2 ** np.ceil(np.log2(n + m)))
+        src_fft = np.fft.rfft(source_profile, n=fft_size, axis=0)
+        ref_fft = np.fft.rfft(reference, n=fft_size, axis=0)
+        corr_all = np.fft.irfft((np.conj(ref_fft) * src_fft).sum(axis=1), n=fft_size)
+        scores = corr_all[: n - m + 1][::hop] / m
+        return scores
 
 
 def _windowed_search(reference: np.ndarray, source_profile: np.ndarray, hop: int):
-    windowed_profiles = np.lib.stride_tricks.sliding_window_view(
-        source_profile,
-        window_shape=reference.shape[0],
-        axis=0,
-    )
-    windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
-    scores = np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
-    return scores
+    with Timer("matcher._windowed_search"):
+        windowed_profiles = np.lib.stride_tricks.sliding_window_view(
+            source_profile,
+            window_shape=reference.shape[0],
+            axis=0,
+        )
+        windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
+        scores = np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
+        return scores
 
 
 def _build_match_candidates(
@@ -201,7 +209,8 @@ def _build_match_candidates(
     frame_offset_seconds: float = 0.0,
     z_threshold: float | None = None,
 ) -> list[AudioMatch]:
-    scores = _cross_correlation_search(reference, source_profile, hop)
+    with Timer("matcher._build_match_candidates"):
+        scores = _cross_correlation_search(reference, source_profile, hop)
 
     effective_threshold = score_threshold
     if z_threshold is not None and scores.size > 1:
@@ -262,8 +271,9 @@ def _get_source_profile(source_path: Path) -> np.ndarray:
     Caching ensures the coarse pass and every subsequent refine call share the
     same profile array, avoiding redundant ffmpeg decodes and FFT work.
     """
-    samples = _decode_pcm_mono_16k(source_path)
-    return np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
+    with Timer("matcher._get_source_profile"):
+        samples = _decode_pcm_mono_16k(source_path)
+        return np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
 
 
 def _validate_match_search_inputs(

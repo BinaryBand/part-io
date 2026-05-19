@@ -695,13 +695,6 @@ def _detect_batch(
 
     Updates pipeline state in-place.
     """
-    _, tm_o = _compute_thresholds(state.open_target)
-    _, tm_c = _compute_thresholds(state.close_target)
-    open_floor = tm_o if math.isfinite(tm_o) else 0.0
-    close_floor = tm_c if math.isfinite(tm_c) else 0.0
-    if open_floor > 0 or close_floor > 0:
-        _emit(f"  Floors from negatives: open={open_floor:.4f}  close={close_floor:.4f}")
-
     ep_by_stem = {ep.stem: ep for ep in episodes}
     duration_by_stem = {ep.stem: _probe_audio_duration_seconds(ep) for ep in episodes}
     jobs, results = run_detection_batch(
@@ -711,8 +704,6 @@ def _detect_batch(
             close_sample=close_sample,
             intro_sample=intro_sample,
             outro_sample=outro_sample,
-            open_floor=open_floor,
-            close_floor=close_floor,
         ),
         detector=find_audio_sample_matches,
         z_threshold=z_threshold,
