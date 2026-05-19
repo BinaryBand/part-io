@@ -1342,6 +1342,83 @@ def _find_best_pair(ep_state: EpisodeState, *, min_gap: float, max_gap: float) -
     return segs if segs else None
 
 
+def _write_debug_clips(
+    stem: str,
+    source: Path,
+    cuts: list[tuple[float, float]],
+    output_dir: Path,
+    debug_dir: Path | None,
+) -> bool:
+    """Write debug clip files for each cut segment. Returns True on success."""
+    clip_dir = debug_dir or (output_dir / "debug_ads")
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    wrote = 0
+    for idx, (cut_start, cut_end) in enumerate(cuts, start=1):
+        clip_path = clip_dir / f"{stem}__ad_{idx:02d}.mp3"
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-ss",
+            f"{cut_start:.3f}",
+            "-to",
+            f"{cut_end:.3f}",
+            "-c",
+            "copy",
+            str(clip_path),
+        ]
+        result = run_resolved(cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"  DEBUG FAILED: could not write {clip_path}", file=sys.stderr)
+            return False
+        wrote += 1
+    print(f"  Debug clips written: {wrote} -> {clip_dir}")
+    return True
+
+
+def _apply_intro_trimming(
+    ep_state: EpisodeState, cuts: list[tuple[float, float]]
+) -> list[tuple[float, float | None]]:
+    """Add intro trimming span if intro is detected. Returns updated spans."""
+    spans = _spans_from_cuts(cuts)
+    if ep_state.intro_class == _POS and ep_state.intro_candidates:
+        intro_end = ep_state.intro_end
+        print(f"  Intro detected at {intro_end:.1f}s - trimming preroll before it")
+        spans.insert(0, (0.0, intro_end))
+    return spans
+
+
+def _execute_ffmpeg_cut(source: Path, filter_complex: str, output_path: Path) -> bool:
+    """Execute ffmpeg cut and handle file placement. Returns True on success."""
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+        temp_path = Path(temp_file.name)
+
+    try:
+        exit_code = _run_ffmpeg(source, filter_complex, temp_path)
+        if exit_code != 0:
+            temp_path.unlink(missing_ok=True)
+            print(f"  FAILED: ffmpeg exited {exit_code}", file=sys.stderr)
+            return False
+
+        try:
+            temp_path.replace(output_path)
+        except OSError:
+            # Cross-device (e.g. rclone mount): copy then remove local temp.
+            shutil.copy2(temp_path, output_path)
+            temp_path.unlink(missing_ok=True)
+
+        print(f"  Written: {output_path}")
+        return True
+    except Exception as exc:
+        temp_path.unlink(missing_ok=True)
+        print(f"  FAILED: {exc}", file=sys.stderr)
+        return False
+
+
 def _pair_and_cut(
     stem: str,
     source: Path,
@@ -1402,60 +1479,17 @@ def _pair_and_cut(
         cuts = [(seg.open_end, seg.close_start) for seg in segments]
 
     if debug:
-        clip_dir = debug_dir or (output_dir / "debug_ads")
-        clip_dir.mkdir(parents=True, exist_ok=True)
-        wrote = 0
-        for idx, (cut_start, cut_end) in enumerate(cuts, start=1):
-            clip_path = clip_dir / f"{stem}__ad_{idx:02d}.mp3"
-            cmd = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(source),
-                "-ss",
-                f"{cut_start:.3f}",
-                "-to",
-                f"{cut_end:.3f}",
-                "-c",
-                "copy",
-                str(clip_path),
-            ]
-            result = run_resolved(cmd, capture_output=True)
-            if result.returncode != 0:
-                print(f"  DEBUG FAILED: could not write {clip_path}", file=sys.stderr)
-                return "failed"
-            wrote += 1
-        print(f"  Debug clips written: {wrote} -> {clip_dir}")
-
-    spans = _spans_from_cuts(cuts)
-    # If intro is detected, add a trim span to remove everything before it
-    if ep_state.intro_class == _POS and ep_state.intro_candidates:
-        intro_end = ep_state.intro_end
-        print(f"  Intro detected at {intro_end:.1f}s - trimming preroll before it")
-        # Insert intro trim at the beginning of spans
-        spans.insert(0, (0.0, intro_end))
-    filter_complex, _ = _build_filter_complex(spans, fade_dur=fade_dur)
-
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
-        temp_path = Path(temp_file.name)
-
-    try:
-        exit_code = _run_ffmpeg(source, filter_complex, temp_path)
-        if exit_code != 0:
-            temp_path.unlink(missing_ok=True)
-            print(f"  FAILED: ffmpeg exited {exit_code}", file=sys.stderr)
+        if not _write_debug_clips(stem, source, cuts, output_dir, debug_dir):
             return "failed"
 
-        shutil.move(str(temp_path), str(output_path))
-        print(f"  Written: {output_path}")
-        return "cut"
-    except Exception as exc:
-        temp_path.unlink(missing_ok=True)
-        print(f"  FAILED: {exc}", file=sys.stderr)
+    spans = _apply_intro_trimming(ep_state, cuts)
+    filter_complex, _ = _build_filter_complex(spans, fade_dur=fade_dur)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not _execute_ffmpeg_cut(source, filter_complex, output_path):
         return "failed"
+
+    return "cut"
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,9 @@
 
 # poetry run part-io-tasks remote-loop downloads/remote \
 #   --output-dir downloads/remote \
-#   --debug --inclusive --yes
+#   --inclusive \
+#   --yes \
+#   --debug
 
 from __future__ import annotations
 
