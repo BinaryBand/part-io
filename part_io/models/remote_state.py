@@ -2,7 +2,6 @@
 
 # poetry run part-io-tasks remote-loop downloads/remote \
 #   --output-dir downloads/remote \
-#   --inclusive \
 #   --yes \
 #   --debug
 
@@ -50,7 +49,12 @@ class RunSettingsModel(BaseModel):
     max_gap: float = 300.0  # maximum seconds between open end and close start
     yes: bool = False  # skip cut confirmation prompts
     dry_run: bool = False  # plan cuts without running ffmpeg
-    inclusive: bool = False  # include short files (< 10 MB) that are normally skipped
+    ad_inclusive: bool = (
+        True  # include jingle audio in ad cut (open_start→close_end); False = keep jingles
+    )
+    intro_exclusive: bool = (
+        True  # trim to intro_start keeping the intro jingle; False = trim to intro_end
+    )
     fade: float = 0.5  # fade-in/out duration in seconds applied at each cut point
     quiz_size: int = 10  # uncertain candidates to collect before presenting a review quiz
     no_interactive: bool = False  # skip interactive review; generate clips only

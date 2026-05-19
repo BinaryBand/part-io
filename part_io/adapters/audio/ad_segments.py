@@ -106,6 +106,8 @@ def pair_ad_segments(
     for open_match in sorted_opens:
         best: AudioMatch | None = None
         for close_match in available_closes:
+            if close_match.start_seconds <= open_match.start_seconds:
+                continue  # close must begin after the open begins
             gap = close_match.start_seconds - open_match.end_seconds
             if gap < min_gap:
                 continue

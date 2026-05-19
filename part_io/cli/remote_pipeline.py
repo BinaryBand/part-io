@@ -28,18 +28,14 @@ from typing import TYPE_CHECKING, Any
 from part_io.adapters.audio.ad_segments import pair_ad_segments
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 from part_io.adapters.process.runner import run_resolved
-from part_io.cli.audio_ad_remove import (
-    _build_filter_complex,
-    _run_ffmpeg,
-    _spans_from_cuts,
-    _validate_segments,
-)
+from part_io.cli.audio_ad_remove import _build_filter_complex, _run_ffmpeg
 from part_io.services.audio_detection import (
     DetectionBatchRequest,
     apply_batch_result_to_episode,
     filter_matches_by_position,
     run_detection_batch,
 )
+from part_io.services.cut_planning import build_cut_plan
 from part_io.utils.exec import launch_resolved
 
 if TYPE_CHECKING:  # pragma: no cover - type-only import
@@ -175,7 +171,12 @@ class RunSettings:
     max_gap: float = 300.0
     yes: bool = False
     dry_run: bool = False
-    inclusive: bool = False
+    ad_inclusive: bool = (
+        True  # include jingle audio in ad cut (open_start→close_end vs open_end→close_start)
+    )
+    intro_exclusive: bool = (
+        True  # trim to intro_start, keeping the intro jingle (False = trim to intro_end)
+    )
     fade: float = 0.5
     quiz_size: int = 10
     no_interactive: bool = False
@@ -275,7 +276,8 @@ def _load_settings(raw: dict) -> RunSettings:
         max_gap=float(raw.get("max_gap", 300.0)),
         yes=bool(raw.get("yes", False)),
         dry_run=bool(raw.get("dry_run", False)),
-        inclusive=bool(raw.get("inclusive", False)),
+        ad_inclusive=bool(raw.get("ad_inclusive", True)),
+        intro_exclusive=bool(raw.get("intro_exclusive", True)),
         fade=float(raw.get("fade", 0.5)),
         quiz_size=int(raw.get("quiz_size", 10)),
         no_interactive=bool(raw.get("no_interactive", False)),
@@ -288,6 +290,27 @@ def _load_settings(raw: dict) -> RunSettings:
         output_dir=str(raw.get("output_dir", "downloads/remove")),
         debug=bool(raw.get("debug", False)),
     )
+
+
+def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Write text to path atomically via a same-directory temp file.
+
+    Uses rename on the same filesystem (instant, no data loss on interruption).
+    Falls back to copy+delete when the destination is on a different device
+    (e.g. an rclone mount), ensuring the destination file is never left in a
+    partial state.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".tmp", dir=path.parent, delete=False, encoding=encoding
+    ) as tmp:
+        tmp.write(text)
+        tmp_path = Path(tmp.name)
+    try:
+        tmp_path.replace(path)
+    except OSError:
+        shutil.copy2(tmp_path, path)
+        tmp_path.unlink(missing_ok=True)
 
 
 def _migrate_episode_keys(path: Path) -> None:
@@ -303,7 +326,7 @@ def _migrate_episode_keys(path: Path) -> None:
             escaped = key.replace("\\", "\\\\").replace('"', '\\"')
             line = f'[episodes."{escaped}"]\n'
         fixed_lines.append(line)
-    path.write_text("".join(fixed_lines), encoding="utf-8")
+    _atomic_write_text(path, "".join(fixed_lines))
 
 
 def _migrate_old_episode(
@@ -418,7 +441,8 @@ class PipelineState:
             f"max_gap = {settings.max_gap:.6g}\n",
             f"yes = {str(settings.yes).lower()}\n",
             f"dry_run = {str(settings.dry_run).lower()}\n",
-            f"inclusive = {str(settings.inclusive).lower()}\n",
+            f"ad_inclusive = {str(settings.ad_inclusive).lower()}\n",
+            f"intro_exclusive = {str(settings.intro_exclusive).lower()}\n",
             f"fade = {settings.fade:.6g}\n",
             f"quiz_size = {settings.quiz_size}\n",
             f"no_interactive = {str(settings.no_interactive).lower()}\n",
@@ -458,8 +482,7 @@ class PipelineState:
                 f'outro_class      = "{ep.outro_class}"\n',
                 f"cut = {str(ep.cut).lower()}\n",
             ]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("".join(lines), encoding="utf-8")
+        _atomic_write_text(path, "".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -628,7 +651,7 @@ def _apply_sticky_cut_args(args: argparse.Namespace, state: PipelineState) -> No
     args.max_gap = float(_resolve_opt(args.max_gap, s.max_gap))
     args.yes = bool(_resolve_opt(args.yes, s.yes))
     args.dry_run = bool(_resolve_opt(args.dry_run, s.dry_run))
-    args.inclusive = bool(_resolve_opt(args.inclusive, s.inclusive))
+    args.inclusive = bool(_resolve_opt(args.inclusive, s.ad_inclusive))
     args.fade = float(_resolve_opt(args.fade, s.fade))
 
     s.output_dir = str(args.output_dir)
@@ -636,7 +659,7 @@ def _apply_sticky_cut_args(args: argparse.Namespace, state: PipelineState) -> No
     s.max_gap = args.max_gap
     s.yes = args.yes
     s.dry_run = args.dry_run
-    s.inclusive = args.inclusive
+    s.ad_inclusive = args.inclusive
     s.fade = args.fade
 
 
@@ -1380,18 +1403,6 @@ def _write_debug_clips(
     return True
 
 
-def _apply_intro_trimming(
-    ep_state: EpisodeState, cuts: list[tuple[float, float]]
-) -> list[tuple[float, float | None]]:
-    """Add intro trimming span if intro is detected. Returns updated spans."""
-    spans = _spans_from_cuts(cuts)
-    if ep_state.intro_class == _POS and ep_state.intro_candidates:
-        intro_end = ep_state.intro_end
-        print(f"  Intro detected at {intro_end:.1f}s - trimming preroll before it")
-        spans.insert(0, (0.0, intro_end))
-    return spans
-
-
 def _execute_ffmpeg_cut(source: Path, filter_complex: str, output_path: Path) -> bool:
     """Execute ffmpeg cut and handle file placement. Returns True on success."""
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
@@ -1429,7 +1440,8 @@ def _pair_and_cut(
     max_gap: float,
     yes: bool,
     dry_run: bool,
-    inclusive: bool = False,
+    ad_inclusive: bool = True,
+    intro_exclusive: bool = True,
     fade_dur: float = 0.5,
     debug: bool = False,
     debug_dir: Path | None = None,
@@ -1446,16 +1458,10 @@ def _pair_and_cut(
         print(f"  No valid open->close pair ({n_o} open x {n_c} close candidates).")
         return "skipped"
 
-    try:
-        _validate_segments(segments)
-    except ValueError as exc:
-        print(f"  SKIP: {exc}")
-        return "skipped"
-
     print(f"\n  {len(segments)} ad segment(s) to cut:")
     for i, seg in enumerate(segments, 1):
-        cut_s = seg.cut_start if inclusive else seg.open_end
-        cut_e = seg.cut_end if inclusive else seg.close_start
+        cut_s = seg.cut_start if ad_inclusive else seg.open_end
+        cut_e = seg.cut_end if ad_inclusive else seg.close_start
         print(f"    {i}. [{cut_s:.1f}s -> {cut_e:.1f}s]  ({cut_e - cut_s:.1f}s)")
 
     if dry_run:
@@ -1473,17 +1479,20 @@ def _pair_and_cut(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{stem}.mp3"
-    if inclusive:
+    if ad_inclusive:
         cuts = [(seg.cut_start, seg.cut_end) for seg in segments]
     else:
         cuts = [(seg.open_end, seg.close_start) for seg in segments]
+    intro_trim = None
+    if ep_state.intro_class == _POS and ep_state.intro_candidates:
+        intro_trim = ep_state.intro_start if intro_exclusive else ep_state.intro_end
+    plan = build_cut_plan(cuts, intro_trim=intro_trim)
 
     if debug:
-        if not _write_debug_clips(stem, source, cuts, output_dir, debug_dir):
+        if not _write_debug_clips(stem, source, plan.cuts, output_dir, debug_dir):
             return "failed"
 
-    spans = _apply_intro_trimming(ep_state, cuts)
-    filter_complex, _ = _build_filter_complex(spans, fade_dur=fade_dur)
+    filter_complex, _ = _build_filter_complex(plan.spans, fade_dur=fade_dur)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not _execute_ffmpeg_cut(source, filter_complex, output_path):
@@ -1507,7 +1516,8 @@ def _cut_cuttable(
     yes: bool,
     dry_run: bool,
     state_path: Path,
-    inclusive: bool = False,
+    ad_inclusive: bool = True,
+    intro_exclusive: bool = True,
     fade_dur: float = 0.5,
     debug: bool = False,
     debug_dir: Path | None = None,
@@ -1533,7 +1543,8 @@ def _cut_cuttable(
             max_gap=max_gap,
             yes=yes,
             dry_run=dry_run,
-            inclusive=inclusive,
+            ad_inclusive=ad_inclusive,
+            intro_exclusive=intro_exclusive,
             fade_dur=fade_dur,
             debug=debug,
             debug_dir=debug_dir,
@@ -1650,7 +1661,8 @@ def _cmd_cut(args: argparse.Namespace) -> None:
         yes=args.yes,
         dry_run=args.dry_run,
         state_path=state_path,
-        inclusive=args.inclusive,
+        ad_inclusive=args.inclusive,
+        intro_exclusive=state.settings.intro_exclusive,
         fade_dur=args.fade,
     )
     print(f"\nDone: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
@@ -1752,7 +1764,8 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         yes=args.yes,
         dry_run=args.dry_run,
         state_path=state_path,
-        inclusive=args.inclusive,
+        ad_inclusive=args.inclusive,
+        intro_exclusive=state.settings.intro_exclusive,
         fade_dur=args.fade,
         debug=args.debug,
     )

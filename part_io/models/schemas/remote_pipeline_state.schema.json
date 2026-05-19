@@ -149,9 +149,14 @@
           "title": "Fade",
           "type": "number"
         },
-        "inclusive": {
-          "default": false,
-          "title": "Inclusive",
+        "ad_inclusive": {
+          "default": true,
+          "title": "Ad Inclusive",
+          "type": "boolean"
+        },
+        "intro_exclusive": {
+          "default": true,
+          "title": "Intro Exclusive",
           "type": "boolean"
         },
         "intro_sample": {
