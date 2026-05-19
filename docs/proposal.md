@@ -11,8 +11,6 @@ Four target types are defined for podcast audio:
 | `intro` | Opening of the podcast episode itself |
 | `outro` | Closing of the podcast episode itself |
 
-This specification covers **`open` and `close` only**. `intro` and `outro` follow the same classification model and are reserved for future extension.
-
 * * *
 
 ## 2\. Setup
@@ -33,18 +31,22 @@ A `__state__.toml` file is written under $\Lambda$ to persist all classification
 class State:
     targets: list[AudioTarget]
     output:  Path
- moe_factor: float = 1.5
- threshold: float = 0.8
- 
+    max_k: int = 5   # max condidates per AudioTarget
+    max_gap: float = 60 * 5  # max seconds between open and close
+    moe_factor: float = 1.5  # 
+    threshold: float = 0.8  #
+    is_inclusive: bool = False # cut transitions too?
+    fade_dur: float = 0
+    
 class AudioTarget:
-    type:      Literal['open', 'close']   # 'intro'/'outro' reserved
-    positives: list[Segment]              # confirmed examples
-    negatives: list[Segment]              # confirmed non-examples
+    type: Literal['intro', 'outro', 'open', 'close']
+    positives: list[Segment]  # confirmed examples
+    negatives: list[Segment]  # confirmed non-examples
 
 class Segment:
-    source: str    # path relative to Λ (preserves portability)
-    start:  float  # seconds
-    end:    float  # seconds
+    source: str # path relative to Λ
+    start: float # seconds
+    end: float  # seconds
 ```
 
 > `Segment.source` is always relative to $\Lambda$ so the state file is portable across machines.
@@ -145,6 +147,47 @@ The loop repeats until $\Diamond B'(t) = \emptyset$ or the user exits.
 
 ## 8\. Output
 
-For episodes in $B'(\text{open}) \cap B'(\text{close})$, ad segments are paired greedily (nearest following close within a configurable `[min_gap, max_gap]` window) and the cleaned episode is written to `output/`.
+For episodes in $B'(\text{open}) \cap B'(\text{close})$, **all** valid open→close pairs are identified greedily and the cleaned episode is written to `output/`.
 
 Episodes in $B'(\text{open})$ but not $B'(\text{close})$, or vice versa, are logged as unpaired and skipped.
+
+### 8.1 Pairing
+
+Let $O_b$ and $C_b$ denote the candidate positions (top-$k$ matches) for the open and close targets in episode $b$. The greedy pairing algorithm processes opens in ascending time order: for each open candidate $o \in O_b$, it selects the earliest unused close candidate $c \in C_b$ satisfying:
+
+$$
+\text{min\_gap} \leq c.\text{start} - o.\text{end} \leq \text{max\_gap}
+$$
+
+This yields an ordered sequence of pairs $\{(o_i, c_i)\}_{i=1}^{n}$ representing all $n$ ad breaks found in the episode.
+
+### 8.2 Cut Spans
+
+Depending on `is_inclusive`, the cut region for each ad break $(o_i, c_i)$ is:
+
+$$
+\text{cut}_i = \begin{cases}
+[o_i.\text{end},\; c_i.\text{start}] & \text{if } \lnot\,\text{is\_inclusive} \quad \text{(keep jingles)} \\
+[o_i.\text{start},\; c_i.\text{end}] & \text{if } \text{is\_inclusive} \quad \text{(remove jingles)}
+\end{cases}
+$$
+
+The keep-spans are the complement of all cut regions over the episode duration $\tau_b$:
+
+$$
+\text{keep}(b) = [0, \tau_b] \setminus \bigcup_{i=1}^{n} \text{cut}_i
+$$
+
+### 8.3 Fade
+
+When `fade_dur` $= \delta > 0$, each keep-span except the first gains a fade-in of duration $\delta$ at its start, and each keep-span except the last gains a fade-out of duration $\delta$ at its end, smoothing each seam.
+
+### 8.4 Reconstruction
+
+All keep-spans are concatenated via a single `ffmpeg filter_complex` call (no temporary files):
+
+$$
+\texttt{output}(b) = \bigoplus_{[s_i,\, e_i] \,\in\, \text{keep}(b)} \texttt{atrim}(b,\, s_i,\, e_i)
+$$
+
+where $\oplus$ denotes time-domain concatenation.

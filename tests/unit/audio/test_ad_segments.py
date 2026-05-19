@@ -17,6 +17,7 @@ from part_io.adapters.audio.matcher import AudioMatch
 from part_io.cli.audio_ad_remove import (
     _build_filter_complex,
     _build_keep_spans,
+    _spans_from_cuts,
     _validate_segments,
 )
 
@@ -285,6 +286,30 @@ def test_build_filter_complex_single_span() -> None:
     assert "atrim=0.000:100.000" in fc
     assert "atrim=200.000" in fc
     assert "concat=n=2:v=0:a=1[out]" in fc
+
+
+def test_spans_from_cuts_single() -> None:
+    spans = _spans_from_cuts([(100.0, 200.0)])
+    assert spans == [(0.0, 100.0), (200.0, None)]
+
+
+def test_spans_from_cuts_multiple() -> None:
+    spans = _spans_from_cuts([(100.0, 200.0), (400.0, 500.0)])
+    assert spans == [(0.0, 100.0), (200.0, 400.0), (500.0, None)]
+
+
+def test_spans_from_cuts_starts_at_zero() -> None:
+    spans = _spans_from_cuts([(0.0, 100.0)])
+    assert spans == [(100.0, None)]
+
+
+def test_build_filter_complex_with_fade() -> None:
+    spans = [(0.0, 100.0), (200.0, None)]
+    fc, n = _build_filter_complex(spans, fade_dur=0.5)
+
+    assert n == 2
+    assert "afade=t=out" in fc
+    assert "afade=t=in" in fc
 
 
 def test_validate_segments_raises_on_overlap() -> None:

@@ -77,33 +77,49 @@ def _validate_segments(segments: list[AdSegment]) -> None:
             )
 
 
-def _build_keep_spans(segments: list[AdSegment]) -> list[tuple[float, float | None]]:
-    """Return [(start, end), ...] spans of audio to keep, end=None means 'to EOF'."""
-    sorted_segs = sorted(segments, key=lambda s: s.cut_start)
+def _spans_from_cuts(
+    cuts: list[tuple[float, float]],
+) -> list[tuple[float, float | None]]:
+    """Convert explicit (cut_start, cut_end) pairs to keep-spans starting from 0."""
     spans: list[tuple[float, float | None]] = []
     cursor = 0.0
-    for seg in sorted_segs:
-        if seg.cut_start > cursor:
-            spans.append((cursor, seg.cut_start))
-        cursor = seg.cut_end
+    for start, end in sorted(cuts):
+        if start > cursor:
+            spans.append((cursor, start))
+        cursor = end
     spans.append((cursor, None))
     return spans
 
 
-def _build_filter_complex(spans: "Sequence[tuple[float, float | None]]") -> tuple[str, int]:
+def _build_keep_spans(segments: list[AdSegment]) -> list[tuple[float, float | None]]:
+    """Return [(start, end), ...] spans of audio to keep, end=None means 'to EOF'."""
+    return _spans_from_cuts([(seg.cut_start, seg.cut_end) for seg in segments])
+
+
+def _build_filter_complex(
+    spans: "Sequence[tuple[float, float | None]]",
+    fade_dur: float = 0.0,
+) -> tuple[str, int]:
     """Build ffmpeg filter_complex string and return (filter_str, n_segments)."""
     parts: list[str] = []
     labels: list[str] = []
+    n = len(spans)
     for i, (start, end) in enumerate(spans):
         label = f"s{i}"
         if end is None:
             trim = f"atrim={start:.3f}"
         else:
             trim = f"atrim={start:.3f}:{end:.3f}"
-        parts.append(f"[0:a]{trim},asetpts=PTS-STARTPTS[{label}]")
+        filt = f"[0:a]{trim},asetpts=PTS-STARTPTS"
+        if fade_dur > 0 and n > 1:
+            if i > 0:
+                filt += f",afade=t=in:st=0:d={fade_dur:.3f}"
+            if i < n - 1 and end is not None:
+                fade_st = max(0.0, end - start - fade_dur)
+                filt += f",afade=t=out:st={fade_st:.3f}:d={fade_dur:.3f}"
+        parts.append(f"{filt}[{label}]")
         labels.append(f"[{label}]")
     concat_inputs = "".join(labels)
-    n = len(spans)
     parts.append(f"{concat_inputs}concat=n={n}:v=0:a=1[out]")
     return ";".join(parts), n
 

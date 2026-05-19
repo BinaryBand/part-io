@@ -619,9 +619,14 @@ class TestPairAndCut:
         )
         assert result == "skipped"
 
-    def test_dry_run_returns_skipped(self, tmp_path):
+    def _make_seg(self):
         seg = MagicMock()
         seg.cut_start, seg.cut_end = 10.0, 30.0
+        seg.open_end, seg.close_start = 10.0, 30.0
+        return seg
+
+    def test_dry_run_returns_skipped(self, tmp_path):
+        seg = self._make_seg()
         with patch("part_io.cli.remote_pipeline.pair_ad_segments", return_value=([seg], [], [])):
             with patch("part_io.cli.remote_pipeline._validate_segments"):
                 result = _pair_and_cut(
@@ -630,18 +635,17 @@ class TestPairAndCut:
                     output_dir=tmp_path / "out",
                     ep_state=self._make_ep(),
                     min_gap=-15.0,
-                    max_gap=600.0,
+                    max_gap=300.0,
                     yes=True,
                     dry_run=True,
                 )
         assert result == "skipped"
 
     def test_ffmpeg_failure_returns_failed(self, tmp_path):
-        seg = MagicMock()
-        seg.cut_start, seg.cut_end = 10.0, 30.0
+        seg = self._make_seg()
         with patch("part_io.cli.remote_pipeline.pair_ad_segments", return_value=([seg], [], [])):
             with patch("part_io.cli.remote_pipeline._validate_segments"):
-                with patch("part_io.cli.remote_pipeline._build_keep_spans", return_value=[]):
+                with patch("part_io.cli.remote_pipeline._spans_from_cuts", return_value=[]):
                     with patch(
                         "part_io.cli.remote_pipeline._build_filter_complex",
                         return_value=("f", 2),
@@ -653,18 +657,17 @@ class TestPairAndCut:
                                 output_dir=tmp_path / "out",
                                 ep_state=self._make_ep(),
                                 min_gap=-15.0,
-                                max_gap=600.0,
+                                max_gap=300.0,
                                 yes=True,
                                 dry_run=False,
                             )
         assert result == "failed"
 
     def test_successful_cut(self, tmp_path):
-        seg = MagicMock()
-        seg.cut_start, seg.cut_end = 10.0, 30.0
+        seg = self._make_seg()
         with patch("part_io.cli.remote_pipeline.pair_ad_segments", return_value=([seg], [], [])):
             with patch("part_io.cli.remote_pipeline._validate_segments"):
-                with patch("part_io.cli.remote_pipeline._build_keep_spans", return_value=[]):
+                with patch("part_io.cli.remote_pipeline._spans_from_cuts", return_value=[]):
                     with patch(
                         "part_io.cli.remote_pipeline._build_filter_complex",
                         return_value=("f", 2),
@@ -676,7 +679,7 @@ class TestPairAndCut:
                                 output_dir=tmp_path / "out",
                                 ep_state=self._make_ep(),
                                 min_gap=-15.0,
-                                max_gap=600.0,
+                                max_gap=300.0,
                                 yes=True,
                                 dry_run=False,
                             )
@@ -690,7 +693,7 @@ class TestPairAndCut:
                 output_dir=tmp_path / "out",
                 ep_state=self._make_ep(),
                 min_gap=-15.0,
-                max_gap=600.0,
+                max_gap=300.0,
                 yes=True,
                 dry_run=False,
             )
@@ -704,7 +707,7 @@ class TestPairAndCut:
                 output_dir=tmp_path / "out",
                 ep_state=self._make_ep(),
                 min_gap=-15.0,
-                max_gap=600.0,
+                max_gap=300.0,
                 yes=True,
                 dry_run=False,
             )
@@ -730,10 +733,12 @@ class TestCutCuttable:
             remote_dir=tmp_path / "remote",
             output_dir=tmp_path / "out",
             min_gap=-15.0,
-            max_gap=600.0,
+            max_gap=300.0,
             yes=True,
             dry_run=False,
             state_path=tmp_path / "state.toml",
+            inclusive=False,
+            fade_dur=0.0,
         )
 
     def test_no_cuttable_returns_zeros(self, tmp_path):
@@ -865,9 +870,11 @@ class TestCmdCut:
             remote_dir=tmp_path / "remote",
             output_dir=tmp_path / "out",
             min_gap=-15.0,
-            max_gap=600.0,
+            max_gap=300.0,
             yes=True,
             dry_run=False,
+            inclusive=False,
+            fade=0.0,
         )
 
     def test_no_cuttable_episodes_returns_early(self, tmp_path, capsys):

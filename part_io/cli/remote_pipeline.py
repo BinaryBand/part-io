@@ -27,8 +27,8 @@ from part_io.adapters.audio.matcher import AudioMatch
 from part_io.adapters.process.runner import run_resolved
 from part_io.cli.audio_ad_remove import (
     _build_filter_complex,
-    _build_keep_spans,
     _run_ffmpeg,
+    _spans_from_cuts,
     _validate_segments,
 )
 from part_io.utils.exec import launch_resolved
@@ -724,28 +724,32 @@ def _run_review_loop(
 
 
 def _find_best_pair(ep_state: EpisodeState, *, min_gap: float, max_gap: float) -> list[Any] | None:
-    """Try all open×close candidate combinations; return segments for first valid pair or None."""
-    for oc in ep_state.open_candidates:
-        for cc in ep_state.close_candidates:
-            om = AudioMatch(
-                start_seconds=oc.start,
-                end_seconds=oc.end,
-                duration_seconds=oc.end - oc.start,
-                score=oc.score,
-            )
-            cm = AudioMatch(
-                start_seconds=cc.start,
-                end_seconds=cc.end,
-                duration_seconds=cc.end - cc.start,
-                score=cc.score,
-            )
-            try:
-                segs, _, _ = pair_ad_segments([om], [cm], min_gap=min_gap, max_gap=max_gap)
-            except (ValueError, KeyError):
-                continue
-            if segs:
-                return segs
-    return None
+    """Pass all open/close candidates to pair_ad_segments; return all valid pairs or None."""
+    if not ep_state.open_candidates or not ep_state.close_candidates:
+        return None
+    opens = [
+        AudioMatch(
+            start_seconds=m.start,
+            end_seconds=m.end,
+            duration_seconds=m.end - m.start,
+            score=m.score,
+        )
+        for m in ep_state.open_candidates
+    ]
+    closes = [
+        AudioMatch(
+            start_seconds=m.start,
+            end_seconds=m.end,
+            duration_seconds=m.end - m.start,
+            score=m.score,
+        )
+        for m in ep_state.close_candidates
+    ]
+    try:
+        segs, _, _ = pair_ad_segments(opens, closes, min_gap=min_gap, max_gap=max_gap)
+    except (ValueError, KeyError):
+        return None
+    return segs if segs else None
 
 
 def _pair_and_cut(
@@ -758,6 +762,8 @@ def _pair_and_cut(
     max_gap: float,
     yes: bool,
     dry_run: bool,
+    inclusive: bool = False,
+    fade_dur: float = 0.5,
 ) -> str:
     """Pair open/close from ep_state and cut. Returns 'cut', 'skipped', or 'failed'."""
     if not ep_state.is_cuttable():
@@ -777,15 +783,19 @@ def _pair_and_cut(
         print(f"  SKIP: {exc}")
         return "skipped"
 
-    seg = segments[0]
-    duration = seg.cut_end - seg.cut_start
-    print(f"\n  1 ad segment: [{seg.cut_start:.1f}s → {seg.cut_end:.1f}s]  ({duration:.1f}s)")
+    print(f"\n  {len(segments)} ad segment(s) to cut:")
+    for i, seg in enumerate(segments, 1):
+        cut_s = seg.cut_start if inclusive else seg.open_end
+        cut_e = seg.cut_end if inclusive else seg.close_start
+        print(f"    {i}. [{cut_s:.1f}s → {cut_e:.1f}s]  ({cut_e - cut_s:.1f}s)")
 
     if dry_run:
         return "skipped"
 
     if not yes:
-        print(f"\n  Cut ad from {stem}? [y]es / [n]o  ", end="", flush=True)
+        n = len(segments)
+        label = "ad" if n == 1 else f"{n} ads"
+        print(f"\n  Cut {label} from {stem}? [y]es / [n]o  ", end="", flush=True)
         key = _getch().lower()
         print(key, file=sys.stderr)
         if key != "y":
@@ -794,8 +804,12 @@ def _pair_and_cut(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{stem}.mp3"
-    spans = _build_keep_spans(segments)
-    filter_complex, _ = _build_filter_complex(spans)
+    if inclusive:
+        cuts = [(seg.cut_start, seg.cut_end) for seg in segments]
+    else:
+        cuts = [(seg.open_end, seg.close_start) for seg in segments]
+    spans = _spans_from_cuts(cuts)
+    filter_complex, _ = _build_filter_complex(spans, fade_dur=fade_dur)
     exit_code = _run_ffmpeg(source, filter_complex, output_path)
 
     if exit_code != 0:
@@ -821,6 +835,8 @@ def _cut_cuttable(
     yes: bool,
     dry_run: bool,
     state_path: Path,
+    inclusive: bool = False,
+    fade_dur: float = 0.5,
 ) -> tuple[int, int, int]:
     """Cut all cuttable episodes. Returns (n_cut, n_skipped, n_failed)."""
     cuttable = [
@@ -843,6 +859,8 @@ def _cut_cuttable(
             max_gap=max_gap,
             yes=yes,
             dry_run=dry_run,
+            inclusive=inclusive,
+            fade_dur=fade_dur,
         )
         if result == "cut":
             ep_state.cut = True
@@ -948,6 +966,8 @@ def _cmd_cut(args: argparse.Namespace) -> None:
         yes=args.yes,
         dry_run=args.dry_run,
         state_path=state_path,
+        inclusive=args.inclusive,
+        fade_dur=args.fade,
     )
     print(f"\nDone: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
     if n_failed:
@@ -1023,6 +1043,8 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         yes=args.yes,
         dry_run=args.dry_run,
         state_path=state_path,
+        inclusive=args.inclusive,
+        fade_dur=args.fade,
     )
     n_remain_undet = sum(1 for ep in all_full if not state.episode(ep.stem).is_detected())
     n_remain_unc = _count_uncertain(state)
@@ -1050,9 +1072,19 @@ def _add_detect_args(p: argparse.ArgumentParser) -> None:
 
 def _add_cut_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--min-gap", type=float, default=-15.0, help="Min gap: open end → close start")
-    p.add_argument("--max-gap", type=float, default=600.0)
+    p.add_argument(
+        "--max-gap", type=float, default=300.0, help="Max gap in seconds (default 5 min)"
+    )
     p.add_argument("--yes", action="store_true", help="Cut without confirmation prompt")
     p.add_argument("--dry-run", action="store_true", help="Show cut plan without running ffmpeg")
+    p.add_argument("--inclusive", action="store_true", help="Cut jingle transitions too")
+    p.add_argument(
+        "--fade",
+        type=float,
+        default=0.5,
+        metavar="SECONDS",
+        help="Fade duration at cut points (default 0.5s, 0 to disable)",
+    )
 
 
 def _build_review_parser(sub: argparse._SubParsersAction) -> None:
