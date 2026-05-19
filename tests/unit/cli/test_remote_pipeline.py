@@ -23,8 +23,10 @@ from part_io.cli.remote_pipeline import (
     _cmd_cut,
     _compute_thresholds,
     _count_uncertain,
-    _detect_best,
+    _cut_cuttable,
+    _detect_matches,
     _emit,
+    _find_best_pair,
     _full_episodes,
     _Match,
     _moe,
@@ -32,6 +34,7 @@ from part_io.cli.remote_pipeline import (
     _pair_and_cut,
     _reclassify_all,
     _review_one_target,
+    _run_review_loop,
     _UndoEntry,
     main,
 )
@@ -111,9 +114,10 @@ class TestPipelineState:
         state = PipelineState()
         ep = state.episode("ep001")
         ep.source = "downloads/remote/ep001.mp3"
-        ep.open_score = 0.95
-        ep.open_start = 10.0
-        ep.open_end = 20.0
+        ep.open_candidates = [
+            _Match(score=0.95, start=10.0, end=20.0),
+            _Match(score=0.88, start=50.0, end=60.0),
+        ]
         ep.open_class = _POS
         ep.close_class = _NEG
         ep.cut = True
@@ -122,6 +126,8 @@ class TestPipelineState:
         lep = loaded.episodes["ep001"]
         assert lep.source == "downloads/remote/ep001.mp3"
         assert lep.open_score == pytest.approx(0.95)
+        assert len(lep.open_candidates) == 2
+        assert lep.open_candidates[1].start == pytest.approx(50.0)
         assert lep.open_class == _POS
         assert lep.close_class == _NEG
         assert lep.cut is True
@@ -249,7 +255,7 @@ class TestReclassifyAll:
     def test_reclassifies_uncertain_episodes(self):
         state = PipelineState()
         ep = state.episode("ep1")
-        ep.open_score = 0.95
+        ep.open_candidates = [_Match(score=0.95, start=0.0, end=1.0)]
         ep.open_class = _UNC
         state.open_target.positives.append(Segment("ep1.mp3", 0.0, 1.0, 0.9))
         _reclassify_all(state, default_floor=0.8)
@@ -258,7 +264,7 @@ class TestReclassifyAll:
     def test_does_not_reclassify_already_classified(self):
         state = PipelineState()
         ep = state.episode("ep1")
-        ep.open_score = 0.5
+        ep.open_candidates = [_Match(score=0.5, start=0.0, end=1.0)]
         ep.open_class = _POS  # manually set — should not be touched
         _reclassify_all(state, default_floor=0.8)
         assert ep.open_class == _POS
@@ -274,7 +280,7 @@ class TestReclassifyAll:
         """Episodes stay uncertain when no confirmed examples exist yet."""
         state = PipelineState()
         ep = state.episode("ep1")
-        ep.open_score = 0.95  # above default floor
+        ep.open_candidates = [_Match(score=0.95, start=0.0, end=1.0)]
         ep.open_class = _UNC
         _reclassify_all(state, default_floor=0.8)
         assert ep.open_class == _UNC  # no evidence → no auto-classification
@@ -285,7 +291,7 @@ class TestReclassifyAll:
 # ---------------------------------------------------------------------------
 
 
-class TestDetectBest:
+class TestDetectMatches:
     def _mock_run(self, payload, returncode=0):
         r = MagicMock()
         r.returncode = returncode
@@ -293,58 +299,49 @@ class TestDetectBest:
         r.stderr = b""
         return r
 
-    def test_returns_match_on_success(self, tmp_path):
-        r = self._mock_run([{"index": 1, "score": 0.9, "start": 5.0, "end": 10.0}])
+    def _call(self, tmp_path, payload, returncode=0, z_threshold=None, max_matches=3):
+        r = self._mock_run(payload, returncode=returncode)
         with patch("part_io.cli.remote_pipeline.run_resolved", return_value=r):
-            result = _detect_best(
+            return _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
                 threshold=0.8,
-                z_threshold=3.0,
+                z_threshold=z_threshold,
                 step_seconds=0.1,
+                max_matches=max_matches,
             )
-        assert isinstance(result, _Match)
-        assert result.score == pytest.approx(0.9)
-        assert result.start == pytest.approx(5.0)
 
-    def test_returns_none_on_empty_result(self, tmp_path):
-        r = self._mock_run([])
-        with patch("part_io.cli.remote_pipeline.run_resolved", return_value=r):
-            result = _detect_best(
-                tmp_path / "ep.mp3",
-                tmp_path / "open.mp3",
-                threshold=0.8,
-                z_threshold=None,
-                step_seconds=0.1,
-            )
-        assert result is None
+    def test_returns_matches_on_success(self, tmp_path):
+        payload = [
+            {"index": 1, "score": 0.9, "start": 5.0, "end": 10.0},
+            {"index": 2, "score": 0.85, "start": 50.0, "end": 55.0},
+        ]
+        result = self._call(tmp_path, payload)
+        assert len(result) == 2
+        assert result[0].score == pytest.approx(0.9)
+        assert result[1].start == pytest.approx(50.0)
 
-    def test_returns_none_on_nonzero_returncode(self, tmp_path):
-        r = self._mock_run([], returncode=1)
-        with patch("part_io.cli.remote_pipeline.run_resolved", return_value=r):
-            result = _detect_best(
-                tmp_path / "ep.mp3",
-                tmp_path / "open.mp3",
-                threshold=0.8,
-                z_threshold=None,
-                step_seconds=0.1,
-            )
-        assert result is None
+    def test_returns_empty_on_empty_result(self, tmp_path):
+        assert self._call(tmp_path, []) == []
 
-    def test_returns_none_on_bad_json(self, tmp_path):
+    def test_returns_empty_on_nonzero_returncode(self, tmp_path):
+        assert self._call(tmp_path, [], returncode=1) == []
+
+    def test_returns_empty_on_bad_json(self, tmp_path):
         r = MagicMock()
         r.returncode = 0
         r.stdout = b"not-json"
         r.stderr = b""
         with patch("part_io.cli.remote_pipeline.run_resolved", return_value=r):
-            result = _detect_best(
+            result = _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
                 threshold=0.8,
                 z_threshold=None,
                 step_seconds=0.1,
+                max_matches=3,
             )
-        assert result is None
+        assert result == []
 
     def test_z_threshold_appended(self, tmp_path):
         captured: list[str] = []
@@ -358,17 +355,18 @@ class TestDetectBest:
             return r
 
         with patch("part_io.cli.remote_pipeline.run_resolved", side_effect=fake_run):
-            _detect_best(
+            _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
                 threshold=0.8,
                 z_threshold=2.5,
                 step_seconds=0.1,
+                max_matches=3,
             )
         assert "--z-threshold" in captured
         assert "2.5" in captured
 
-    def test_max_matches_is_one(self, tmp_path):
+    def test_max_matches_forwarded(self, tmp_path):
         captured: list[str] = []
         r = MagicMock()
         r.returncode = 0
@@ -380,15 +378,66 @@ class TestDetectBest:
             return r
 
         with patch("part_io.cli.remote_pipeline.run_resolved", side_effect=fake_run):
-            _detect_best(
+            _detect_matches(
                 tmp_path / "ep.mp3",
                 tmp_path / "open.mp3",
                 threshold=0.8,
                 z_threshold=None,
                 step_seconds=0.1,
+                max_matches=5,
             )
         idx = captured.index("--max-matches")
-        assert captured[idx + 1] == "1"
+        assert captured[idx + 1] == "5"
+
+
+# ---------------------------------------------------------------------------
+# _find_best_pair
+# ---------------------------------------------------------------------------
+
+
+class TestFindBestPair:
+    def _make_ep(self, open_cands, close_cands, oc=_POS, cc=_POS):
+        ep = EpisodeState()
+        ep.open_candidates = open_cands
+        ep.open_class = oc
+        ep.close_candidates = close_cands
+        ep.close_class = cc
+        return ep
+
+    def test_valid_pair_found(self):
+        ep = self._make_ep(
+            [_Match(score=0.9, start=0.0, end=10.0)],
+            [_Match(score=0.9, start=30.0, end=40.0)],
+        )
+        result = _find_best_pair(ep, min_gap=-15.0, max_gap=600.0)
+        assert result is not None
+        assert len(result) == 1
+
+    def test_inverted_pair_skips_to_second_candidate(self):
+        # First open candidate is AFTER the close → invalid.
+        # Second open candidate is BEFORE the close → valid.
+        ep = self._make_ep(
+            [
+                _Match(score=0.95, start=900.0, end=910.0),  # after close → invalid
+                _Match(score=0.88, start=10.0, end=20.0),  # before close → valid
+            ],
+            [_Match(score=0.85, start=50.0, end=60.0)],
+        )
+        result = _find_best_pair(ep, min_gap=-15.0, max_gap=600.0)
+        assert result is not None
+
+    def test_no_valid_pair_returns_none(self):
+        # Both detected positions have close before open
+        ep = self._make_ep(
+            [_Match(score=0.9, start=500.0, end=510.0)],
+            [_Match(score=0.9, start=100.0, end=110.0)],
+        )
+        result = _find_best_pair(ep, min_gap=-15.0, max_gap=600.0)
+        assert result is None
+
+    def test_empty_candidates_returns_none(self):
+        ep = self._make_ep([], [])
+        assert _find_best_pair(ep, min_gap=-15.0, max_gap=600.0) is None
 
 
 # ---------------------------------------------------------------------------
@@ -423,10 +472,10 @@ class TestNextUncertain:
         state = PipelineState()
         ep1 = state.episode("ep1")
         ep1.open_class = _UNC
-        ep1.open_score = 0.85
+        ep1.open_candidates = [_Match(score=0.85, start=0.0, end=1.0)]
         ep2 = state.episode("ep2")
         ep2.open_class = _UNC
-        ep2.open_score = 0.92
+        ep2.open_candidates = [_Match(score=0.92, start=0.0, end=1.0)]
         result = _next_uncertain(state)
         assert result == ("ep2", "open")
 
@@ -434,10 +483,10 @@ class TestNextUncertain:
         state = PipelineState()
         ep1 = state.episode("ep1")
         ep1.open_class = _UNC
-        ep1.open_score = 0.92
+        ep1.open_candidates = [_Match(score=0.92, start=0.0, end=1.0)]
         ep2 = state.episode("ep2")
         ep2.open_class = _UNC
-        ep2.open_score = 0.85
+        ep2.open_candidates = [_Match(score=0.85, start=0.0, end=1.0)]
         result = _next_uncertain(state, exclude={("open", "ep1")})
         assert result == ("ep2", "open")
 
@@ -445,7 +494,7 @@ class TestNextUncertain:
         state = PipelineState()
         ep = state.episode("ep1")
         ep.open_class = _UNC
-        ep.open_score = 0.0
+        # No candidates → open_score property returns 0.0 → excluded by _next_uncertain
         assert _next_uncertain(state) is None
 
 
@@ -454,13 +503,9 @@ class TestReviewOneTarget:
         state = PipelineState()
         ep = state.episode(stem)
         ep.source = str(tmp_path / f"{stem}.mp3")
-        ep.open_score = 0.92
-        ep.open_start = 5.0
-        ep.open_end = 15.0
+        ep.open_candidates = [_Match(score=0.92, start=5.0, end=15.0)]
         ep.open_class = _UNC
-        ep.close_score = 0.87
-        ep.close_start = 30.0
-        ep.close_end = 40.0
+        ep.close_candidates = [_Match(score=0.87, start=30.0, end=40.0)]
         ep.close_class = _UNC
         return state
 
@@ -519,7 +564,7 @@ class TestReviewOneTarget:
         # ep002 at 0.95 is above theta_plus and should auto-classify positive
         ep2 = state.episode("ep002")
         ep2.source = str(tmp_path / "ep002.mp3")
-        ep2.open_score = 0.95
+        ep2.open_candidates = [_Match(score=0.95, start=0.0, end=1.0)]
         ep2.open_class = _UNC
         self._review(state, "ep001", "open", ["a"], tmp_path)
         assert state.episodes["ep002"].open_class == _POS
@@ -554,13 +599,9 @@ class TestPairAndCut:
     def _make_ep(self):
         ep = EpisodeState()
         ep.source = "ep001.mp3"
-        ep.open_score = 0.9
-        ep.open_start = 0.0
-        ep.open_end = 10.0
+        ep.open_candidates = [_Match(score=0.9, start=0.0, end=10.0)]
         ep.open_class = _POS
-        ep.close_score = 0.9
-        ep.close_start = 30.0
-        ep.close_end = 40.0
+        ep.close_candidates = [_Match(score=0.9, start=30.0, end=40.0)]
         ep.close_class = _POS
         return ep
 
@@ -668,6 +709,138 @@ class TestPairAndCut:
                 dry_run=False,
             )
         assert result == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# _cut_cuttable
+# ---------------------------------------------------------------------------
+
+
+class TestCutCuttable:
+    def _make_state(self, tmp_path):
+        state = PipelineState()
+        ep = state.episode("ep001")
+        ep.source = str(tmp_path / "remote" / "ep001.mp3")
+        ep.open_class = _POS
+        ep.close_class = _POS
+        return state
+
+    def _make_kwargs(self, tmp_path):
+        return dict(
+            remote_dir=tmp_path / "remote",
+            output_dir=tmp_path / "out",
+            min_gap=-15.0,
+            max_gap=600.0,
+            yes=True,
+            dry_run=False,
+            state_path=tmp_path / "state.toml",
+        )
+
+    def test_no_cuttable_returns_zeros(self, tmp_path):
+        state = PipelineState()
+        result = _cut_cuttable(state, **self._make_kwargs(tmp_path))
+        assert result == (0, 0, 0)
+
+    def test_missing_source_increments_skipped(self, tmp_path, capsys):
+        state = self._make_state(tmp_path)
+        (tmp_path / "remote").mkdir(parents=True)
+        n_cut, n_skipped, n_failed = _cut_cuttable(state, **self._make_kwargs(tmp_path))
+        assert n_cut == 0
+        assert n_skipped == 1
+        assert "SKIP" in capsys.readouterr().out
+
+    def test_cut_result_marks_episode_and_saves(self, tmp_path):
+        state = self._make_state(tmp_path)
+        source = tmp_path / "remote" / "ep001.mp3"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"audio")
+        state_path = tmp_path / "state.toml"
+        with patch("part_io.cli.remote_pipeline._pair_and_cut", return_value="cut"):
+            n_cut, n_skipped, n_failed = _cut_cuttable(
+                state, **{**self._make_kwargs(tmp_path), "state_path": state_path}
+            )
+        assert n_cut == 1
+        assert n_skipped == 0
+        assert n_failed == 0
+        assert PipelineState.load(state_path).episodes["ep001"].cut is True
+
+    def test_failed_result_increments_failed(self, tmp_path):
+        state = self._make_state(tmp_path)
+        source = tmp_path / "remote" / "ep001.mp3"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"audio")
+        with patch("part_io.cli.remote_pipeline._pair_and_cut", return_value="failed"):
+            _, _, n_failed = _cut_cuttable(state, **self._make_kwargs(tmp_path))
+        assert n_failed == 1
+
+    def test_already_cut_episodes_skipped(self, tmp_path):
+        state = self._make_state(tmp_path)
+        state.episodes["ep001"].cut = True
+        result = _cut_cuttable(state, **self._make_kwargs(tmp_path))
+        assert result == (0, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# _run_review_loop
+# ---------------------------------------------------------------------------
+
+
+class TestRunReviewLoop:
+    def _make_state(self, tmp_path, n=3):
+        state = PipelineState()
+        for i in range(n):
+            stem = f"ep{i:03d}"
+            ep = state.episode(stem)
+            ep.source = str(tmp_path / f"{stem}.mp3")
+            ep.open_candidates = [_Match(score=0.9 - i * 0.01, start=5.0, end=15.0)]
+            ep.open_class = _UNC
+        return state
+
+    def _mock_proc(self):
+        p = MagicMock()
+        p.poll.return_value = None
+        return p
+
+    def _loop(self, state, tmp_path, keys, max_decisions=None):
+        state_path = tmp_path / "state.toml"
+        with patch("part_io.cli.remote_pipeline._getch", side_effect=keys):
+            with patch(
+                "part_io.cli.remote_pipeline._start_audio_segment",
+                return_value=self._mock_proc(),
+            ):
+                with patch("part_io.cli.remote_pipeline._stop_audio"):
+                    _run_review_loop(
+                        state,
+                        open_sample=tmp_path / "open.mp3",
+                        close_sample=tmp_path / "close.mp3",
+                        default_floor=0.8,
+                        state_path=state_path,
+                        max_decisions=max_decisions,
+                    )
+
+    def test_stops_after_max_decisions(self, tmp_path):
+        state = self._make_state(tmp_path, n=5)
+        # 'a' approves each target; with max_decisions=2 only 2 should be classified
+        self._loop(state, tmp_path, keys=["a"] * 10, max_decisions=2)
+        n_pos = sum(1 for ep in state.episodes.values() if ep.open_class == _POS)
+        assert n_pos == 2
+
+    def test_no_max_reviews_all(self, tmp_path):
+        state = self._make_state(tmp_path, n=3)
+        self._loop(state, tmp_path, keys=["a"] * 3, max_decisions=None)
+        assert all(ep.open_class == _POS for ep in state.episodes.values())
+
+    def test_skips_do_not_count_toward_max(self, tmp_path):
+        # ep000=0.90, ep001=0.89, ep002=0.88 (descending order of review)
+        state = self._make_state(tmp_path, n=3)
+        # Skip ep000 (0.90), approve ep001 (0.89) → decisions=1, loop stops.
+        # theta_plus becomes 0.89 → ep000 auto-classifies positive (0.90 >= 0.89).
+        # ep002 (0.88 < 0.89) stays uncertain.
+        self._loop(state, tmp_path, keys=["s", "a"], max_decisions=1)
+        n_pos = sum(1 for ep in state.episodes.values() if ep.open_class == _POS)
+        n_unc = sum(1 for ep in state.episodes.values() if ep.open_class == _UNC)
+        assert n_pos == 2  # ep001 (direct) + ep000 (auto-classified)
+        assert n_unc == 1  # ep002 remains uncertain
 
 
 # ---------------------------------------------------------------------------
