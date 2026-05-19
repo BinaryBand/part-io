@@ -54,6 +54,7 @@ def _print_help() -> None:
     print("  remote-review       Generate open/close review bundles from downloads/remote/")
     print("  remote-cut          Cut ad segments from labeled remote episodes")
     print("  remote-loop         Generate → review → cut one episode at a time (streamlined)")
+    print("  remote-promote      Safely replace remote files with staged cleaned versions")
     print("  compile         Generate Pydantic model schemas into part_io/models/schemas")
     print("  generate-tasks  Regenerate config/generated.mk")
     print("  check-tasks     Verify config/generated.mk is current")
@@ -161,6 +162,7 @@ _PASSTHROUGH_CMDS = {
     "remote-review",
     "remote-cut",
     "remote-loop",
+    "remote-promote",
 }
 
 
@@ -202,6 +204,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace, extra: 
     if args.command in ("remote-review", "remote-cut", "remote-loop"):
         sub = args.command.split("-", 1)[1]
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", sub, *extra]))
+    if args.command == "remote-promote":
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_promote", *extra]))
     if args.command == "compile":
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.compile", *extra]))
     if args.command == "generate-tasks":

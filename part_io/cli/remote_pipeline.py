@@ -19,6 +19,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -156,6 +157,7 @@ class RunSettings:
     open_sample: str = "open.mp3"
     close_sample: str = "close.mp3"
     output_dir: str = "downloads/remove"
+    debug: bool = False
 
 
 def _fmt_seg(s: Segment) -> str:
@@ -247,6 +249,7 @@ def _load_settings(raw: dict) -> RunSettings:
         open_sample=str(raw.get("open_sample", "open.mp3")),
         close_sample=str(raw.get("close_sample", "close.mp3")),
         output_dir=str(raw.get("output_dir", "downloads/remove")),
+        debug=bool(raw.get("debug", False)),
     )
 
 
@@ -387,6 +390,7 @@ class PipelineState:
             f"open_sample = {json.dumps(settings.open_sample)}\n",
             f"close_sample = {json.dumps(settings.close_sample)}\n",
             f"output_dir = {json.dumps(settings.output_dir)}\n",
+            f"debug = {str(settings.debug).lower()}\n",
         ]
         lines += setting_lines
         for kind, target in [("open", self.open_target), ("close", self.close_target)]:
@@ -414,21 +418,67 @@ class PipelineState:
 # ---------------------------------------------------------------------------
 
 
-# Epistemic uncertainty applied when only one confirmed example exists per class.
-# With a single sample, variance is undefined, so we conservatively assume this buffer.
-# After two or more samples, variance-based MoE takes over and this floor is irrelevant.
+# Two-tailed 95% t-critical values indexed by sample size n (df = n-1).
+# For n >= 31 the normal approximation (1.960) is used.
+# n < 2 is not in this table; _moe handles those by returning math.inf.
+_T_CRIT: dict[int, float] = {
+    2: 12.706,
+    3: 4.303,
+    4: 3.182,
+    5: 2.776,
+    6: 2.571,
+    7: 2.447,
+    8: 2.365,
+    9: 2.306,
+    10: 2.262,
+    15: 2.131,
+    20: 2.086,
+    25: 2.060,
+    30: 2.042,
+}
+_T_CRIT_LARGE = 1.960
+
+
+def _t_critical(n: int) -> float:
+    """95% two-tailed t-critical value for n samples (df = n-1)."""
+    if n < 2:
+        return math.inf
+    if n >= 31:
+        return _T_CRIT_LARGE
+    for threshold in sorted(_T_CRIT, reverse=True):
+        if n >= threshold:
+            return _T_CRIT[threshold]
+    return math.inf
+
+
 _SINGLE_SAMPLE_MOE = 0.05
 
 
-def _moe(scores: list[float], k: float = 1.5) -> float:
+def _moe(scores: list[float], k: float | None = None) -> float:
+    """Margin of error using the t-distribution (95% CI on the sample mean).
+
+    Returns math.inf for n < 2 so that a single confirmed example never
+    triggers auto-classification — the uncertain zone collapses only as
+    evidence accumulates across multiple confirmed samples.
+
+    Compatibility mode: when *k* is provided, use the legacy stddev-based
+    formula used by older tests and callers.
+    """
     n = len(scores)
-    if n == 0:
-        return 0.0
-    if n == 1:
-        return _SINGLE_SAMPLE_MOE
+    if k is not None:
+        if n == 0:
+            return 0.0
+        if n == 1:
+            return _SINGLE_SAMPLE_MOE
+        mean = sum(scores) / n
+        variance = sum((s - mean) ** 2 for s in scores) / n
+        return k * math.sqrt(variance)
+
+    if n < 2:
+        return math.inf
     mean = sum(scores) / n
-    variance = sum((s - mean) ** 2 for s in scores) / n
-    return k * math.sqrt(variance)
+    variance = sum((s - mean) ** 2 for s in scores) / (n - 1)  # Bessel's correction
+    return _t_critical(n) * math.sqrt(variance) / math.sqrt(n)
 
 
 def _compute_thresholds(target: TargetState) -> tuple[float, float]:
@@ -440,6 +490,7 @@ def _compute_thresholds(target: TargetState) -> tuple[float, float]:
                                   negative BY the uncertainty buffer.
     The uncertain zone (θ⁻, θ⁺) widens with high variance and narrows as evidence accumulates.
     With no positives: θ⁺ = +inf. With no negatives: θ⁻ = -inf.
+    With fewer than 2 confirmed samples of either kind, moe = inf so nothing auto-classifies.
     """
     pos = [s.score for s in target.positives]
     neg = [s.score for s in target.negatives]
@@ -541,7 +592,9 @@ def _apply_sticky_loop_args(args: argparse.Namespace, state: PipelineState) -> N
     _apply_sticky_cut_args(args, state)
     s = state.settings
     args.quiz_size = int(_resolve_opt(args.quiz_size, s.quiz_size))
+    args.debug = bool(_resolve_opt(args.debug, s.debug))
     s.quiz_size = args.quiz_size
+    s.debug = args.debug
 
 
 # ---------------------------------------------------------------------------
@@ -915,7 +968,12 @@ def _count_uncertain(state: PipelineState) -> int:
 
 
 def _collect_uncertain_candidates(state: PipelineState) -> list[_QuizItem]:
-    """Return all candidates in the uncertain zone (θ⁻, θ⁺), sorted by score descending."""
+    """Return all candidates in the uncertain zone (θ⁻, θ⁺).
+
+    Sorted by (candidate_idx, -score): all top candidates across every uncertain
+    (stem, kind) pair come first, then all second candidates, etc. This ensures
+    equal representation across pairs before diving deeper into any single one.
+    """
     tp_o, tm_o = _compute_thresholds(state.open_target)
     tp_c, tm_c = _compute_thresholds(state.close_target)
     items: list[_QuizItem] = []
@@ -928,7 +986,7 @@ def _collect_uncertain_candidates(state: PipelineState) -> list[_QuizItem]:
             for i, c in enumerate(ep.close_candidates):
                 if tm_c < c.score < tp_c:
                     items.append(_QuizItem(stem=stem, kind="close", candidate_idx=i, score=c.score))
-    items.sort(key=lambda x: x.score, reverse=True)
+    items.sort(key=lambda x: (x.candidate_idx, -x.score))
     return items
 
 
@@ -1120,6 +1178,8 @@ def _pair_and_cut(
     dry_run: bool,
     inclusive: bool = False,
     fade_dur: float = 0.5,
+    debug: bool = False,
+    debug_dir: Path | None = None,
 ) -> str:
     """Pair open/close from ep_state and cut. Returns 'cut', 'skipped', or 'failed'."""
     if not ep_state.is_cuttable():
@@ -1164,16 +1224,56 @@ def _pair_and_cut(
         cuts = [(seg.cut_start, seg.cut_end) for seg in segments]
     else:
         cuts = [(seg.open_end, seg.close_start) for seg in segments]
+
+    if debug:
+        clip_dir = debug_dir or (output_dir / "debug_ads")
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        wrote = 0
+        for idx, (cut_start, cut_end) in enumerate(cuts, start=1):
+            clip_path = clip_dir / f"{stem}__ad_{idx:02d}.mp3"
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source),
+                "-ss",
+                f"{cut_start:.3f}",
+                "-to",
+                f"{cut_end:.3f}",
+                "-c",
+                "copy",
+                str(clip_path),
+            ]
+            result = run_resolved(cmd, capture_output=True)
+            if result.returncode != 0:
+                print(f"  DEBUG FAILED: could not write {clip_path}", file=sys.stderr)
+                return "failed"
+            wrote += 1
+        print(f"  Debug clips written: {wrote} -> {clip_dir}")
+
     spans = _spans_from_cuts(cuts)
     filter_complex, _ = _build_filter_complex(spans, fade_dur=fade_dur)
-    exit_code = _run_ffmpeg(source, filter_complex, output_path)
 
-    if exit_code != 0:
-        print(f"  FAILED: ffmpeg exited {exit_code}", file=sys.stderr)
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+        temp_path = Path(temp_file.name)
+
+    try:
+        exit_code = _run_ffmpeg(source, filter_complex, temp_path)
+        if exit_code != 0:
+            temp_path.unlink(missing_ok=True)
+            print(f"  FAILED: ffmpeg exited {exit_code}", file=sys.stderr)
+            return "failed"
+
+        temp_path.replace(output_path)
+        print(f"  Written: {output_path}")
+        return "cut"
+    except Exception as exc:
+        temp_path.unlink(missing_ok=True)
+        print(f"  FAILED: {exc}", file=sys.stderr)
         return "failed"
-
-    print(f"  Written: {output_path}")
-    return "cut"
 
 
 # ---------------------------------------------------------------------------
@@ -1193,6 +1293,8 @@ def _cut_cuttable(
     state_path: Path,
     inclusive: bool = False,
     fade_dur: float = 0.5,
+    debug: bool = False,
+    debug_dir: Path | None = None,
 ) -> tuple[int, int, int]:
     """Cut all cuttable episodes. Returns (n_cut, n_skipped, n_failed)."""
     cuttable = [
@@ -1217,6 +1319,8 @@ def _cut_cuttable(
             dry_run=dry_run,
             inclusive=inclusive,
             fade_dur=fade_dur,
+            debug=debug,
+            debug_dir=debug_dir,
         )
         if result == "cut":
             ep_state.cut = True
@@ -1422,6 +1526,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         state_path=state_path,
         inclusive=args.inclusive,
         fade_dur=args.fade,
+        debug=args.debug,
     )
     n_remain_undet = sum(1 for ep in all_full if not state.episode(ep.stem).is_detected())
     n_remain_unc = _count_uncertain(state)
@@ -1562,6 +1667,12 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         default=None,
         help="Re-detect and re-cut episodes",
+    )
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        default=None,
+        help="Write each planned cut ad segment to output_dir/debug_ads for review.",
     )
 
 

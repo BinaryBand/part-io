@@ -98,6 +98,11 @@
           "title": "Close Sample",
           "type": "string"
         },
+        "debug": {
+          "default": false,
+          "title": "Debug",
+          "type": "boolean"
+        },
         "dry_run": {
           "default": false,
           "title": "Dry Run",
