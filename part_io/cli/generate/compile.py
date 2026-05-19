@@ -14,7 +14,7 @@ def _write_schema(path: Path, schema: dict) -> None:
 
 
 def main() -> None:
-    schemas_dir = Path(__file__).resolve().parents[1] / "models" / "schemas"
+    schemas_dir = Path(__file__).resolve().parents[2] / "models" / "schemas"
     _write_schema(
         schemas_dir / "remote_pipeline_state.schema.json",
         RemotePipelineStateModel.model_json_schema(),

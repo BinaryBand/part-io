@@ -26,6 +26,24 @@
           "title": "Cut",
           "type": "boolean"
         },
+        "intro_candidates": {
+          "items": {
+            "$ref": "#/$defs/MatchModel"
+          },
+          "title": "Intro Candidates",
+          "type": "array"
+        },
+        "intro_class": {
+          "default": "undetected",
+          "enum": [
+            "positive",
+            "negative",
+            "uncertain",
+            "undetected"
+          ],
+          "title": "Intro Class",
+          "type": "string"
+        },
         "open_candidates": {
           "items": {
             "$ref": "#/$defs/MatchModel"
@@ -42,6 +60,24 @@
             "undetected"
           ],
           "title": "Open Class",
+          "type": "string"
+        },
+        "outro_candidates": {
+          "items": {
+            "$ref": "#/$defs/MatchModel"
+          },
+          "title": "Outro Candidates",
+          "type": "array"
+        },
+        "outro_class": {
+          "default": "undetected",
+          "enum": [
+            "positive",
+            "negative",
+            "uncertain",
+            "undetected"
+          ],
+          "title": "Outro Class",
           "type": "string"
         },
         "source": {
@@ -118,6 +154,11 @@
           "title": "Inclusive",
           "type": "boolean"
         },
+        "intro_sample": {
+          "default": "intro.mp3",
+          "title": "Intro Sample",
+          "type": "string"
+        },
         "max_gap": {
           "default": 300.0,
           "title": "Max Gap",
@@ -147,6 +188,18 @@
           "default": "downloads/remove",
           "title": "Output Dir",
           "type": "string"
+        },
+        "outro_sample": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outro Sample"
         },
         "overwrite": {
           "default": false,

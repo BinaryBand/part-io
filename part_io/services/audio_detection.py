@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 
 class MatchLike(Protocol):
@@ -21,7 +21,21 @@ class MatchLike(Protocol):
     score: float
 
 
-DetectionKind = Literal["open", "close", "intro"]
+class EpisodeStateLike(Protocol):
+    """Structural episode state shape needed for detection mutations."""
+
+    source: str
+    open_candidates: list[Any]
+    open_class: str
+    close_candidates: list[Any]
+    close_class: str
+    intro_candidates: list[Any]
+    intro_class: str
+    outro_candidates: list[Any]
+    outro_class: str
+
+
+DetectionKind = Literal["open", "close", "intro", "outro"]
 
 
 @dataclass(frozen=True)
@@ -55,8 +69,32 @@ class DetectionBatchRequest:
     open_sample: Path
     close_sample: Path
     intro_sample: Path | None
+    outro_sample: Path | None
     open_floor: float
     close_floor: float
+
+
+def filter_matches_by_position(
+    matches: Sequence[MatchLike],
+    *,
+    kind: DetectionKind,
+    source_duration_seconds: float,
+) -> list[MatchLike]:
+    """Keep only positionally valid intro/outro matches.
+
+    Intro candidates must start in the first 25% of the source duration.
+    Outro candidates must start in the last 25% of the source duration.
+    Open/close matches are returned unchanged.
+    """
+    if source_duration_seconds <= 0:
+        return list(matches)
+    if kind == "intro":
+        max_intro_start = source_duration_seconds * 0.25
+        return [match for match in matches if float(match.start_seconds) <= max_intro_start]
+    if kind == "outro":
+        min_outro_start = source_duration_seconds * 0.75
+        return [match for match in matches if float(match.start_seconds) >= min_outro_start]
+    return list(matches)
 
 
 def detect_top_matches(
@@ -154,7 +192,7 @@ def run_detection_batch_jobs(
 
 
 def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[DetectionBatchJob]:
-    """Build detection jobs for open/close and optional intro samples."""
+    """Build detection jobs for open/close and optional intro/outro samples."""
     jobs = [
         DetectionBatchJob(
             stem=episode.stem,
@@ -187,6 +225,18 @@ def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[Detection
             for episode in request.episodes
         ]
 
+    if request.outro_sample is not None and request.outro_sample.exists():
+        jobs += [
+            DetectionBatchJob(
+                stem=episode.stem,
+                source_path=episode,
+                sample_path=request.outro_sample,
+                kind="outro",
+                floor=0.0,
+            )
+            for episode in request.episodes
+        ]
+
     return jobs
 
 
@@ -210,3 +260,38 @@ def run_detection_batch(
         workers=workers,
     )
     return jobs, results
+
+
+def apply_batch_result_to_episode(
+    result: DetectionBatchResult,
+    episode_state: EpisodeStateLike,
+    *,
+    match_factory: Callable[[MatchLike], Any],
+    uncertain_label: str,
+    undetected_label: str,
+) -> tuple[str, str | None]:
+    """Apply one detection result to episode state and return (score_str, error_msg)."""
+    episode_state.source = str(result.source_path)
+    matches = [match_factory(match) for match in result.matches]
+
+    if result.kind == "open":
+        episode_state.open_candidates = matches
+        episode_state.open_class = uncertain_label if matches else undetected_label
+    elif result.kind == "close":
+        episode_state.close_candidates = matches
+        episode_state.close_class = uncertain_label if matches else undetected_label
+    elif result.kind == "intro":
+        episode_state.intro_candidates = matches
+        episode_state.intro_class = uncertain_label if matches else undetected_label
+    else:  # outro
+        episode_state.outro_candidates = matches
+        episode_state.outro_class = uncertain_label if matches else undetected_label
+
+    score_str = f"{result.matches[0].score:.4f}" if result.matches else "none"
+    error_msg = None
+    if result.error:
+        error_msg = (
+            "  WARNING: detection failed for "
+            f"{result.source_path.name} ({result.sample_path.name}): {result.error}"
+        )
+    return score_str, error_msg

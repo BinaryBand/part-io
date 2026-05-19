@@ -2,10 +2,24 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from part_io.adapters.audio.matcher import AudioMatch
 from part_io.services import audio_detection
+
+
+@dataclass
+class _FakeEpisodeState:
+    source: str = ""
+    open_candidates: list[tuple[float, float, float]] = field(default_factory=list)
+    open_class: str = "undetected"
+    close_candidates: list[tuple[float, float, float]] = field(default_factory=list)
+    close_class: str = "undetected"
+    intro_candidates: list[tuple[float, float, float]] = field(default_factory=list)
+    intro_class: str = "undetected"
+    outro_candidates: list[tuple[float, float, float]] = field(default_factory=list)
+    outro_class: str = "undetected"
 
 
 def test_detect_top_matches_sorts_and_limits(monkeypatch, tmp_path: Path) -> None:
@@ -117,6 +131,7 @@ def test_build_detection_batch_jobs_includes_intro_when_present(tmp_path: Path) 
         open_sample=open_sample,
         close_sample=close_sample,
         intro_sample=intro_sample,
+        outro_sample=None,
         open_floor=0.2,
         close_floor=0.1,
     )
@@ -127,6 +142,32 @@ def test_build_detection_batch_jobs_includes_intro_when_present(tmp_path: Path) 
     assert sum(1 for job in jobs if job.kind == "open") == 2
     assert sum(1 for job in jobs if job.kind == "close") == 2
     assert sum(1 for job in jobs if job.kind == "intro") == 2
+
+
+def test_build_detection_batch_jobs_includes_optional_outro_when_present(tmp_path: Path) -> None:
+    episode_a = tmp_path / "ep_a.mp3"
+    open_sample = tmp_path / "open.mp3"
+    close_sample = tmp_path / "close.mp3"
+    outro_sample = tmp_path / "outro.mp3"
+    for path in (episode_a, open_sample, close_sample, outro_sample):
+        path.write_bytes(b"x")
+
+    request = audio_detection.DetectionBatchRequest(
+        episodes=[episode_a],
+        open_sample=open_sample,
+        close_sample=close_sample,
+        intro_sample=None,
+        outro_sample=outro_sample,
+        open_floor=0.2,
+        close_floor=0.1,
+    )
+
+    jobs = audio_detection.build_detection_batch_jobs(request)
+
+    assert len(jobs) == 3
+    assert sum(1 for job in jobs if job.kind == "open") == 1
+    assert sum(1 for job in jobs if job.kind == "close") == 1
+    assert sum(1 for job in jobs if job.kind == "outro") == 1
 
 
 def test_run_detection_batch_returns_jobs_and_results(monkeypatch, tmp_path: Path) -> None:
@@ -155,6 +196,7 @@ def test_run_detection_batch_returns_jobs_and_results(monkeypatch, tmp_path: Pat
         open_sample=open_sample,
         close_sample=close_sample,
         intro_sample=None,
+        outro_sample=None,
         open_floor=0.2,
         close_floor=0.1,
     )
@@ -171,3 +213,145 @@ def test_run_detection_batch_returns_jobs_and_results(monkeypatch, tmp_path: Pat
     assert len(jobs) == 2
     assert len(results) == 1
     assert results[0].kind in ("open", "close")
+
+
+def test_apply_batch_result_to_episode_sets_open_fields(tmp_path: Path) -> None:
+    source = tmp_path / "ep.mp3"
+    sample = tmp_path / "open.mp3"
+    source.write_bytes(b"x")
+    sample.write_bytes(b"x")
+    result = audio_detection.DetectionBatchResult(
+        stem="ep",
+        source_path=source,
+        sample_path=sample,
+        kind="open",
+        matches=[AudioMatch(start_seconds=1.0, end_seconds=2.0, duration_seconds=1.0, score=0.9)],
+    )
+    episode = _FakeEpisodeState()
+
+    score_str, error_msg = audio_detection.apply_batch_result_to_episode(
+        result,
+        episode,
+        match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
+        uncertain_label="uncertain",
+        undetected_label="undetected",
+    )
+
+    assert error_msg is None
+    assert score_str == "0.9000"
+    assert episode.source == str(source)
+    assert episode.open_class == "uncertain"
+    assert episode.open_candidates == [(0.9, 1.0, 2.0)]
+
+
+def test_apply_batch_result_to_episode_handles_close_no_matches_with_error(tmp_path: Path) -> None:
+    source = tmp_path / "ep.mp3"
+    sample = tmp_path / "close.mp3"
+    source.write_bytes(b"x")
+    sample.write_bytes(b"x")
+    result = audio_detection.DetectionBatchResult(
+        stem="ep",
+        source_path=source,
+        sample_path=sample,
+        kind="close",
+        matches=[],
+        error="boom",
+    )
+    episode = _FakeEpisodeState()
+
+    score_str, error_msg = audio_detection.apply_batch_result_to_episode(
+        result,
+        episode,
+        match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
+        uncertain_label="uncertain",
+        undetected_label="undetected",
+    )
+
+    assert score_str == "none"
+    assert "WARNING: detection failed" in (error_msg or "")
+    assert episode.close_class == "undetected"
+    assert episode.close_candidates == []
+
+
+def test_apply_batch_result_to_episode_sets_intro_fields(tmp_path: Path) -> None:
+    source = tmp_path / "ep.mp3"
+    sample = tmp_path / "intro.mp3"
+    source.write_bytes(b"x")
+    sample.write_bytes(b"x")
+    result = audio_detection.DetectionBatchResult(
+        stem="ep",
+        source_path=source,
+        sample_path=sample,
+        kind="intro",
+        matches=[AudioMatch(start_seconds=4.0, end_seconds=5.0, duration_seconds=1.0, score=1.1)],
+    )
+    episode = _FakeEpisodeState()
+
+    score_str, _ = audio_detection.apply_batch_result_to_episode(
+        result,
+        episode,
+        match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
+        uncertain_label="uncertain",
+        undetected_label="undetected",
+    )
+
+    assert score_str == "1.1000"
+    assert episode.intro_class == "uncertain"
+    assert episode.intro_candidates == [(1.1, 4.0, 5.0)]
+
+
+def test_apply_batch_result_to_episode_sets_outro_fields(tmp_path: Path) -> None:
+    source = tmp_path / "ep.mp3"
+    sample = tmp_path / "outro.mp3"
+    source.write_bytes(b"x")
+    sample.write_bytes(b"x")
+    result = audio_detection.DetectionBatchResult(
+        stem="ep",
+        source_path=source,
+        sample_path=sample,
+        kind="outro",
+        matches=[AudioMatch(start_seconds=94.0, end_seconds=95.0, duration_seconds=1.0, score=1.2)],
+    )
+    episode = _FakeEpisodeState()
+
+    score_str, _ = audio_detection.apply_batch_result_to_episode(
+        result,
+        episode,
+        match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
+        uncertain_label="uncertain",
+        undetected_label="undetected",
+    )
+
+    assert score_str == "1.2000"
+    assert episode.outro_class == "uncertain"
+    assert episode.outro_candidates == [(1.2, 94.0, 95.0)]
+
+
+def test_filter_matches_by_position_limits_intro_to_first_quarter() -> None:
+    matches = [
+        AudioMatch(start_seconds=20.0, end_seconds=21.0, duration_seconds=1.0, score=0.8),
+        AudioMatch(start_seconds=30.0, end_seconds=31.0, duration_seconds=1.0, score=0.9),
+    ]
+
+    filtered = audio_detection.filter_matches_by_position(
+        matches,
+        kind="intro",
+        source_duration_seconds=100.0,
+    )
+
+    assert [m.start_seconds for m in filtered] == [20.0]
+
+
+def test_filter_matches_by_position_limits_outro_to_last_quarter() -> None:
+    matches = [
+        AudioMatch(start_seconds=74.0, end_seconds=75.0, duration_seconds=1.0, score=0.8),
+        AudioMatch(start_seconds=75.0, end_seconds=76.0, duration_seconds=1.0, score=0.9),
+    ]
+
+    filtered = audio_detection.filter_matches_by_position(
+        matches,
+        kind="outro",
+        source_duration_seconds=100.0,
+    )
+
+    assert [m.start_seconds for m in filtered] == [75.0]

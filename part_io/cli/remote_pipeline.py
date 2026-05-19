@@ -18,6 +18,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -33,7 +34,12 @@ from part_io.cli.audio_ad_remove import (
     _spans_from_cuts,
     _validate_segments,
 )
-from part_io.services.audio_detection import DetectionBatchRequest, run_detection_batch
+from part_io.services.audio_detection import (
+    DetectionBatchRequest,
+    apply_batch_result_to_episode,
+    filter_matches_by_position,
+    run_detection_batch,
+)
 from part_io.utils.exec import launch_resolved
 
 if TYPE_CHECKING:  # pragma: no cover - type-only import
@@ -106,6 +112,8 @@ class EpisodeState:
     close_class: str = _UND
     intro_candidates: list[_Match] = field(default_factory=list)
     intro_class: str = _UND
+    outro_candidates: list[_Match] = field(default_factory=list)
+    outro_class: str = _UND
     cut: bool = False
 
     # Read-only convenience properties so all existing callers of open_score etc. still work.
@@ -146,7 +154,12 @@ class EpisodeState:
         return self.intro_candidates[0].end if self.intro_candidates else 0.0
 
     def is_detected(self) -> bool:
-        return self.open_class != _UND or self.close_class != _UND or self.intro_class != _UND
+        return (
+            self.open_class != _UND
+            or self.close_class != _UND
+            or self.intro_class != _UND
+            or self.outro_class != _UND
+        )
 
     def is_cuttable(self) -> bool:
         return self.open_class == _POS and self.close_class == _POS
@@ -171,6 +184,7 @@ class RunSettings:
     open_sample: str = "open.mp3"
     close_sample: str = "close.mp3"
     intro_sample: str = "intro.mp3"
+    outro_sample: str | None = None
     output_dir: str = "downloads/remove"
     debug: bool = False
 
@@ -219,6 +233,7 @@ def _load_episode(raw: dict) -> EpisodeState:
         open_class=str(raw.get("open_class", _UND)),
         close_class=str(raw.get("close_class", _UND)),
         intro_class=str(raw.get("intro_class", _UND)),
+        outro_class=str(raw.get("outro_class", _UND)),
         cut=bool(raw.get("cut", False)),
     )
     # New format: candidates list
@@ -245,6 +260,8 @@ def _load_episode(raw: dict) -> EpisodeState:
         ]
     if "intro_candidates" in raw:
         ep.intro_candidates = [_load_match(m) for m in raw["intro_candidates"]]
+    if "outro_candidates" in raw:
+        ep.outro_candidates = [_load_match(m) for m in raw["outro_candidates"]]
     return ep
 
 
@@ -267,6 +284,7 @@ def _load_settings(raw: dict) -> RunSettings:
         open_sample=str(raw.get("open_sample", "open.mp3")),
         close_sample=str(raw.get("close_sample", "close.mp3")),
         intro_sample=str(raw.get("intro_sample", "intro.mp3")),
+        outro_sample=(str(raw["outro_sample"]) if raw.get("outro_sample") else None),
         output_dir=str(raw.get("output_dir", "downloads/remove")),
         debug=bool(raw.get("debug", False)),
     )
@@ -409,6 +427,11 @@ class PipelineState:
             f"open_sample = {json.dumps(settings.open_sample)}\n",
             f"close_sample = {json.dumps(settings.close_sample)}\n",
             f"intro_sample = {json.dumps(settings.intro_sample)}\n",
+            (
+                f"outro_sample = {json.dumps(settings.outro_sample)}\n"
+                if settings.outro_sample
+                else ""
+            ),
             f"output_dir = {json.dumps(settings.output_dir)}\n",
             f"debug = {str(settings.debug).lower()}\n",
         ]
@@ -423,6 +446,7 @@ class PipelineState:
             oc = ", ".join(_fmt_match(m) for m in ep.open_candidates)
             cc = ", ".join(_fmt_match(m) for m in ep.close_candidates)
             ic = ", ".join(_fmt_match(m) for m in ep.intro_candidates)
+            oc2 = ", ".join(_fmt_match(m) for m in ep.outro_candidates)
             lines += [
                 f"open_candidates  = [{oc}]\n",
                 f'open_class       = "{ep.open_class}"\n',
@@ -430,6 +454,8 @@ class PipelineState:
                 f'close_class      = "{ep.close_class}"\n',
                 f"intro_candidates = [{ic}]\n",
                 f'intro_class      = "{ep.intro_class}"\n',
+                f"outro_candidates = [{oc2}]\n",
+                f'outro_class      = "{ep.outro_class}"\n',
                 f"cut = {str(ep.cut).lower()}\n",
             ]
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -574,6 +600,7 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     args.open_sample = str(_resolve_opt(args.open_sample, s.open_sample))
     args.close_sample = str(_resolve_opt(args.close_sample, s.close_sample))
     args.intro_sample = str(_resolve_opt(args.intro_sample, s.intro_sample))
+    args.outro_sample = _resolve_opt(args.outro_sample, s.outro_sample)
     args.z_threshold = _resolve_opt(args.z_threshold, s.z_threshold)
     args.step_seconds = float(_resolve_opt(args.step_seconds, s.step_seconds))
     args.workers = int(_resolve_opt(args.workers, s.workers))
@@ -585,6 +612,7 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     s.open_sample = args.open_sample
     s.close_sample = args.close_sample
     s.intro_sample = args.intro_sample
+    s.outro_sample = str(args.outro_sample) if args.outro_sample else None
     s.z_threshold = args.z_threshold
     s.step_seconds = args.step_seconds
     s.workers = args.workers
@@ -633,6 +661,7 @@ def _detect_batch(
     open_sample: Path,
     close_sample: Path,
     intro_sample: Path | None = None,
+    outro_sample: Path | None = None,
     *,
     z_threshold: float | None,
     step_seconds: float,
@@ -651,12 +680,14 @@ def _detect_batch(
         _emit(f"  Floors from negatives: open={open_floor:.4f}  close={close_floor:.4f}")
 
     ep_by_stem = {ep.stem: ep for ep in episodes}
+    duration_by_stem = {ep.stem: _probe_audio_duration_seconds(ep) for ep in episodes}
     jobs, results = run_detection_batch(
         DetectionBatchRequest(
             episodes=episodes,
             open_sample=open_sample,
             close_sample=close_sample,
             intro_sample=intro_sample,
+            outro_sample=outro_sample,
             open_floor=open_floor,
             close_floor=close_floor,
         ),
@@ -670,32 +701,64 @@ def _detect_batch(
     for done, result in enumerate(results, start=1):
         stem = result.stem
         kind = result.kind
-        if result.error:
-            _emit(
-                "  WARNING: detection failed for "
-                f"{result.source_path.name} ({result.sample_path.name}): {result.error}"
-            )
-        matches = [
-            _Match(
+        filtered_result = result
+        if kind in ("intro", "outro"):
+            duration = duration_by_stem.get(stem)
+            if duration is not None:
+                filtered_result = type(result)(
+                    stem=result.stem,
+                    source_path=result.source_path,
+                    sample_path=result.sample_path,
+                    kind=result.kind,
+                    matches=filter_matches_by_position(
+                        result.matches,
+                        kind=result.kind,
+                        source_duration_seconds=duration,
+                    ),
+                    error=result.error,
+                )
+        ep_state = state.episode(stem)
+        score_str, error_msg = apply_batch_result_to_episode(
+            filtered_result,
+            ep_state,
+            match_factory=lambda match: _Match(
                 score=float(match.score),
                 start=float(match.start_seconds),
                 end=float(match.end_seconds),
-            )
-            for match in result.matches
-        ]
-        ep_state = state.episode(stem)
+            ),
+            uncertain_label=_UNC,
+            undetected_label=_UND,
+        )
+        if error_msg:
+            _emit(error_msg)
         ep_state.source = str(ep_by_stem[stem])
-        score_str = f"{matches[0].score:.4f}" if matches else "none"
-        if kind == "open":
-            ep_state.open_candidates = matches
-            ep_state.open_class = _UNC if matches else _UND
-        elif kind == "close":
-            ep_state.close_candidates = matches
-            ep_state.close_class = _UNC if matches else _UND
-        else:  # intro
-            ep_state.intro_candidates = matches
-            ep_state.intro_class = _UNC if matches else _UND
         _emit(f"  [{done}/{len(jobs)}] {kind:5}  {stem}  ({score_str})")
+
+
+def _probe_audio_duration_seconds(source_path: Path) -> float | None:
+    """Return source duration in seconds using ffprobe, or None when unavailable."""
+    result = run_resolved(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(source_path),
+        ],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    raw_out = result.stdout
+    text = raw_out.decode("utf-8", errors="ignore") if isinstance(raw_out, bytes) else str(raw_out)
+    try:
+        value = float(text.strip())
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and value > 0 else None
 
 
 # ---------------------------------------------------------------------------
@@ -815,15 +878,16 @@ class _UndoEntry:
     kind: str
     action: str
     segment: Segment
-    target_list: list[Segment]
+    target_list: list[Segment] | None  # None for intro/outro (no global target)
     prev_class: str = _UNC
 
 
 @dataclass(frozen=True)
 class _QuizItem:
     stem: str
-    kind: str  # "open" or "close"
-    candidate_idx: int  # index into open_candidates / close_candidates
+    kind: str  # "open", "close", "intro", or "outro"
+    # index into open_candidates / close_candidates / intro_candidates / outro_candidates
+    candidate_idx: int
     score: float  # candidate score (for sorting)
 
 
@@ -835,15 +899,117 @@ def _next_uncertain(
     for stem, ep in state.episodes.items():
         not_skipped_open = exclude is None or ("open", stem) not in exclude
         not_skipped_close = exclude is None or ("close", stem) not in exclude
+        not_skipped_intro = exclude is None or ("intro", stem) not in exclude
+        not_skipped_outro = exclude is None or ("outro", stem) not in exclude
         if ep.open_class == _UNC and ep.open_score > 0 and not_skipped_open:
             candidates.append((ep.open_score, stem, "open"))
         if ep.close_class == _UNC and ep.close_score > 0 and not_skipped_close:
             candidates.append((ep.close_score, stem, "close"))
+        if ep.intro_class == _UNC and ep.intro_score > 0 and not_skipped_intro:
+            candidates.append((ep.intro_score, stem, "intro"))
+        if ep.outro_class == _UNC and ep.outro_candidates and not_skipped_outro:
+            candidates.append((ep.outro_candidates[0].score, stem, "outro"))
     if not candidates:
         return None
     candidates.sort(reverse=True)
     _, stem, kind = candidates[0]
     return stem, kind
+
+
+def _kind_candidates(ep_state: EpisodeState, kind: str) -> list[_Match]:
+    if kind == "open":
+        return ep_state.open_candidates
+    if kind == "close":
+        return ep_state.close_candidates
+    if kind == "intro":
+        return ep_state.intro_candidates
+    return ep_state.outro_candidates
+
+
+def _kind_sample_path(
+    kind: str,
+    *,
+    open_sample: Path,
+    close_sample: Path,
+    intro_sample: Path,
+    outro_sample: Path,
+) -> Path:
+    if kind == "open":
+        return open_sample
+    if kind == "close":
+        return close_sample
+    if kind == "intro":
+        return intro_sample
+    return outro_sample
+
+
+def _kind_target(state: PipelineState, kind: str) -> TargetState | None:
+    if kind == "open":
+        return state.open_target
+    if kind == "close":
+        return state.close_target
+    return None
+
+
+def _get_kind_class(ep_state: EpisodeState, kind: str) -> str:
+    if kind == "open":
+        return ep_state.open_class
+    if kind == "close":
+        return ep_state.close_class
+    if kind == "intro":
+        return ep_state.intro_class
+    return ep_state.outro_class
+
+
+def _set_kind_class(ep_state: EpisodeState, kind: str, value: str) -> None:
+    if kind == "open":
+        ep_state.open_class = value
+    elif kind == "close":
+        ep_state.close_class = value
+    elif kind == "intro":
+        ep_state.intro_class = value
+    else:
+        ep_state.outro_class = value
+
+
+def _apply_review_decision(
+    *,
+    ep_state: EpisodeState,
+    item: _QuizItem,
+    target: TargetState | None,
+    source: Path,
+    candidate: _Match,
+    key: str,
+) -> tuple[str, Segment, list[Segment] | None]:
+    seg = Segment(
+        source=str(source), start=candidate.start, end=candidate.end, score=candidate.score
+    )
+    if key == "a":
+        if target is not None:
+            target.positives.append(seg)
+        _set_kind_class(ep_state, item.kind, _POS)
+        print("\napproved", file=sys.stderr)
+        return "approved", seg, (target.positives if target is not None else None)
+
+    if target is not None:
+        target.negatives.append(seg)
+    if item.kind in ("intro", "outro"):
+        _set_kind_class(ep_state, item.kind, _NEG)
+    print("\nrejected", file=sys.stderr)
+    return "rejected", seg, (target.negatives if target is not None else None)
+
+
+def _undo_last_review(state: PipelineState, history: list[_UndoEntry]) -> None:
+    entry = history.pop()
+    if entry.target_list is not None:
+        entry.target_list.remove(entry.segment)
+    prev_ep = state.episodes[entry.stem]
+    _set_kind_class(prev_ep, entry.kind, entry.prev_class)
+    _reclassify_all(state)
+    print(
+        f"\nundone ({entry.action} {entry.kind} for {entry.stem[:16]})",
+        file=sys.stderr,
+    )
 
 
 def _review_candidate(
@@ -852,6 +1018,8 @@ def _review_candidate(
     *,
     open_sample: Path,
     close_sample: Path,
+    intro_sample: Path,
+    outro_sample: Path,
     history: list[_UndoEntry],
 ) -> str:
     """Review one candidate interactively.
@@ -860,11 +1028,17 @@ def _review_candidate(
     """
     ep_state = state.episodes[item.stem]
     source = Path(ep_state.source)
-    snippet = open_sample if item.kind == "open" else close_sample
-    target = state.open_target if item.kind == "open" else state.close_target
-    all_candidates = ep_state.open_candidates if item.kind == "open" else ep_state.close_candidates
+    snippet = _kind_sample_path(
+        item.kind,
+        open_sample=open_sample,
+        close_sample=close_sample,
+        intro_sample=intro_sample,
+        outro_sample=outro_sample,
+    )
+    target = _kind_target(state, item.kind)
+    all_candidates = _kind_candidates(ep_state, item.kind)
+    prev_class = _get_kind_class(ep_state, item.kind)
     candidate = all_candidates[item.candidate_idx]
-    prev_class = ep_state.open_class if item.kind == "open" else ep_state.close_class
     n_total = len(all_candidates)
     position_label = f" [{item.candidate_idx + 1}/{n_total}]" if n_total > 1 else ""
 
@@ -887,23 +1061,14 @@ def _review_candidate(
             current_proc = _start_audio(snippet)
             print(f"\r{legend}", end="", flush=True, file=sys.stderr)
         elif key in ("a", "r"):
-            seg = Segment(
-                source=str(source), start=candidate.start, end=candidate.end, score=candidate.score
+            action, seg, lst = _apply_review_decision(
+                ep_state=ep_state,
+                item=item,
+                target=target,
+                source=source,
+                candidate=candidate,
+                key=key,
             )
-            if key == "a":
-                target.positives.append(seg)
-                if item.kind == "open":
-                    ep_state.open_class = _POS
-                else:
-                    ep_state.close_class = _POS
-                lst = target.positives
-                print("\napproved", file=sys.stderr)
-                action = "approved"
-            else:
-                target.negatives.append(seg)
-                lst = target.negatives
-                print("\nrejected", file=sys.stderr)
-                action = "rejected"
             history.append(
                 _UndoEntry(
                     stem=item.stem,
@@ -920,18 +1085,7 @@ def _review_candidate(
             print("\nskipped", file=sys.stderr)
             return "skipped"
         elif key == "u" and history:
-            entry = history.pop()
-            entry.target_list.remove(entry.segment)
-            prev_ep = state.episodes[entry.stem]
-            if entry.kind == "open":
-                prev_ep.open_class = entry.prev_class
-            else:
-                prev_ep.close_class = entry.prev_class
-            _reclassify_all(state)
-            print(
-                f"\nundone ({entry.action} {entry.kind} for {entry.stem[:16]})",
-                file=sys.stderr,
-            )
+            _undo_last_review(state, history)
             return "undone"
         elif key == "q":
             print("\nQuitting review.", file=sys.stderr)
@@ -945,16 +1099,24 @@ def _review_one_target(
     *,
     open_sample: Path,
     close_sample: Path,
+    intro_sample: Path,
+    outro_sample: Path,
     history: list[_UndoEntry],
 ) -> str:
     """Review the top candidate for (stem, kind). Returns 'classified', 'skipped', or 'undone'."""
     ep_state = state.episodes[stem]
-    all_candidates = ep_state.open_candidates if kind == "open" else ep_state.close_candidates
+    all_candidates = _kind_candidates(ep_state, kind)
     if not all_candidates:
         return "skipped"
     item = _QuizItem(stem=stem, kind=kind, candidate_idx=0, score=all_candidates[0].score)
     result = _review_candidate(
-        state, item, open_sample=open_sample, close_sample=close_sample, history=history
+        state,
+        item,
+        open_sample=open_sample,
+        close_sample=close_sample,
+        intro_sample=intro_sample,
+        outro_sample=outro_sample,
+        history=history,
     )
     return "classified" if result in ("approved", "rejected") else result
 
@@ -963,7 +1125,7 @@ def _count_uncertain(state: PipelineState) -> int:
     return sum(
         1
         for ep in state.episodes.values()
-        for cls in (ep.open_class, ep.close_class)
+        for cls in (ep.open_class, ep.close_class, ep.intro_class, ep.outro_class)
         if cls == _UNC
     )
 
@@ -987,6 +1149,14 @@ def _collect_uncertain_candidates(state: PipelineState) -> list[_QuizItem]:
             for i, c in enumerate(ep.close_candidates):
                 if tm_c < c.score < tp_c:
                     items.append(_QuizItem(stem=stem, kind="close", candidate_idx=i, score=c.score))
+        if ep.intro_class == _UNC:
+            # Intro has no global target, so no threshold — always require human review.
+            for i, c in enumerate(ep.intro_candidates):
+                items.append(_QuizItem(stem=stem, kind="intro", candidate_idx=i, score=c.score))
+        if ep.outro_class == _UNC:
+            # Outro has no global target, so no threshold — always require human review.
+            for i, c in enumerate(ep.outro_candidates):
+                items.append(_QuizItem(stem=stem, kind="outro", candidate_idx=i, score=c.score))
     items.sort(key=lambda x: (x.candidate_idx, -x.score))
     return items
 
@@ -996,6 +1166,8 @@ def _run_review_loop(
     *,
     open_sample: Path,
     close_sample: Path,
+    intro_sample: Path,
+    outro_sample: Path,
     state_path: Path,
     max_decisions: int | None = None,
 ) -> None:
@@ -1022,13 +1194,22 @@ def _run_review_loop(
             kind,
             open_sample=open_sample,
             close_sample=close_sample,
+            intro_sample=intro_sample,
+            outro_sample=outro_sample,
             history=history,
         )
         if result == "classified":
             decisions += 1
             state.save(state_path)
             ep = state.episodes[stem]
-            ep_class = ep.open_class if kind == "open" else ep.close_class
+            if kind == "open":
+                ep_class = ep.open_class
+            elif kind == "close":
+                ep_class = ep.close_class
+            elif kind == "intro":
+                ep_class = ep.intro_class
+            else:
+                ep_class = ep.outro_class
             if ep_class == _UNC:
                 # Rejection didn't auto-classify (conservative MoE); defer until re-run.
                 skipped.add((kind, stem))
@@ -1054,6 +1235,8 @@ def _run_quiz(
     *,
     open_sample: Path,
     close_sample: Path,
+    intro_sample: Path,
+    outro_sample: Path,
     state_path: Path,
 ) -> int:
     """Review a pre-collected set of uncertain candidates. Returns number of decisions made."""
@@ -1069,18 +1252,8 @@ def _run_quiz(
                 for item in remaining
                 if (item.stem, item.kind, item.candidate_idx) not in skipped_keys
                 and state.episodes.get(item.stem) is not None
-                and (
-                    state.episodes[item.stem].open_class
-                    if item.kind == "open"
-                    else state.episodes[item.stem].close_class
-                )
-                == _UNC
-                and item.candidate_idx
-                < len(
-                    state.episodes[item.stem].open_candidates
-                    if item.kind == "open"
-                    else state.episodes[item.stem].close_candidates
-                )
+                and _get_kind_class(state.episodes[item.stem], item.kind) == _UNC
+                and item.candidate_idx < len(_kind_candidates(state.episodes[item.stem], item.kind))
             ),
             None,
         )
@@ -1098,6 +1271,8 @@ def _run_quiz(
                 active,
                 open_sample=open_sample,
                 close_sample=close_sample,
+                intro_sample=intro_sample,
+                outro_sample=outro_sample,
                 history=history,
             )
         except KeyboardInterrupt:
@@ -1257,7 +1432,7 @@ def _pair_and_cut(
 
     spans = _spans_from_cuts(cuts)
     # If intro is detected, add a trim span to remove everything before it
-    if ep_state.intro_class != _UND and ep_state.intro_candidates:
+    if ep_state.intro_class == _POS and ep_state.intro_candidates:
         intro_end = ep_state.intro_end
         print(f"  Intro detected at {intro_end:.1f}s - trimming preroll before it")
         # Insert intro trim at the beginning of spans
@@ -1274,7 +1449,7 @@ def _pair_and_cut(
             print(f"  FAILED: ffmpeg exited {exit_code}", file=sys.stderr)
             return "failed"
 
-        temp_path.replace(output_path)
+        shutil.move(str(temp_path), str(output_path))
         print(f"  Written: {output_path}")
         return "cut"
     except Exception as exc:
@@ -1356,6 +1531,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
     open_sample = args.snippets_dir / args.open_sample
     close_sample = args.snippets_dir / args.close_sample
     intro_sample = args.snippets_dir / args.intro_sample
+    outro_sample = args.snippets_dir / args.outro_sample if args.outro_sample else None
 
     for path, label in [
         (remote_dir, "Remote dir"),
@@ -1383,6 +1559,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
             open_sample,
             close_sample,
             intro_sample,
+            outro_sample,
             z_threshold=args.z_threshold,
             step_seconds=args.step_seconds,
             workers=args.workers,
@@ -1405,6 +1582,8 @@ def _cmd_review(args: argparse.Namespace) -> None:
         state,
         open_sample=open_sample,
         close_sample=close_sample,
+        intro_sample=intro_sample,
+        outro_sample=(outro_sample or intro_sample),
         state_path=state_path,
     )
 
@@ -1463,6 +1642,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     open_sample = args.snippets_dir / args.open_sample
     close_sample = args.snippets_dir / args.close_sample
     intro_sample = args.snippets_dir / args.intro_sample
+    outro_sample = args.snippets_dir / args.outro_sample if args.outro_sample else None
 
     for path, label in [
         (remote_dir, "Remote dir"),
@@ -1493,6 +1673,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             open_sample,
             close_sample,
             intro_sample,
+            outro_sample,
             z_threshold=args.z_threshold,
             step_seconds=args.step_seconds,
             workers=args.workers,
@@ -1514,6 +1695,8 @@ def _cmd_loop(args: argparse.Namespace) -> None:
                     quiz_items,
                     open_sample=open_sample,
                     close_sample=close_sample,
+                    intro_sample=intro_sample,
+                    outro_sample=(outro_sample or intro_sample),
                     state_path=state_path,
                 )
             except KeyboardInterrupt:
@@ -1636,6 +1819,7 @@ def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--open-sample", default=None)
     p.add_argument("--close-sample", default=None)
     p.add_argument("--intro-sample", default=None)
+    p.add_argument("--outro-sample", default=None)
     _add_detect_args(p)
     p.add_argument("--overwrite", action="store_true", default=None)
     p.add_argument(
@@ -1660,6 +1844,7 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--open-sample", default=None)
     p.add_argument("--close-sample", default=None)
     p.add_argument("--intro-sample", default=None)
+    p.add_argument("--outro-sample", default=None)
     p.add_argument("--output-dir", type=Path, default=None)
     _add_detect_args(p)
     _add_cut_args(p)
