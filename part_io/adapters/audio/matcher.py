@@ -155,22 +155,18 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
         window = np.hanning(_FRAME_SIZE).astype(np.float32)
         filterbank = _build_filterbank_matrix(sample_rate)
 
-        raw_bands: list[np.ndarray] = []
-        for index in range(0, len(sample_array) - _FRAME_SIZE + 1, _HOP_SIZE):
-            frame = sample_array[index : index + _FRAME_SIZE] * window
-            spectrum = np.abs(np.fft.rfft(frame)) ** 2
-            vector = np.log1p(spectrum @ filterbank).astype(np.float32)
-            norm = float(np.linalg.norm(vector)) or 1.0
-            raw_bands.append(vector / norm)
-
-        if not raw_bands:
+        frames = np.lib.stride_tricks.sliding_window_view(sample_array, _FRAME_SIZE)[::_HOP_SIZE]
+        if frames.shape[0] == 0:
             return []
 
-        band_matrix = np.stack(raw_bands)
-        features = _stack_temporal_deltas(band_matrix)
+        spectra = np.abs(np.fft.rfft(frames * window)) ** 2  # batched FFT across all frames
+        vectors = np.log1p(spectra @ filterbank)
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        band_matrix = (vectors / norms).astype(np.float32)
 
-        profile: list[list[float]] = [row.tolist() for row in features]
-        return profile
+        features = _stack_temporal_deltas(band_matrix)
+        return features.tolist()
 
 
 def _cross_correlation_search(reference: np.ndarray, source_profile: np.ndarray, hop: int):
