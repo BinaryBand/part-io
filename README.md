@@ -27,7 +27,7 @@ Detect and review (interactive):
 
 ```bash
 poetry run part-io-tasks remote-loop <REMOTE_DIR> \
-	--snippets-dir snippets --open-sample open.mp3 --close-sample close.mp3
+ --snippets-dir snippets --open-sample open.mp3 --close-sample close.mp3
 ```
 
 Detect-only (non-interactive):
@@ -60,9 +60,9 @@ poetry run part-io-tasks remote-precache-stop <REMOTE_DIR>
 Notes:
 
 - A `__state__.toml` file is created under the target directory to persist
-	detection and review state across runs. Deleting it resets state.
+ detection and review state across runs. Deleting it resets state.
 - Never set `--output-dir` to the same directory as the input; ffmpeg cannot
-	atomically read-and-write the same file.
+ atomically read-and-write the same file.
 
 ## Development
 
@@ -84,7 +84,7 @@ Run a single command directly via the module (alternate to `part-io-tasks`):
 
 ```bash
 poetry run python -m part_io.cli.remote_pipeline review <REMOTE_DIR> \
-	--snippets-dir snippets --open-sample open.mp3 --close-sample close.mp3
+ --snippets-dir snippets --open-sample open.mp3 --close-sample close.mp3
 ```
 
 ## Contributing
@@ -95,4 +95,3 @@ tests for behaviour changes.
 ## License
 
 See the `LICENSE` file for license terms.
-
