@@ -50,8 +50,8 @@ from part_io.services.cut_planning import build_cut_plan
 from part_io.services.review_orchestration import (
     ReviewItem,
     UndoEntry,
-    apply_review_dict_classes,
     apply_review_decision,
+    apply_review_dict_classes,
     collect_uncertain_candidates,
     episode_to_review_dict,
     next_uncertain_episode_kind,
@@ -2328,10 +2328,19 @@ def _precache_running(pid_path: Path) -> int | None:
 def _build_precache_start_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("precache-start", help="Start precache as a background process.")
     _add_remote_dir_arg(p)
-    p.add_argument("--sleep", type=float, default=10.0, metavar="SECONDS",
-                   help="Pause between episodes (default: 10)")
-    p.add_argument("--overwrite", action="store_true", default=False,
-                   help="Re-build cache entries that already exist")
+    p.add_argument(
+        "--sleep",
+        type=float,
+        default=10.0,
+        metavar="SECONDS",
+        help="Pause between episodes (default: 10)",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Re-build cache entries that already exist",
+    )
 
 
 def _build_precache_stop_parser(sub: argparse._SubParsersAction) -> None:
@@ -2342,12 +2351,17 @@ def _build_precache_stop_parser(sub: argparse._SubParsersAction) -> None:
 def _build_precache_status_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("precache-status", help="Show background precache status and recent log.")
     _add_remote_dir_arg(p)
-    p.add_argument("--lines", type=int, default=20, metavar="N",
-                   help="Number of recent log lines to show (default: 20)")
+    p.add_argument(
+        "--lines",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Number of recent log lines to show (default: 20)",
+    )
 
 
 def _cmd_precache_start(args: argparse.Namespace) -> None:
-    import subprocess
+    from part_io.utils.exec import launch_resolved
 
     remote_dir: Path = args.remote_dir
     pid_path, log_path = _precache_paths(remote_dir)
@@ -2358,20 +2372,25 @@ def _cmd_precache_start(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     cmd = [
-        sys.executable, "-m", "part_io.cli.remote_pipeline", "precache",
+        sys.executable,
+        "-m",
+        "part_io.cli.remote_pipeline",
+        "precache",
         "--verbose",
-        "--sleep", str(args.sleep),
+        "--sleep",
+        str(args.sleep),
         str(remote_dir),
     ]
     if args.overwrite:
         cmd.append("--overwrite")
 
     log_f = log_path.open("a")
-    proc = subprocess.Popen(  # noqa: S603
+    devnull = open(os.devnull, "rb")
+    proc = launch_resolved(
         cmd,
         stdout=log_f,
         stderr=log_f,
-        stdin=subprocess.DEVNULL,
+        stdin=devnull,
         start_new_session=True,  # detach from the terminal's process group
     )
     pid_path.write_text(str(proc.pid))

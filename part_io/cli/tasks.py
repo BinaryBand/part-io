@@ -207,8 +207,13 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace, extra: 
     if args.command == "audio-ad-remove":
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_remove", *extra]))
     if args.command in (
-        "remote-review", "remote-cut", "remote-loop",
-        "remote-precache", "remote-precache-start", "remote-precache-stop", "remote-precache-status",
+        "remote-review",
+        "remote-cut",
+        "remote-loop",
+        "remote-precache",
+        "remote-precache-start",
+        "remote-precache-stop",
+        "remote-precache-status",
     ):
         sub = args.command.split("-", 1)[1]
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", sub, *extra]))
