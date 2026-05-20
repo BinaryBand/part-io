@@ -40,9 +40,12 @@ class AudioProcessManager:
         stdin_f = open("/dev/null", "rb")
         stdout_f = open("/dev/null", "wb")
         stderr_f = open("/dev/null", "wb")
-        cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
+        # Pre-path args (e.g. -ss/-t) go before the filename so ffplay uses
+        # fast input-side seeking rather than decoding up to the target point.
+        cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]
         if args:
             cmd = [*cmd, *args]
+        cmd.append(str(path))
         try:
             proc = launch_resolved(cmd, stdin=stdin_f, stdout=stdout_f, stderr=stderr_f)
         except Exception:

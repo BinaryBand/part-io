@@ -37,6 +37,10 @@ from part_io.services.audio_detection import (
     run_detection_batch,
 )
 from part_io.services.cut_planning import build_cut_plan
+from part_io.services.review_orchestration import (
+    collect_uncertain_candidates,
+    reclassify_all_episodes,
+)
 from part_io.utils.audio_process import AudioProcessManager
 
 if TYPE_CHECKING:  # pragma: no cover - type-only import
@@ -178,7 +182,6 @@ class RunSettings:
     )
     fade: float = 0.5
     quiz_size: int = 10
-    no_interactive: bool = False
     overwrite: bool = False
     snippets_dir: str = "downloads/snippets"
     open_sample: str = "open.mp3"
@@ -277,7 +280,6 @@ def _load_settings(raw: dict) -> RunSettings:
         intro_exclusive=bool(raw.get("intro_exclusive", True)),
         fade=float(raw.get("fade", 0.5)),
         quiz_size=int(raw.get("quiz_size", 10)),
-        no_interactive=bool(raw.get("no_interactive", False)),
         overwrite=bool(raw.get("overwrite", False)),
         snippets_dir=str(raw.get("snippets_dir", "downloads/snippets")),
         open_sample=str(raw.get("open_sample", "open.mp3")),
@@ -440,7 +442,6 @@ class PipelineState:
             f"intro_exclusive = {str(settings.intro_exclusive).lower()}\n",
             f"fade = {settings.fade:.6g}\n",
             f"quiz_size = {settings.quiz_size}\n",
-            f"no_interactive = {str(settings.no_interactive).lower()}\n",
             f"overwrite = {str(settings.overwrite).lower()}\n",
             f"snippets_dir = {json.dumps(settings.snippets_dir)}\n",
             f"open_sample = {json.dumps(settings.open_sample)}\n",
@@ -575,14 +576,55 @@ def _classify_score(score: float, theta_plus: float, theta_minus: float) -> str:
 
 
 def _reclassify_all(state: PipelineState) -> None:
-    """Recompute MOE-derived thresholds and re-classify uncertain episodes in-place."""
-    tp_o, tm_o = _compute_thresholds(state.open_target)
-    tp_c, tm_c = _compute_thresholds(state.close_target)
-    for ep in state.episodes.values():
-        if ep.open_class == _UNC:
-            ep.open_class = _classify_score(ep.open_score, tp_o, tm_o)
-        if ep.close_class == _UNC:
-            ep.close_class = _classify_score(ep.close_score, tp_c, tm_c)
+    """Delegate MOE-based reclassification to the review orchestration service.
+
+    The service operates on a plain dict shape (episodes and target score lists).
+    Translate `PipelineState` into that shape, call the service, and write
+    resulting class values back into the `PipelineState` in-place.
+    """
+    # Build plain-serialisable episodes dict expected by the service
+    episodes_dict: dict[str, dict] = {}
+    for stem, ep in state.episodes.items():
+        episodes_dict[stem] = {
+            "open_candidates": [
+                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
+                for m in ep.open_candidates
+            ],
+            "open_class": ep.open_class,
+            "close_candidates": [
+                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
+                for m in ep.close_candidates
+            ],
+            "close_class": ep.close_class,
+            "intro_candidates": [
+                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
+                for m in ep.intro_candidates
+            ],
+            "intro_class": ep.intro_class,
+            "outro_candidates": [
+                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
+                for m in ep.outro_candidates
+            ],
+            "outro_class": ep.outro_class,
+        }
+
+    open_pos = [{"score": float(s.score)} for s in state.open_target.positives]
+    open_neg = [{"score": float(s.score)} for s in state.open_target.negatives]
+    close_pos = [{"score": float(s.score)} for s in state.close_target.positives]
+    close_neg = [{"score": float(s.score)} for s in state.close_target.negatives]
+
+    # Delegate to service (in-place mutation of episodes_dict)
+    reclassify_all_episodes(episodes_dict, open_pos, open_neg, close_pos, close_neg)
+
+    # Write classifications back into PipelineState
+    for stem, ep_dict in episodes_dict.items():
+        if stem not in state.episodes:
+            continue
+        ep_state = state.episodes[stem]
+        ep_state.open_class = str(ep_dict.get("open_class", ep_state.open_class))
+        ep_state.close_class = str(ep_dict.get("close_class", ep_state.close_class))
+        ep_state.intro_class = str(ep_dict.get("intro_class", ep_state.intro_class))
+        ep_state.outro_class = str(ep_dict.get("outro_class", ep_state.outro_class))
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +665,8 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     args.step_seconds = float(_resolve_opt(args.step_seconds, s.step_seconds))
     args.workers = int(_resolve_opt(args.workers, s.workers))
     args.max_matches = int(_resolve_opt(args.max_matches, s.max_matches))
-    args.no_interactive = bool(_resolve_opt(args.no_interactive, s.no_interactive))
+    # no_interactive is a session flag — never sticky; always use CLI value (default False)
+    args.no_interactive = bool(args.no_interactive)
     args.overwrite = bool(_resolve_opt(args.overwrite, s.overwrite))
 
     s.snippets_dir = str(args.snippets_dir)
@@ -635,7 +678,6 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     s.step_seconds = args.step_seconds
     s.workers = args.workers
     s.max_matches = args.max_matches
-    s.no_interactive = args.no_interactive
     s.overwrite = args.overwrite
 
 
@@ -821,7 +863,6 @@ def _start_audio_segment(source: Path, start: float, end: float) -> Any:
         f"{start:.3f}",
         "-t",
         f"{duration:.3f}",
-        str(source),
     ]
     return _AUDIO_MGR.start_player(source, args=args)
 
@@ -1092,34 +1133,41 @@ def _count_uncertain(state: PipelineState) -> int:
 
 
 def _collect_uncertain_candidates(state: PipelineState) -> list[_QuizItem]:
-    """Return all candidates in the uncertain zone (θ⁻, θ⁺).
+    """Return uncertain candidates using the review orchestration service.
 
-    Sorted by (candidate_idx, -score): all top candidates across every uncertain
-    (stem, kind) pair come first, then all second candidates, etc. This ensures
-    equal representation across pairs before diving deeper into any single one.
+    Translate `PipelineState` into the plain dict/score-list shape the
+    service expects, call `collect_uncertain_candidates`, and convert the
+    returned `ReviewItem`s into pipeline `_QuizItem` objects.
     """
-    tp_o, tm_o = _compute_thresholds(state.open_target)
-    tp_c, tm_c = _compute_thresholds(state.close_target)
-    items: list[_QuizItem] = []
+    # Build episodes dict expected by the service
+    episodes_dict: dict[str, dict] = {}
     for stem, ep in state.episodes.items():
-        if ep.open_class == _UNC:
-            for i, c in enumerate(ep.open_candidates):
-                if tm_o < c.score < tp_o:
-                    items.append(_QuizItem(stem=stem, kind="open", candidate_idx=i, score=c.score))
-        if ep.close_class == _UNC:
-            for i, c in enumerate(ep.close_candidates):
-                if tm_c < c.score < tp_c:
-                    items.append(_QuizItem(stem=stem, kind="close", candidate_idx=i, score=c.score))
-        if ep.intro_class == _UNC:
-            # Intro has no global target, so no threshold — always require human review.
-            for i, c in enumerate(ep.intro_candidates):
-                items.append(_QuizItem(stem=stem, kind="intro", candidate_idx=i, score=c.score))
-        if ep.outro_class == _UNC:
-            # Outro has no global target, so no threshold — always require human review.
-            for i, c in enumerate(ep.outro_candidates):
-                items.append(_QuizItem(stem=stem, kind="outro", candidate_idx=i, score=c.score))
-    items.sort(key=lambda x: (x.candidate_idx, -x.score))
-    return items
+        episodes_dict[stem] = {
+            "open_candidates": [{"score": float(m.score)} for m in ep.open_candidates],
+            "open_class": ep.open_class,
+            "close_candidates": [{"score": float(m.score)} for m in ep.close_candidates],
+            "close_class": ep.close_class,
+            "intro_candidates": [{"score": float(m.score)} for m in ep.intro_candidates],
+            "intro_class": ep.intro_class,
+            "outro_candidates": [{"score": float(m.score)} for m in ep.outro_candidates],
+            "outro_class": ep.outro_class,
+        }
+
+    open_pos = [{"score": float(s.score)} for s in state.open_target.positives]
+    open_neg = [{"score": float(s.score)} for s in state.open_target.negatives]
+    close_pos = [{"score": float(s.score)} for s in state.close_target.positives]
+    close_neg = [{"score": float(s.score)} for s in state.close_target.negatives]
+
+    review_items = collect_uncertain_candidates(
+        episodes_dict, open_pos, open_neg, close_pos, close_neg
+    )
+
+    return [
+        _QuizItem(
+            stem=item.stem, kind=item.kind, candidate_idx=item.candidate_idx, score=item.score
+        )
+        for item in review_items
+    ]
 
 
 def _run_review_loop(

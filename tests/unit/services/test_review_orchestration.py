@@ -128,6 +128,33 @@ class TestCollectUncertainCandidates:
         assert len(items) == 3
         assert [item.candidate_idx for item in items] == [0, 1, 2]
 
+    def test_filters_open_candidates_using_global_threshold_band(self) -> None:
+        episodes = {
+            "ep1": {
+                "open_class": "uncertain",
+                "open_candidates": [{"score": 0.95}, {"score": 0.5}, {"score": 0.1}],
+                "close_class": "undetected",
+                "close_candidates": [],
+                "intro_class": "undetected",
+                "intro_candidates": [],
+                "outro_class": "undetected",
+                "outro_candidates": [],
+            }
+        }
+        # 31 identical samples => moe = 0; thresholds are exactly 0.9 and 0.2
+        positives = [{"score": 0.9}] * 31
+        negatives = [{"score": 0.2}] * 31
+        items = collect_uncertain_candidates(
+            episodes,
+            open_target_positives=positives,
+            open_target_negatives=negatives,
+            close_target_positives=[],
+            close_target_negatives=[],
+        )
+        assert len(items) == 1
+        assert items[0].kind == "open"
+        assert items[0].score == 0.5
+
 
 class TestReclassifyAllEpisodes:
     def test_reclassifies_uncertain_open(self) -> None:
@@ -197,3 +224,30 @@ class TestReclassifyAllEpisodes:
             close_target_negatives=[],
         )
         assert episodes["ep1"]["open_class"] == "undetected"
+
+    def test_reclassifies_open_close_but_not_intro_outro(self) -> None:
+        episodes = {
+            "ep1": {
+                "open_class": "uncertain",
+                "open_candidates": [{"score": 0.6}],
+                "close_class": "uncertain",
+                "close_candidates": [{"score": 0.1}],
+                "intro_class": "uncertain",
+                "intro_candidates": [{"score": 0.95}],
+                "outro_class": "uncertain",
+                "outro_candidates": [{"score": 0.95}],
+            }
+        }
+        # 31 identical samples => moe = 0; deterministic thresholds.
+        reclassify_all_episodes(
+            episodes,
+            open_target_positives=[{"score": 0.5}] * 31,
+            open_target_negatives=[{"score": 0.2}] * 31,
+            close_target_positives=[{"score": 0.7}] * 31,
+            close_target_negatives=[{"score": 0.2}] * 31,
+        )
+
+        assert episodes["ep1"]["open_class"] == "positive"
+        assert episodes["ep1"]["close_class"] == "negative"
+        assert episodes["ep1"]["intro_class"] == "uncertain"
+        assert episodes["ep1"]["outro_class"] == "uncertain"

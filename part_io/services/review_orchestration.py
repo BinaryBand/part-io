@@ -67,7 +67,6 @@ _T_CRIT: dict[int, float] = {
     30: 2.462,
 }
 _T_CRIT_LARGE = 2.326
-_SINGLE_SAMPLE_MOE = 0.05
 
 
 def _t_critical(n: int) -> float:
@@ -124,27 +123,6 @@ def classify_score_with_thresholds(
     if score <= theta_minus:
         return "negative"
     return "uncertain"
-
-
-def _get_kind_scores(episode: dict, kind: str) -> tuple[list[float], list[float]]:
-    """Extract positive and negative scores for a kind from episode state dict."""
-    positives = []
-    negatives = []
-    candidates_key = f"{kind}_candidates"
-    class_key = f"{kind}_class"
-
-    if candidates_key not in episode:
-        return positives, negatives
-
-    ep_class = episode.get(class_key, "undetected")
-    if ep_class == "positive":
-        for cand in episode[candidates_key]:
-            positives.append(float(cand.get("score", 0.0)))
-    elif ep_class == "negative":
-        for cand in episode[candidates_key]:
-            negatives.append(float(cand.get("score", 0.0)))
-
-    return positives, negatives
 
 
 def collect_uncertain_candidates(
@@ -208,7 +186,11 @@ def reclassify_all_episodes(
     close_target_positives: list[dict],
     close_target_negatives: list[dict],
 ) -> None:
-    """Recompute MOE-derived thresholds and reclassify uncertain episodes in-place."""
+    """Recompute MOE-derived thresholds and reclassify uncertain episodes in-place.
+
+    Only `open` and `close` are globally thresholded. `intro` and `outro`
+    remain human-reviewed classes and are intentionally left unchanged here.
+    """
     tp_o, tm_o = compute_classification_thresholds(
         [float(s["score"]) for s in open_target_positives],
         [float(s["score"]) for s in open_target_negatives],
