@@ -8,6 +8,7 @@ over a 16 kHz analysis stream.
 
 from __future__ import annotations
 
+import logging
 from array import array
 from dataclasses import dataclass
 from functools import cache
@@ -261,15 +262,47 @@ def _suppress_overlapping(matches: list[AudioMatch], min_overlap: float = 0.5) -
 
 
 @cache
-def _get_source_profile(source_path: Path) -> np.ndarray:
-    """Build and cache the full spectral profile for *source_path*.
+def _load_cached_profile(source_path: Path, cache_dir: Path) -> np.ndarray | None:
+    cache_path = cache_dir / f"{source_path.stem}.npz"
+    if not cache_path.exists():
+        return None
+    try:
+        stat = source_path.stat()
+        cached = np.load(cache_path)
+        if float(cached["mtime"]) == stat.st_mtime and int(cached["size"]) == stat.st_size:
+            return cached["profile"]
+    except Exception as exc:  # pragma: no cover - benign cache read failures
+        logging.debug("Failed to load cached profile '%s': %s", cache_path, exc, exc_info=True)
+    return None
 
-    Caching ensures the coarse pass and every subsequent refine call share the
-    same profile array, avoiding redundant ffmpeg decodes and FFT work.
+
+def _save_cached_profile(source_path: Path, profile: np.ndarray, cache_dir: Path) -> None:
+    cache_path = cache_dir / f"{source_path.stem}.npz"
+    try:
+        stat = source_path.stat()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        np.savez(cache_path, profile=profile, mtime=stat.st_mtime, size=stat.st_size)
+    except Exception as exc:  # pragma: no cover - benign cache write failures
+        logging.debug("Failed to save cached profile '%s': %s", cache_path, exc, exc_info=True)
+
+
+def _get_source_profile(source_path: Path, cache_dir: Path | None = None) -> np.ndarray:
+    """Return the full spectral profile for *source_path*.
+
+    When *cache_dir* is provided the profile is persisted there and reused on
+    subsequent calls, skipping the ffmpeg decode and FFT work entirely.
+    Invalidated automatically when the source file's mtime or size changes.
     """
     with Timer("matcher._get_source_profile"):
+        if cache_dir is not None:
+            cached = _load_cached_profile(source_path, cache_dir)
+            if cached is not None:
+                return cached
         samples = _decode_pcm_mono_16k(source_path)
-        return np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
+        profile = np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
+        if cache_dir is not None:
+            _save_cached_profile(source_path, profile, cache_dir)
+        return profile
 
 
 def _validate_match_search_inputs(
@@ -294,6 +327,7 @@ def _prepare_match_search(
     sample_path: Path,
     search_start_seconds: float | None,
     search_end_seconds: float | None,
+    profile_cache_dir: Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float, float]:
     sample_samples = _decode_pcm_mono_16k(sample_path)
     sample_rate = _ANALYSIS_RATE
@@ -301,7 +335,7 @@ def _prepare_match_search(
     if reference.size == 0:
         return reference, np.asarray([], dtype=np.float32), sample_rate, 0.0
 
-    full_profile = _get_source_profile(source_path)
+    full_profile = _get_source_profile(source_path, cache_dir=profile_cache_dir)
     if full_profile.size == 0 or full_profile.shape[0] < reference.shape[0]:
         return reference, np.asarray([], dtype=np.float32), sample_rate, 0.0
 
@@ -332,6 +366,7 @@ def find_audio_sample_matches(
     search_start_seconds: float | None = None,
     search_end_seconds: float | None = None,
     z_threshold: float | None = None,
+    profile_cache_dir: Path | None = None,
 ) -> list[AudioMatch]:
     """Find likely occurrences of *sample_path* inside *source_path*.
 
@@ -342,6 +377,10 @@ def find_audio_sample_matches(
     full source profile is still used (preserving delta-feature accuracy at
     boundaries) but only the relevant frame slice is scored, which is much
     cheaper for local refinement searches.
+
+    When *profile_cache_dir* is provided the source profile is persisted there
+    and reused across runs, skipping the ffmpeg decode and FFT work for
+    already-profiled episodes.
     """
     _validate_match_search_inputs(source_path, sample_path, step_seconds, dedupe_overlap)
 
@@ -350,6 +389,7 @@ def find_audio_sample_matches(
         sample_path=sample_path,
         search_start_seconds=search_start_seconds,
         search_end_seconds=search_end_seconds,
+        profile_cache_dir=profile_cache_dir,
     )
     if reference.size == 0 or source_profile.size == 0:
         return []

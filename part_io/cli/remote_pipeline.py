@@ -22,6 +22,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -690,6 +691,7 @@ def _detect_batch(
     step_seconds: float,
     workers: int,
     max_matches: int,
+    profile_cache_dir: Path | None = None,
 ) -> None:
     """Detect open+close (and optional intro) matches for a batch.
 
@@ -697,6 +699,7 @@ def _detect_batch(
     """
     ep_by_stem = {ep.stem: ep for ep in episodes}
     duration_by_stem = {ep.stem: _probe_audio_duration_seconds(ep) for ep in episodes}
+    detector = partial(find_audio_sample_matches, profile_cache_dir=profile_cache_dir)
     jobs, results = run_detection_batch(
         DetectionBatchRequest(
             episodes=episodes,
@@ -705,7 +708,7 @@ def _detect_batch(
             intro_sample=intro_sample,
             outro_sample=outro_sample,
         ),
-        detector=find_audio_sample_matches,
+        detector=detector,
         z_threshold=z_threshold,
         step_seconds=step_seconds,
         max_matches=max_matches,
@@ -1577,6 +1580,7 @@ def _collect_loop_candidates(
     close_sample: Path,
     intro_sample: Path,
     outro_sample: Path | None,
+    profile_cache_dir: Path | None = None,
 ) -> tuple[list[_QuizItem], int]:
     """Detect until enough uncertain candidates are available or no work remains."""
     undetected = [ep for ep in all_full if overwrite or not state.episode(ep.stem).is_detected()]
@@ -1598,6 +1602,7 @@ def _collect_loop_candidates(
             step_seconds=step_seconds,
             workers=workers,
             max_matches=max_matches,
+            profile_cache_dir=profile_cache_dir,
         )
         _reclassify_all(state)
         state.save(state_path)
@@ -1682,6 +1687,7 @@ def _run_loop_once(
         close_sample=close_sample,
         intro_sample=intro_sample,
         outro_sample=outro_sample,
+        profile_cache_dir=remote_dir.parent / ".profile_cache",
     )
     if quiz_items:
         _emit(f"\n{len(quiz_items)} candidate(s) to review ({n_unc} uncertain total).")
@@ -1760,6 +1766,7 @@ def _run_loop_until_clean(
             close_sample=close_sample,
             intro_sample=intro_sample,
             outro_sample=outro_sample,
+            profile_cache_dir=remote_dir.parent / ".profile_cache",
         )
         n_remain_undet, n_remain_unc, n_remain_cut = _loop_work_counts(state, all_full)
         if not n_remain_undet and not n_remain_unc and not n_remain_cut:
@@ -1864,6 +1871,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
+            profile_cache_dir=remote_dir.parent / ".profile_cache",
         )
         _reclassify_all(state)
         state.save(state_path)
