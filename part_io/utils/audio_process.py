@@ -43,7 +43,13 @@ class AudioProcessManager:
         cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
         if args:
             cmd = [*cmd, *args]
-        proc = launch_resolved(cmd, stdin=stdin_f, stdout=stdout_f, stderr=stderr_f)
+        try:
+            proc = launch_resolved(cmd, stdin=stdin_f, stdout=stdout_f, stderr=stderr_f)
+        except Exception:
+            stdin_f.close()
+            stdout_f.close()
+            stderr_f.close()
+            raise
         self._store[id(proc)] = (proc, (stdin_f, stdout_f, stderr_f))
         return proc
 

@@ -37,7 +37,7 @@ from part_io.services.audio_detection import (
     run_detection_batch,
 )
 from part_io.services.cut_planning import build_cut_plan
-from part_io.utils.exec import launch_resolved
+from part_io.utils.audio_process import AudioProcessManager
 
 if TYPE_CHECKING:  # pragma: no cover - type-only import
     import tomllib
@@ -61,7 +61,7 @@ _MIN_EPISODE_BYTES = 10 * 1024 * 1024  # skip promos — < 10 MB ≈ < 5 min at 
 _STATE_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1] / "models" / "schemas" / "remote_pipeline_state.schema.json"
 )
-_AUDIO_IO: dict[int, tuple[Any, Any, Any]] = {}
+_AUDIO_MGR = AudioProcessManager()
 
 # Classification labels
 _POS = "positive"
@@ -170,8 +170,6 @@ class RunSettings:
     max_matches: int = 3
     min_gap: float = -15.0
     max_gap: float = 300.0
-    yes: bool = False
-    dry_run: bool = False
     ad_inclusive: bool = (
         True  # include jingle audio in ad cut (open_start→close_end vs open_end→close_start)
     )
@@ -275,8 +273,6 @@ def _load_settings(raw: dict) -> RunSettings:
         max_matches=int(raw.get("max_matches", 3)),
         min_gap=float(raw.get("min_gap", -15.0)),
         max_gap=float(raw.get("max_gap", 300.0)),
-        yes=bool(raw.get("yes", False)),
-        dry_run=bool(raw.get("dry_run", False)),
         ad_inclusive=bool(raw.get("ad_inclusive", True)),
         intro_exclusive=bool(raw.get("intro_exclusive", True)),
         fade=float(raw.get("fade", 0.5)),
@@ -440,8 +436,6 @@ class PipelineState:
             f"max_matches = {settings.max_matches}\n",
             f"min_gap = {settings.min_gap:.6g}\n",
             f"max_gap = {settings.max_gap:.6g}\n",
-            f"yes = {str(settings.yes).lower()}\n",
-            f"dry_run = {str(settings.dry_run).lower()}\n",
             f"ad_inclusive = {str(settings.ad_inclusive).lower()}\n",
             f"intro_exclusive = {str(settings.intro_exclusive).lower()}\n",
             f"fade = {settings.fade:.6g}\n",
@@ -650,16 +644,15 @@ def _apply_sticky_cut_args(args: argparse.Namespace, state: PipelineState) -> No
     args.output_dir = Path(_resolve_opt(args.output_dir, s.output_dir))
     args.min_gap = float(_resolve_opt(args.min_gap, s.min_gap))
     args.max_gap = float(_resolve_opt(args.max_gap, s.max_gap))
-    args.yes = bool(_resolve_opt(args.yes, s.yes))
-    args.dry_run = bool(_resolve_opt(args.dry_run, s.dry_run))
+    # yes/dry_run are session flags — never sticky; always use CLI value (default False)
+    args.yes = bool(args.yes)
+    args.dry_run = bool(args.dry_run)
     args.inclusive = bool(_resolve_opt(args.inclusive, s.ad_inclusive))
     args.fade = float(_resolve_opt(args.fade, s.fade))
 
     s.output_dir = str(args.output_dir)
     s.min_gap = args.min_gap
     s.max_gap = args.max_gap
-    s.yes = args.yes
-    s.dry_run = args.dry_run
     s.ad_inclusive = args.inclusive
     s.fade = args.fade
 
@@ -817,76 +810,27 @@ except ImportError:
 
 
 def _start_audio(path: Path) -> Any:
-    stdin_f = open(os.devnull, "rb")
-    stdout_f = open(os.devnull, "wb")
-    stderr_f = open(os.devnull, "wb")
-    try:
-        proc = launch_resolved(
-            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)],
-            stdin=stdin_f,
-            stdout=stdout_f,
-            stderr=stderr_f,
-        )
-    except Exception:
-        stdin_f.close()
-        stdout_f.close()
-        stderr_f.close()
-        raise
-    _AUDIO_IO[id(proc)] = (stdin_f, stdout_f, stderr_f)
-    return proc
+    return _AUDIO_MGR.start_player(path)
 
 
 def _start_audio_segment(source: Path, start: float, end: float) -> Any:
     """Stream a time slice from source directly through ffplay without writing to disk."""
     duration = max(0.0, end - start)
-    stdin_f = open(os.devnull, "rb")
-    stdout_f = open(os.devnull, "wb")
-    stderr_f = open(os.devnull, "wb")
-    try:
-        proc = launch_resolved(
-            [
-                "ffplay",
-                "-nodisp",
-                "-autoexit",
-                "-loglevel",
-                "quiet",
-                "-ss",
-                f"{start:.3f}",
-                "-t",
-                f"{duration:.3f}",
-                str(source),
-            ],
-            stdin=stdin_f,
-            stdout=stdout_f,
-            stderr=stderr_f,
-        )
-    except Exception:
-        stdin_f.close()
-        stdout_f.close()
-        stderr_f.close()
-        raise
-    _AUDIO_IO[id(proc)] = (stdin_f, stdout_f, stderr_f)
-    return proc
+    args = [
+        "-ss",
+        f"{start:.3f}",
+        "-t",
+        f"{duration:.3f}",
+        str(source),
+    ]
+    return _AUDIO_MGR.start_player(source, args=args)
 
 
 def _stop_audio(proc: Any | None) -> None:
     if proc is None:
         return
 
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=1)
-        except Exception:
-            proc.kill()
-
-    handles = _AUDIO_IO.pop(id(proc), None)
-    if handles is not None:
-        for handle in handles:
-            try:
-                handle.close()
-            except OSError:
-                continue
+    _AUDIO_MGR.stop(proc)
 
 
 @dataclass
