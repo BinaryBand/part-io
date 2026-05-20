@@ -179,6 +179,39 @@ def collect_uncertain_candidates(
     return items
 
 
+def next_uncertain_episode_kind(
+    episodes: dict[str, dict],
+    *,
+    exclude: set[tuple[str, str]] | None = None,
+) -> tuple[str, str] | None:
+    """Return (stem, kind) for the highest-scoring uncertain target.
+
+    This mirrors the interactive review queue behavior used by the CLI.
+    Only kinds whose class is ``uncertain`` and whose top candidate has a
+    strictly positive score are considered.
+    """
+    candidates: list[tuple[float, str, str]] = []
+    for stem, ep in episodes.items():
+        for kind in ("open", "close", "intro", "outro"):
+            if exclude is not None and (kind, stem) in exclude:
+                continue
+            if ep.get(f"{kind}_class") != "uncertain":
+                continue
+            kind_candidates = ep.get(f"{kind}_candidates", [])
+            if not kind_candidates:
+                continue
+            score = float(kind_candidates[0].get("score", 0.0))
+            if score <= 0:
+                continue
+            candidates.append((score, stem, kind))
+
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    _, stem, kind = candidates[0]
+    return stem, kind
+
+
 def reclassify_all_episodes(
     episodes: dict[str, dict],
     open_target_positives: list[dict],

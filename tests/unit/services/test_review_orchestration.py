@@ -6,6 +6,7 @@ from part_io.services.review_orchestration import (
     classify_score_with_thresholds,
     collect_uncertain_candidates,
     compute_classification_thresholds,
+    next_uncertain_episode_kind,
     reclassify_all_episodes,
 )
 
@@ -251,3 +252,57 @@ class TestReclassifyAllEpisodes:
         assert episodes["ep1"]["close_class"] == "negative"
         assert episodes["ep1"]["intro_class"] == "uncertain"
         assert episodes["ep1"]["outro_class"] == "uncertain"
+
+
+class TestNextUncertainEpisodeKind:
+    def test_returns_highest_score_uncertain_kind(self) -> None:
+        episodes = {
+            "ep1": {
+                "open_class": "uncertain",
+                "open_candidates": [{"score": 0.4}],
+                "close_class": "undetected",
+                "close_candidates": [],
+                "intro_class": "undetected",
+                "intro_candidates": [],
+                "outro_class": "undetected",
+                "outro_candidates": [],
+            },
+            "ep2": {
+                "open_class": "undetected",
+                "open_candidates": [],
+                "close_class": "uncertain",
+                "close_candidates": [{"score": 0.6}],
+                "intro_class": "undetected",
+                "intro_candidates": [],
+                "outro_class": "undetected",
+                "outro_candidates": [],
+            },
+        }
+
+        assert next_uncertain_episode_kind(episodes) == ("ep2", "close")
+
+    def test_respects_exclude_set_and_ignores_non_positive_scores(self) -> None:
+        episodes = {
+            "ep1": {
+                "open_class": "uncertain",
+                "open_candidates": [{"score": 0.5}],
+                "close_class": "undetected",
+                "close_candidates": [],
+                "intro_class": "undetected",
+                "intro_candidates": [],
+                "outro_class": "undetected",
+                "outro_candidates": [],
+            },
+            "ep2": {
+                "open_class": "undetected",
+                "open_candidates": [],
+                "close_class": "uncertain",
+                "close_candidates": [{"score": 0.0}],
+                "intro_class": "undetected",
+                "intro_candidates": [],
+                "outro_class": "undetected",
+                "outro_candidates": [],
+            },
+        }
+
+        assert next_uncertain_episode_kind(episodes, exclude={("open", "ep1")}) is None

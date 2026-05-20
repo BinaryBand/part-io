@@ -48,7 +48,10 @@ from part_io.services.audio_detection import (
 )
 from part_io.services.cut_planning import build_cut_plan
 from part_io.services.review_orchestration import (
+    ReviewItem,
+    UndoEntry,
     collect_uncertain_candidates,
+    next_uncertain_episode_kind,
     reclassify_all_episodes,
 )
 from part_io.utils.audio_process import AudioProcessManager
@@ -601,95 +604,6 @@ class PipelineState:
 # ---------------------------------------------------------------------------
 
 
-# Two-tailed 98% t-critical values indexed by sample size n (df = n-1).
-# For n >= 31 the normal approximation (2.326) is used.
-# n < 2 is not in this table; _moe handles those by returning math.inf.
-_T_CRIT: dict[int, float] = {
-    2: 31.821,
-    3: 6.965,
-    4: 4.541,
-    5: 3.747,
-    6: 3.365,
-    7: 3.143,
-    8: 2.998,
-    9: 2.896,
-    10: 2.821,
-    15: 2.624,
-    20: 2.539,
-    25: 2.492,
-    30: 2.462,
-}
-_T_CRIT_LARGE = 2.326
-
-
-def _t_critical(n: int) -> float:
-    """98% two-tailed t-critical value for n samples (df = n-1)."""
-    if n < 2:
-        return math.inf
-    if n >= 31:
-        return _T_CRIT_LARGE
-    for threshold in sorted(_T_CRIT, reverse=True):
-        if n >= threshold:
-            return _T_CRIT[threshold]
-    return math.inf
-
-
-_SINGLE_SAMPLE_MOE = 0.05
-
-
-def _moe(scores: list[float], k: float | None = None) -> float:
-    """Margin of error using the t-distribution (98% CI on the sample mean).
-
-    Returns math.inf for n < 2 so that a single confirmed example never
-    triggers auto-classification — the uncertain zone collapses only as
-    evidence accumulates across multiple confirmed samples.
-
-    Compatibility mode: when *k* is provided, use the legacy stddev-based
-    formula used by older tests and callers.
-    """
-    n = len(scores)
-    if k is not None:
-        if n == 0:
-            return 0.0
-        if n == 1:
-            return _SINGLE_SAMPLE_MOE
-        mean = sum(scores) / n
-        variance = sum((s - mean) ** 2 for s in scores) / n
-        return k * math.sqrt(variance)
-
-    if n < 2:
-        return math.inf
-    mean = sum(scores) / n
-    variance = sum((s - mean) ** 2 for s in scores) / (n - 1)  # Bessel's correction
-    return _t_critical(n) * math.sqrt(variance) / math.sqrt(n)
-
-
-def _compute_thresholds(target: TargetState) -> tuple[float, float]:
-    """Return (theta_plus, theta_minus) for a target.
-
-    θ⁺ = min(positives) + moe  — auto-positive requires exceeding the minimum confirmed
-                                  positive BY the uncertainty buffer (worst-case threshold).
-    θ⁻ = max(negatives) - moe  — auto-negative requires falling below the maximum confirmed
-                                  negative BY the uncertainty buffer.
-    The uncertain zone (θ⁻, θ⁺) widens with high variance and narrows as evidence accumulates.
-    With no positives: θ⁺ = +inf. With no negatives: θ⁻ = -inf.
-    With fewer than 2 confirmed samples of either kind, moe = inf so nothing auto-classifies.
-    """
-    pos = [s.score for s in target.positives]
-    neg = [s.score for s in target.negatives]
-    theta_plus = (min(pos) + _moe(pos)) if pos else math.inf
-    theta_minus = (max(neg) - _moe(neg)) if neg else -math.inf
-    return theta_plus, theta_minus
-
-
-def _classify_score(score: float, theta_plus: float, theta_minus: float) -> str:
-    if score >= theta_plus:
-        return _POS
-    if score <= theta_minus:
-        return _NEG
-    return _UNC
-
-
 def _episode_to_service_dict(ep: EpisodeState, *, include_bounds: bool) -> dict[str, Any]:
     """Translate one EpisodeState into service-compatible dict form."""
     data: dict[str, Any] = {}
@@ -1096,56 +1010,15 @@ def _stop_audio(proc: Any | None) -> None:
     _AUDIO_MGR.stop(proc)
 
 
-@dataclass
-class _UndoEntry:
-    stem: str
-    kind: str
-    action: str
-    segment: Segment
-    target_list: list[Segment] | None  # None for intro/outro (no global target)
-    prev_class: str = _UNC
-
-
-@dataclass(frozen=True)
-class _QuizItem:
-    stem: str
-    kind: str  # "open", "close", "intro", or "outro"
-    # index into open_candidates / close_candidates / intro_candidates / outro_candidates
-    candidate_idx: int
-    score: float  # candidate score (for sorting)
-
-
-def _next_uncertain(
-    state: PipelineState, exclude: set[tuple[str, str]] | None = None
-) -> tuple[str, str] | None:
-    """Return (stem, kind) of the highest-scoring uncertain target, or None."""
-    candidates: list[tuple[float, str, str]] = []
-    for stem, ep in state.episodes.items():
-        for kind in _AUDIO_KINDS:
-            if exclude is not None and (kind, stem) in exclude:
-                continue
-            if ep.class_for(kind) != _UNC:
-                continue
-            score = ep.score_for(kind)
-            if score <= 0:
-                continue
-            candidates.append((score, stem, kind))
-    if not candidates:
-        return None
-    candidates.sort(reverse=True)
-    _, stem, kind = candidates[0]
-    return stem, kind
-
-
 def _apply_review_decision(
     *,
     ep_state: EpisodeState,
-    item: _QuizItem,
+    item: ReviewItem,
     target: TargetState | None,
     source: Path,
     candidate: _Match,
     key: str,
-) -> tuple[str, Segment, list[Segment] | None]:
+) -> tuple[str, Segment, bool | None]:
     seg = Segment(
         source=str(source), start=candidate.start, end=candidate.end, score=candidate.score
     )
@@ -1154,20 +1027,32 @@ def _apply_review_decision(
             target.positives.append(seg)
         ep_state.set_class(item.kind, _POS)
         print("\napproved", file=sys.stderr)
-        return "approved", seg, (target.positives if target is not None else None)
+        return "approved", seg, (True if target is not None else None)
 
     if target is not None:
         target.negatives.append(seg)
     if item.kind in ("intro", "outro"):
         ep_state.set_class(item.kind, _NEG)
     print("\nrejected", file=sys.stderr)
-    return "rejected", seg, (target.negatives if target is not None else None)
+    return "rejected", seg, (False if target is not None else None)
 
 
-def _undo_last_review(state: PipelineState, history: list[_UndoEntry]) -> None:
+def _undo_last_review(state: PipelineState, history: list[UndoEntry]) -> None:
     entry = history.pop()
-    if entry.target_list is not None:
-        entry.target_list.remove(entry.segment)
+
+    if entry.kind in ("open", "close"):
+        target = state.open_target if entry.kind == "open" else state.close_target
+        target_list = target.positives if entry.target_list_was_positive else target.negatives
+        for i, seg in enumerate(target_list):
+            if (
+                seg.source == entry.segment_source
+                and seg.start == entry.segment_start
+                and seg.end == entry.segment_end
+                and seg.score == entry.segment_score
+            ):
+                target_list.pop(i)
+                break
+
     prev_ep = state.episodes[entry.stem]
     prev_ep.set_class(entry.kind, entry.prev_class)
     _reclassify_all(state)
@@ -1179,13 +1064,13 @@ def _undo_last_review(state: PipelineState, history: list[_UndoEntry]) -> None:
 
 def _review_candidate(
     state: PipelineState,
-    item: _QuizItem,
+    item: ReviewItem,
     *,
     open_sample: Path,
     close_sample: Path,
     intro_sample: Path,
     outro_sample: Path,
-    history: list[_UndoEntry],
+    history: list[UndoEntry],
 ) -> str:
     """Review one candidate interactively.
 
@@ -1230,7 +1115,7 @@ def _review_candidate(
             current_proc = _start_audio(snippet)
             print(f"\r{legend}", end="", flush=True, file=sys.stderr)
         elif key in ("a", "r"):
-            action, seg, lst = _apply_review_decision(
+            action, seg, target_list_was_positive = _apply_review_decision(
                 ep_state=ep_state,
                 item=item,
                 target=target,
@@ -1239,12 +1124,15 @@ def _review_candidate(
                 key=key,
             )
             history.append(
-                _UndoEntry(
+                UndoEntry(
                     stem=item.stem,
                     kind=item.kind,
                     action=key,
-                    segment=seg,
-                    target_list=lst,
+                    segment_source=seg.source,
+                    segment_start=seg.start,
+                    segment_end=seg.end,
+                    segment_score=seg.score,
+                    target_list_was_positive=bool(target_list_was_positive),
                     prev_class=prev_class,
                 )
             )
@@ -1270,14 +1158,14 @@ def _review_one_target(
     close_sample: Path,
     intro_sample: Path,
     outro_sample: Path,
-    history: list[_UndoEntry],
+    history: list[UndoEntry],
 ) -> str:
     """Review the top candidate for (stem, kind). Returns 'classified', 'skipped', or 'undone'."""
     ep_state = state.episodes[stem]
     all_candidates = ep_state.candidates_for(kind)
     if not all_candidates:
         return "skipped"
-    item = _QuizItem(stem=stem, kind=kind, candidate_idx=0, score=all_candidates[0].score)
+    item = ReviewItem(stem=stem, kind=kind, candidate_idx=0, score=all_candidates[0].score)
     result = _review_candidate(
         state,
         item,
@@ -1296,12 +1184,12 @@ def _count_uncertain(state: PipelineState) -> int:
     )
 
 
-def _collect_uncertain_candidates(state: PipelineState) -> list[_QuizItem]:
+def _collect_uncertain_candidates(state: PipelineState) -> list[ReviewItem]:
     """Return uncertain candidates using the review orchestration service.
 
     Translate `PipelineState` into the plain dict/score-list shape the
     service expects, call `collect_uncertain_candidates`, and convert the
-    returned `ReviewItem`s into pipeline `_QuizItem` objects.
+    returned `ReviewItem`s for the interactive review queue.
     """
     # Build episodes dict expected by the service
     episodes_dict: dict[str, dict[str, Any]] = {}
@@ -1317,12 +1205,7 @@ def _collect_uncertain_candidates(state: PipelineState) -> list[_QuizItem]:
         episodes_dict, open_pos, open_neg, close_pos, close_neg
     )
 
-    return [
-        _QuizItem(
-            stem=item.stem, kind=item.kind, candidate_idx=item.candidate_idx, score=item.score
-        )
-        for item in review_items
-    ]
+    return list(review_items)
 
 
 def _run_review_loop(
@@ -1336,11 +1219,15 @@ def _run_review_loop(
     max_decisions: int | None = None,
 ) -> None:
     """Review uncertain targets until queue empty, user quits, or max_decisions reached."""
-    history: list[_UndoEntry] = []
+    history: list[UndoEntry] = []
     skipped: set[tuple[str, str]] = set()
     decisions = 0
     while max_decisions is None or decisions < max_decisions:
-        next_t = _next_uncertain(state, exclude=skipped)
+        episodes_dict = {
+            stem: _episode_to_service_dict(ep, include_bounds=False)
+            for stem, ep in state.episodes.items()
+        }
+        next_t = next_uncertain_episode_kind(episodes_dict, exclude=skipped)
         if next_t is None:
             n_uncertain = _count_uncertain(state)
             if n_uncertain:
@@ -1388,7 +1275,7 @@ def _run_review_loop(
 
 def _run_quiz(
     state: PipelineState,
-    items: list[_QuizItem],
+    items: list[ReviewItem],
     *,
     open_sample: Path,
     close_sample: Path,
@@ -1400,7 +1287,7 @@ def _run_quiz(
 
     Returns (decisions_made, interrupted_by_quit).
     """
-    history: list[_UndoEntry] = []
+    history: list[UndoEntry] = []
     skipped_keys: set[tuple[str, str, int]] = set()
     decisions = 0
     remaining = list(items)
@@ -1733,7 +1620,7 @@ def _collect_loop_candidates(
     outro_sample: Path | None,
     refine: bool = False,
     profile_cache_dir: Path | None = None,
-) -> tuple[list[_QuizItem], int]:
+) -> tuple[list[ReviewItem], int]:
     """Detect until enough uncertain candidates are available or no work remains."""
     undetected = [ep for ep in all_full if overwrite or not state.episode(ep.stem).is_detected()]
     n_already = len(all_full) - len(undetected)
