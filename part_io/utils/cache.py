@@ -1,0 +1,46 @@
+"""Utility helpers for on-disk numpy-backed caches.
+
+Placed in `utils` so it complies with the project's adapters shape rules.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+
+def load_npz_profile(source_path: Path, cache_dir: Path) -> Any | None:
+    """Load a numpy `.npz` profile for *source_path* from *cache_dir*.
+
+    Returns the stored profile object or ``None`` when the cache is missing
+    or invalid. Failures are debug-logged.
+    """
+    cache_path = cache_dir / f"{source_path.stem}.npz"
+    if not cache_path.exists():
+        return None
+    try:
+        stat = source_path.stat()
+        cached = np.load(cache_path)
+        if float(cached["mtime"]) == stat.st_mtime and int(cached["size"]) == stat.st_size:
+            return cached["profile"]
+    except Exception as exc:  # pragma: no cover - benign cache read failures
+        logging.debug("Failed to load cached profile '%s': %s", cache_path, exc, exc_info=True)
+    return None
+
+
+def save_npz_profile(source_path: Path, profile: Any, cache_dir: Path) -> None:
+    """Persist *profile* to *cache_dir* keyed by the source filename.
+
+    Failures are debug-logged and otherwise ignored to keep detection fast-fail
+    tolerant in environments like network mounts.
+    """
+    cache_path = cache_dir / f"{source_path.stem}.npz"
+    try:
+        stat = source_path.stat()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        np.savez(cache_path, profile=profile, mtime=stat.st_mtime, size=stat.st_size)
+    except Exception as exc:  # pragma: no cover - benign cache write failures
+        logging.debug("Failed to save cached profile '%s': %s", cache_path, exc, exc_info=True)

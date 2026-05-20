@@ -8,7 +8,6 @@ over a 16 kHz analysis stream.
 
 from __future__ import annotations
 
-import logging
 from array import array
 from dataclasses import dataclass
 from functools import cache
@@ -17,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from part_io.adapters.process.runner import run_resolved
+from part_io.utils.cache import load_npz_profile, save_npz_profile
 from part_io.utils.timing import Timer
 
 _ANALYSIS_RATE = 16000
@@ -263,27 +263,15 @@ def _suppress_overlapping(matches: list[AudioMatch], min_overlap: float = 0.5) -
 
 @cache
 def _load_cached_profile(source_path: Path, cache_dir: Path) -> np.ndarray | None:
-    cache_path = cache_dir / f"{source_path.stem}.npz"
-    if not cache_path.exists():
+    if cache_dir is None:
         return None
-    try:
-        stat = source_path.stat()
-        cached = np.load(cache_path)
-        if float(cached["mtime"]) == stat.st_mtime and int(cached["size"]) == stat.st_size:
-            return cached["profile"]
-    except Exception as exc:  # pragma: no cover - benign cache read failures
-        logging.debug("Failed to load cached profile '%s': %s", cache_path, exc, exc_info=True)
-    return None
+    return load_npz_profile(source_path, cache_dir)
 
 
 def _save_cached_profile(source_path: Path, profile: np.ndarray, cache_dir: Path) -> None:
-    cache_path = cache_dir / f"{source_path.stem}.npz"
-    try:
-        stat = source_path.stat()
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        np.savez(cache_path, profile=profile, mtime=stat.st_mtime, size=stat.st_size)
-    except Exception as exc:  # pragma: no cover - benign cache write failures
-        logging.debug("Failed to save cached profile '%s': %s", cache_path, exc, exc_info=True)
+    if cache_dir is None:
+        return
+    save_npz_profile(source_path, profile, cache_dir)
 
 
 def _get_source_profile(source_path: Path, cache_dir: Path | None = None) -> np.ndarray:
