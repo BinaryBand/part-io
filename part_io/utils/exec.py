@@ -11,9 +11,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 from os import getenv
 from pathlib import Path
-from typing import Any, Iterable, cast
+from typing import Any, Callable, Iterable, cast
 
 
 def resolve_executable(name: str) -> str:
@@ -77,4 +78,46 @@ def launch_resolved(cmd: Iterable[str], /, **kwargs: Any) -> "subprocess.Popen[A
     return subprocess.Popen(full_cmd, **kwargs)  # noqa: S603
 
 
-__all__ = ["resolve_executable", "run_resolved", "launch_resolved"]
+def run_resolved_with_stderr_callback(
+    cmd: Iterable[str],
+    /,
+    *,
+    on_stderr_line: Callable[[str], None] | None = None,
+) -> tuple[int, bytes]:
+    """Run a resolved command, capturing stdout while optionally streaming stderr.
+
+    Returns a tuple of ``(returncode, stdout_bytes)``. When ``on_stderr_line``
+    is provided, stderr is consumed line-by-line in a background thread and
+    each decoded line is forwarded to the callback.
+    """
+    proc = launch_resolved(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    callback_thread: threading.Thread | None = None
+
+    if on_stderr_line is not None and proc.stderr is not None:
+
+        def _read_stderr() -> None:
+            stderr = proc.stderr
+            if stderr is None:
+                return
+            for raw in stderr:
+                on_stderr_line(raw.decode(errors="replace").strip())
+
+        callback_thread = threading.Thread(target=_read_stderr, daemon=True)
+        callback_thread.start()
+
+    stdout_data = proc.stdout.read() if proc.stdout is not None else b""
+    proc.wait()
+
+    if callback_thread is not None:
+        callback_thread.join(timeout=2)
+
+    return proc.returncode, stdout_data
+
+
+__all__ = [
+    "resolve_executable",
+    "run_resolved",
+    "launch_resolved",
+    "run_resolved_with_stderr_callback",
+]

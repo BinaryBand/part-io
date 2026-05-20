@@ -8,6 +8,7 @@ over a 16 kHz analysis stream.
 
 from __future__ import annotations
 
+import logging
 from array import array
 from dataclasses import dataclass
 from functools import cache
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from part_io.adapters.process.runner import run_resolved
+from part_io.adapters.process.runner import run_resolved, run_resolved_with_stderr_callback
 from part_io.utils.cache import load_npz_profile, save_npz_profile
 from part_io.utils.timing import Timer
 
@@ -23,6 +24,7 @@ _ANALYSIS_RATE = 16000
 _FRAME_SIZE = 2048
 _HOP_SIZE = 1024
 _BAND_COUNT = 32
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,56 @@ def _decode_pcm_mono_16k(source: Path) -> list[int]:
     if not samples:
         raise ValueError(f"ffmpeg failed to decode audio: {source}")
     return samples
+
+
+def _decode_pcm_mono_16k_streaming(source: Path) -> list[int]:
+    """Decode *source* to PCM, streaming ffmpeg progress to stderr.
+
+    Used only for full-file decodes where the caller wants live feedback
+    (e.g. profile warm-up over a slow network mount).  Not cached — call
+    site is responsible for caching the resulting profile.
+    """
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:2",
+        "-nostats",
+        "-i",
+        str(source),
+        "-ac",
+        "1",
+        "-ar",
+        str(_ANALYSIS_RATE),
+        "-f",
+        "s16le",
+        "pipe:1",
+    ]
+
+    current: dict[str, str] = {}
+
+    def _stream_progress(line: str) -> None:
+        if "=" not in line:
+            return
+        key, _, val = line.partition("=")
+        current[key] = val
+        if key == "progress":
+            out_time = current.get("out_time", "?")
+            speed = current.get("speed", "?")
+            _LOG.info("[decode] %s  %s", out_time, speed)
+
+    returncode, stdout_data = run_resolved_with_stderr_callback(
+        cmd,
+        on_stderr_line=_stream_progress,
+    )
+
+    if returncode != 0 or not stdout_data:
+        return []
+    samples = array("h")
+    samples.frombytes(stdout_data)
+    return list(samples)
 
 
 def _decode_pcm_mono_16k_window(
@@ -274,19 +326,28 @@ def _save_cached_profile(source_path: Path, profile: np.ndarray, cache_dir: Path
     save_npz_profile(source_path, profile, cache_dir)
 
 
-def _get_source_profile(source_path: Path, cache_dir: Path | None = None) -> np.ndarray:
+def _get_source_profile(
+    source_path: Path,
+    cache_dir: Path | None = None,
+    *,
+    show_progress: bool = False,
+) -> np.ndarray:
     """Return the full spectral profile for *source_path*.
 
     When *cache_dir* is provided the profile is persisted there and reused on
     subsequent calls, skipping the ffmpeg decode and FFT work entirely.
     Invalidated automatically when the source file's mtime or size changes.
+    When *show_progress* is True, ffmpeg decode progress is streamed to stderr.
     """
     with Timer("matcher._get_source_profile"):
         if cache_dir is not None:
             cached = _load_cached_profile(source_path, cache_dir)
             if cached is not None:
                 return cached
-        samples = _decode_pcm_mono_16k(source_path)
+        if show_progress:
+            samples = _decode_pcm_mono_16k_streaming(source_path)
+        else:
+            samples = _decode_pcm_mono_16k(source_path)
         profile = np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
         if cache_dir is not None:
             _save_cached_profile(source_path, profile, cache_dir)
@@ -416,6 +477,16 @@ def find_audio_sample_matches(
         ]
 
     return matches
+
+
+def warm_source_profile(source_path: Path, cache_dir: Path) -> None:
+    """Pre-compute and cache the spectral profile for *source_path*.
+
+    Call this once per source file before submitting parallel detection jobs
+    so that concurrent workers hit the on-disk cache instead of each launching
+    their own full-file ffmpeg decode.  ffmpeg progress is streamed to stderr.
+    """
+    _get_source_profile(source_path, cache_dir=cache_dir, show_progress=True)
 
 
 def _shift_match(match: AudioMatch, new_start_seconds: float) -> AudioMatch:

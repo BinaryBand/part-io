@@ -35,6 +35,7 @@ from part_io.adapters.audio.matcher import (
     cross_correlate_align,
     find_audio_sample_matches,
     find_audio_sample_matches_from_profile,
+    warm_source_profile,
 )
 from part_io.adapters.process.runner import run_resolved
 from part_io.cli.audio_ad_remove import _build_filter_complex, _run_ffmpeg
@@ -80,6 +81,7 @@ _POS = "positive"
 _NEG = "negative"
 _UNC = "uncertain"
 _UND = "undetected"
+_AUDIO_KINDS = ("open", "close", "intro", "outro")
 
 
 # ---------------------------------------------------------------------------
@@ -115,63 +117,187 @@ class _Match:
 @dataclass
 class EpisodeState:
     source: str = ""
-    open_candidates: list[_Match] = field(default_factory=list)
-    open_class: str = _UND
-    close_candidates: list[_Match] = field(default_factory=list)
-    close_class: str = _UND
-    intro_candidates: list[_Match] = field(default_factory=list)
-    intro_class: str = _UND
-    outro_candidates: list[_Match] = field(default_factory=list)
-    outro_class: str = _UND
+    candidates: dict[str, list[_Match]] = field(
+        default_factory=lambda: {kind: [] for kind in _AUDIO_KINDS}
+    )
+    classes: dict[str, str] = field(default_factory=lambda: {kind: _UND for kind in _AUDIO_KINDS})
     cut: bool = False
+
+    def __init__(
+        self,
+        source: str = "",
+        candidates: dict[str, list[_Match]] | None = None,
+        classes: dict[str, str] | None = None,
+        cut: bool = False,
+        *,
+        open_candidates: list[_Match] | None = None,
+        close_candidates: list[_Match] | None = None,
+        intro_candidates: list[_Match] | None = None,
+        outro_candidates: list[_Match] | None = None,
+        open_class: str = _UND,
+        close_class: str = _UND,
+        intro_class: str = _UND,
+        outro_class: str = _UND,
+    ) -> None:
+        self.source = source
+        self.cut = cut
+        self.candidates = {kind: [] for kind in _AUDIO_KINDS}
+        self.classes = {kind: _UND for kind in _AUDIO_KINDS}
+
+        if candidates is not None:
+            for kind in _AUDIO_KINDS:
+                self.candidates[kind] = list(candidates.get(kind, []))
+        if classes is not None:
+            for kind in _AUDIO_KINDS:
+                self.classes[kind] = str(classes.get(kind, _UND))
+
+        if open_candidates is not None:
+            self.open_candidates = list(open_candidates)
+        if close_candidates is not None:
+            self.close_candidates = list(close_candidates)
+        if intro_candidates is not None:
+            self.intro_candidates = list(intro_candidates)
+        if outro_candidates is not None:
+            self.outro_candidates = list(outro_candidates)
+
+        self.open_class = open_class
+        self.close_class = close_class
+        self.intro_class = intro_class
+        self.outro_class = outro_class
+
+    def candidates_for(self, kind: str) -> list[_Match]:
+        return self.candidates.setdefault(kind, [])
+
+    def class_for(self, kind: str) -> str:
+        return self.classes.get(kind, _UND)
+
+    def set_class(self, kind: str, value: str) -> None:
+        self.classes[kind] = value
+
+    def first_candidate_for(self, kind: str) -> _Match | None:
+        candidates = self.candidates_for(kind)
+        return candidates[0] if candidates else None
+
+    def score_for(self, kind: str) -> float:
+        first = self.first_candidate_for(kind)
+        return first.score if first is not None else 0.0
+
+    def start_for(self, kind: str) -> float:
+        first = self.first_candidate_for(kind)
+        return first.start if first is not None else 0.0
+
+    def end_for(self, kind: str) -> float:
+        first = self.first_candidate_for(kind)
+        return first.end if first is not None else 0.0
+
+    # Compatibility properties: keep old attribute-style accesses while
+    # storing data in dict-backed fields.
+    @property
+    def open_candidates(self) -> list[_Match]:
+        return self.candidates_for("open")
+
+    @open_candidates.setter
+    def open_candidates(self, value: list[_Match]) -> None:
+        self.candidates["open"] = value
+
+    @property
+    def close_candidates(self) -> list[_Match]:
+        return self.candidates_for("close")
+
+    @close_candidates.setter
+    def close_candidates(self, value: list[_Match]) -> None:
+        self.candidates["close"] = value
+
+    @property
+    def intro_candidates(self) -> list[_Match]:
+        return self.candidates_for("intro")
+
+    @intro_candidates.setter
+    def intro_candidates(self, value: list[_Match]) -> None:
+        self.candidates["intro"] = value
+
+    @property
+    def outro_candidates(self) -> list[_Match]:
+        return self.candidates_for("outro")
+
+    @outro_candidates.setter
+    def outro_candidates(self, value: list[_Match]) -> None:
+        self.candidates["outro"] = value
+
+    @property
+    def open_class(self) -> str:
+        return self.class_for("open")
+
+    @open_class.setter
+    def open_class(self, value: str) -> None:
+        self.set_class("open", value)
+
+    @property
+    def close_class(self) -> str:
+        return self.class_for("close")
+
+    @close_class.setter
+    def close_class(self, value: str) -> None:
+        self.set_class("close", value)
+
+    @property
+    def intro_class(self) -> str:
+        return self.class_for("intro")
+
+    @intro_class.setter
+    def intro_class(self, value: str) -> None:
+        self.set_class("intro", value)
+
+    @property
+    def outro_class(self) -> str:
+        return self.class_for("outro")
+
+    @outro_class.setter
+    def outro_class(self, value: str) -> None:
+        self.set_class("outro", value)
 
     # Read-only convenience properties so all existing callers of open_score etc. still work.
     @property
     def open_score(self) -> float:
-        return self.open_candidates[0].score if self.open_candidates else 0.0
+        return self.score_for("open")
 
     @property
     def open_start(self) -> float:
-        return self.open_candidates[0].start if self.open_candidates else 0.0
+        return self.start_for("open")
 
     @property
     def open_end(self) -> float:
-        return self.open_candidates[0].end if self.open_candidates else 0.0
+        return self.end_for("open")
 
     @property
     def close_score(self) -> float:
-        return self.close_candidates[0].score if self.close_candidates else 0.0
+        return self.score_for("close")
 
     @property
     def close_start(self) -> float:
-        return self.close_candidates[0].start if self.close_candidates else 0.0
+        return self.start_for("close")
 
     @property
     def close_end(self) -> float:
-        return self.close_candidates[0].end if self.close_candidates else 0.0
+        return self.end_for("close")
 
     @property
     def intro_score(self) -> float:
-        return self.intro_candidates[0].score if self.intro_candidates else 0.0
+        return self.score_for("intro")
 
     @property
     def intro_start(self) -> float:
-        return self.intro_candidates[0].start if self.intro_candidates else 0.0
+        return self.start_for("intro")
 
     @property
     def intro_end(self) -> float:
-        return self.intro_candidates[0].end if self.intro_candidates else 0.0
+        return self.end_for("intro")
 
     def is_detected(self) -> bool:
-        return (
-            self.open_class != _UND
-            or self.close_class != _UND
-            or self.intro_class != _UND
-            or self.outro_class != _UND
-        )
+        return any(self.class_for(kind) != _UND for kind in _AUDIO_KINDS)
 
     def is_cuttable(self) -> bool:
-        return self.open_class == _POS and self.close_class == _POS
+        return self.class_for("open") == _POS and self.class_for("close") == _POS
 
 
 @dataclass
@@ -240,40 +366,28 @@ def _load_target(raw: dict) -> TargetState:
 
 
 def _load_episode(raw: dict) -> EpisodeState:
-    ep = EpisodeState(
-        source=str(raw.get("source", "")),
-        open_class=str(raw.get("open_class", _UND)),
-        close_class=str(raw.get("close_class", _UND)),
-        intro_class=str(raw.get("intro_class", _UND)),
-        outro_class=str(raw.get("outro_class", _UND)),
-        cut=bool(raw.get("cut", False)),
-    )
-    # New format: candidates list
-    if "open_candidates" in raw:
-        ep.open_candidates = [_load_match(m) for m in raw["open_candidates"]]
-    elif float(raw.get("open_score", 0.0)) > 0:
-        # Migrate old scalar format (open_score / open_start / open_end)
-        ep.open_candidates = [
+    ep = EpisodeState(source=str(raw.get("source", "")), cut=bool(raw.get("cut", False)))
+    for kind in _AUDIO_KINDS:
+        ep.set_class(kind, str(raw.get(f"{kind}_class", _UND)))
+
+        candidates_key = f"{kind}_candidates"
+        if candidates_key in raw:
+            ep.candidates[kind] = [_load_match(m) for m in raw[candidates_key]]
+
+    # Migrate old scalar format (open_score/open_start/open_end, close_*)
+    for kind in ("open", "close"):
+        score_key = f"{kind}_score"
+        if ep.candidates_for(kind):
+            continue
+        if float(raw.get(score_key, 0.0)) <= 0:
+            continue
+        ep.candidates[kind] = [
             _Match(
-                score=float(raw["open_score"]),
-                start=float(raw.get("open_start", 0.0)),
-                end=float(raw.get("open_end", 0.0)),
+                score=float(raw[score_key]),
+                start=float(raw.get(f"{kind}_start", 0.0)),
+                end=float(raw.get(f"{kind}_end", 0.0)),
             )
         ]
-    if "close_candidates" in raw:
-        ep.close_candidates = [_load_match(m) for m in raw["close_candidates"]]
-    elif float(raw.get("close_score", 0.0)) > 0:
-        ep.close_candidates = [
-            _Match(
-                score=float(raw["close_score"]),
-                start=float(raw.get("close_start", 0.0)),
-                end=float(raw.get("close_end", 0.0)),
-            )
-        ]
-    if "intro_candidates" in raw:
-        ep.intro_candidates = [_load_match(m) for m in raw["intro_candidates"]]
-    if "outro_candidates" in raw:
-        ep.outro_candidates = [_load_match(m) for m in raw["outro_candidates"]]
     return ep
 
 
@@ -360,24 +474,20 @@ def _migrate_old_episode(
         if best_raw is None and raw_matches:
             best_raw = raw_matches[0]
         if best_raw is None:
-            setattr(ep, f"{kind}_class", _UND)
+            ep.set_class(kind, _UND)
             continue
         score = float(best_raw["score"])
         start = float(best_raw["start"])
         end = float(best_raw["end"])
-        cands = [_Match(score=score, start=start, end=end)]
-        if kind == "open":
-            ep.open_candidates = cands
-        else:
-            ep.close_candidates = cands
+        ep.candidates[kind] = [_Match(score=score, start=start, end=end)]
         if approved:
-            setattr(ep, f"{kind}_class", _POS)
+            ep.set_class(kind, _POS)
             target.positives.append(Segment(source=source, start=start, end=end, score=score))
         elif rejected:
-            setattr(ep, f"{kind}_class", _NEG)
+            ep.set_class(kind, _NEG)
             target.negatives.append(Segment(source=source, start=start, end=end, score=score))
         else:
-            setattr(ep, f"{kind}_class", _UNC)
+            ep.set_class(kind, _UNC)
     return ep
 
 
@@ -474,21 +584,13 @@ class PipelineState:
         for stem, ep in sorted(self.episodes.items()):
             lines.append(f'\n[episodes."{stem}"]\n')
             lines.append(f"source           = {json.dumps(ep.source)}\n")
-            oc = ", ".join(_fmt_match(m) for m in ep.open_candidates)
-            cc = ", ".join(_fmt_match(m) for m in ep.close_candidates)
-            ic = ", ".join(_fmt_match(m) for m in ep.intro_candidates)
-            oc2 = ", ".join(_fmt_match(m) for m in ep.outro_candidates)
-            lines += [
-                f"open_candidates  = [{oc}]\n",
-                f'open_class       = "{ep.open_class}"\n',
-                f"close_candidates = [{cc}]\n",
-                f'close_class      = "{ep.close_class}"\n',
-                f"intro_candidates = [{ic}]\n",
-                f'intro_class      = "{ep.intro_class}"\n',
-                f"outro_candidates = [{oc2}]\n",
-                f'outro_class      = "{ep.outro_class}"\n',
-                f"cut = {str(ep.cut).lower()}\n",
-            ]
+            for kind in _AUDIO_KINDS:
+                key_pad = f"{kind}_candidates".ljust(16)
+                class_pad = f"{kind}_class".ljust(16)
+                candidates = ", ".join(_fmt_match(m) for m in ep.candidates_for(kind))
+                lines.append(f"{key_pad} = [{candidates}]\n")
+                lines.append(f'{class_pad} = "{ep.class_for(kind)}"\n')
+            lines.append(f"cut = {str(ep.cut).lower()}\n")
         _atomic_write_text(path, "".join(lines))
 
 
@@ -586,6 +688,29 @@ def _classify_score(score: float, theta_plus: float, theta_minus: float) -> str:
     return _UNC
 
 
+def _episode_to_service_dict(ep: EpisodeState, *, include_bounds: bool) -> dict[str, Any]:
+    """Translate one EpisodeState into service-compatible dict form."""
+    data: dict[str, Any] = {}
+    for kind in _AUDIO_KINDS:
+        if include_bounds:
+            data[f"{kind}_candidates"] = [
+                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
+                for m in ep.candidates_for(kind)
+            ]
+        else:
+            data[f"{kind}_candidates"] = [
+                {"score": float(m.score)} for m in ep.candidates_for(kind)
+            ]
+        data[f"{kind}_class"] = ep.class_for(kind)
+    return data
+
+
+def _apply_service_classes(ep: EpisodeState, ep_dict: dict[str, Any]) -> None:
+    """Write service-produced class values back into EpisodeState."""
+    for kind in _AUDIO_KINDS:
+        ep.set_class(kind, str(ep_dict.get(f"{kind}_class", ep.class_for(kind))))
+
+
 def _reclassify_all(state: PipelineState) -> None:
     """Delegate MOE-based reclassification to the review orchestration service.
 
@@ -594,30 +719,9 @@ def _reclassify_all(state: PipelineState) -> None:
     resulting class values back into the `PipelineState` in-place.
     """
     # Build plain-serialisable episodes dict expected by the service
-    episodes_dict: dict[str, dict] = {}
+    episodes_dict: dict[str, dict[str, Any]] = {}
     for stem, ep in state.episodes.items():
-        episodes_dict[stem] = {
-            "open_candidates": [
-                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
-                for m in ep.open_candidates
-            ],
-            "open_class": ep.open_class,
-            "close_candidates": [
-                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
-                for m in ep.close_candidates
-            ],
-            "close_class": ep.close_class,
-            "intro_candidates": [
-                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
-                for m in ep.intro_candidates
-            ],
-            "intro_class": ep.intro_class,
-            "outro_candidates": [
-                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
-                for m in ep.outro_candidates
-            ],
-            "outro_class": ep.outro_class,
-        }
+        episodes_dict[stem] = _episode_to_service_dict(ep, include_bounds=True)
 
     open_pos = [{"score": float(s.score)} for s in state.open_target.positives]
     open_neg = [{"score": float(s.score)} for s in state.open_target.negatives]
@@ -631,11 +735,7 @@ def _reclassify_all(state: PipelineState) -> None:
     for stem, ep_dict in episodes_dict.items():
         if stem not in state.episodes:
             continue
-        ep_state = state.episodes[stem]
-        ep_state.open_class = str(ep_dict.get("open_class", ep_state.open_class))
-        ep_state.close_class = str(ep_dict.get("close_class", ep_state.close_class))
-        ep_state.intro_class = str(ep_dict.get("intro_class", ep_state.intro_class))
-        ep_state.outro_class = str(ep_dict.get("outro_class", ep_state.outro_class))
+        _apply_service_classes(state.episodes[stem], ep_dict)
 
 
 # ---------------------------------------------------------------------------
@@ -820,6 +920,10 @@ def _detect_batch(
             ]
         return matches
 
+    if profile_cache_dir is not None:
+        for ep in episodes:
+            warm_source_profile(ep, profile_cache_dir)
+
     detector = _detector
     jobs, results = run_detection_batch(
         DetectionBatchRequest(
@@ -996,81 +1100,22 @@ def _next_uncertain(
     state: PipelineState, exclude: set[tuple[str, str]] | None = None
 ) -> tuple[str, str] | None:
     """Return (stem, kind) of the highest-scoring uncertain target, or None."""
-    candidates = []
+    candidates: list[tuple[float, str, str]] = []
     for stem, ep in state.episodes.items():
-        not_skipped_open = exclude is None or ("open", stem) not in exclude
-        not_skipped_close = exclude is None or ("close", stem) not in exclude
-        not_skipped_intro = exclude is None or ("intro", stem) not in exclude
-        not_skipped_outro = exclude is None or ("outro", stem) not in exclude
-        if ep.open_class == _UNC and ep.open_score > 0 and not_skipped_open:
-            candidates.append((ep.open_score, stem, "open"))
-        if ep.close_class == _UNC and ep.close_score > 0 and not_skipped_close:
-            candidates.append((ep.close_score, stem, "close"))
-        if ep.intro_class == _UNC and ep.intro_score > 0 and not_skipped_intro:
-            candidates.append((ep.intro_score, stem, "intro"))
-        if ep.outro_class == _UNC and ep.outro_candidates and not_skipped_outro:
-            candidates.append((ep.outro_candidates[0].score, stem, "outro"))
+        for kind in _AUDIO_KINDS:
+            if exclude is not None and (kind, stem) in exclude:
+                continue
+            if ep.class_for(kind) != _UNC:
+                continue
+            score = ep.score_for(kind)
+            if score <= 0:
+                continue
+            candidates.append((score, stem, kind))
     if not candidates:
         return None
     candidates.sort(reverse=True)
     _, stem, kind = candidates[0]
     return stem, kind
-
-
-def _kind_candidates(ep_state: EpisodeState, kind: str) -> list[_Match]:
-    if kind == "open":
-        return ep_state.open_candidates
-    if kind == "close":
-        return ep_state.close_candidates
-    if kind == "intro":
-        return ep_state.intro_candidates
-    return ep_state.outro_candidates
-
-
-def _kind_sample_path(
-    kind: str,
-    *,
-    open_sample: Path,
-    close_sample: Path,
-    intro_sample: Path,
-    outro_sample: Path,
-) -> Path:
-    if kind == "open":
-        return open_sample
-    if kind == "close":
-        return close_sample
-    if kind == "intro":
-        return intro_sample
-    return outro_sample
-
-
-def _kind_target(state: PipelineState, kind: str) -> TargetState | None:
-    if kind == "open":
-        return state.open_target
-    if kind == "close":
-        return state.close_target
-    return None
-
-
-def _get_kind_class(ep_state: EpisodeState, kind: str) -> str:
-    if kind == "open":
-        return ep_state.open_class
-    if kind == "close":
-        return ep_state.close_class
-    if kind == "intro":
-        return ep_state.intro_class
-    return ep_state.outro_class
-
-
-def _set_kind_class(ep_state: EpisodeState, kind: str, value: str) -> None:
-    if kind == "open":
-        ep_state.open_class = value
-    elif kind == "close":
-        ep_state.close_class = value
-    elif kind == "intro":
-        ep_state.intro_class = value
-    else:
-        ep_state.outro_class = value
 
 
 def _apply_review_decision(
@@ -1088,14 +1133,14 @@ def _apply_review_decision(
     if key == "a":
         if target is not None:
             target.positives.append(seg)
-        _set_kind_class(ep_state, item.kind, _POS)
+        ep_state.set_class(item.kind, _POS)
         print("\napproved", file=sys.stderr)
         return "approved", seg, (target.positives if target is not None else None)
 
     if target is not None:
         target.negatives.append(seg)
     if item.kind in ("intro", "outro"):
-        _set_kind_class(ep_state, item.kind, _NEG)
+        ep_state.set_class(item.kind, _NEG)
     print("\nrejected", file=sys.stderr)
     return "rejected", seg, (target.negatives if target is not None else None)
 
@@ -1105,7 +1150,7 @@ def _undo_last_review(state: PipelineState, history: list[_UndoEntry]) -> None:
     if entry.target_list is not None:
         entry.target_list.remove(entry.segment)
     prev_ep = state.episodes[entry.stem]
-    _set_kind_class(prev_ep, entry.kind, entry.prev_class)
+    prev_ep.set_class(entry.kind, entry.prev_class)
     _reclassify_all(state)
     print(
         f"\nundone ({entry.action} {entry.kind} for {entry.stem[:16]})",
@@ -1129,16 +1174,20 @@ def _review_candidate(
     """
     ep_state = state.episodes[item.stem]
     source = Path(ep_state.source)
-    snippet = _kind_sample_path(
-        item.kind,
-        open_sample=open_sample,
-        close_sample=close_sample,
-        intro_sample=intro_sample,
-        outro_sample=outro_sample,
-    )
-    target = _kind_target(state, item.kind)
-    all_candidates = _kind_candidates(ep_state, item.kind)
-    prev_class = _get_kind_class(ep_state, item.kind)
+    snippets: dict[str, Path] = {
+        "open": open_sample,
+        "close": close_sample,
+        "intro": intro_sample,
+        "outro": outro_sample,
+    }
+    snippet = snippets[item.kind]
+    targets: dict[str, TargetState] = {
+        "open": state.open_target,
+        "close": state.close_target,
+    }
+    target = targets.get(item.kind)
+    all_candidates = ep_state.candidates_for(item.kind)
+    prev_class = ep_state.class_for(item.kind)
     candidate = all_candidates[item.candidate_idx]
     n_total = len(all_candidates)
     position_label = f" [{item.candidate_idx + 1}/{n_total}]" if n_total > 1 else ""
@@ -1206,7 +1255,7 @@ def _review_one_target(
 ) -> str:
     """Review the top candidate for (stem, kind). Returns 'classified', 'skipped', or 'undone'."""
     ep_state = state.episodes[stem]
-    all_candidates = _kind_candidates(ep_state, kind)
+    all_candidates = ep_state.candidates_for(kind)
     if not all_candidates:
         return "skipped"
     item = _QuizItem(stem=stem, kind=kind, candidate_idx=0, score=all_candidates[0].score)
@@ -1224,10 +1273,7 @@ def _review_one_target(
 
 def _count_uncertain(state: PipelineState) -> int:
     return sum(
-        1
-        for ep in state.episodes.values()
-        for cls in (ep.open_class, ep.close_class, ep.intro_class, ep.outro_class)
-        if cls == _UNC
+        1 for ep in state.episodes.values() for kind in _AUDIO_KINDS if ep.class_for(kind) == _UNC
     )
 
 
@@ -1239,18 +1285,9 @@ def _collect_uncertain_candidates(state: PipelineState) -> list[_QuizItem]:
     returned `ReviewItem`s into pipeline `_QuizItem` objects.
     """
     # Build episodes dict expected by the service
-    episodes_dict: dict[str, dict] = {}
+    episodes_dict: dict[str, dict[str, Any]] = {}
     for stem, ep in state.episodes.items():
-        episodes_dict[stem] = {
-            "open_candidates": [{"score": float(m.score)} for m in ep.open_candidates],
-            "open_class": ep.open_class,
-            "close_candidates": [{"score": float(m.score)} for m in ep.close_candidates],
-            "close_class": ep.close_class,
-            "intro_candidates": [{"score": float(m.score)} for m in ep.intro_candidates],
-            "intro_class": ep.intro_class,
-            "outro_candidates": [{"score": float(m.score)} for m in ep.outro_candidates],
-            "outro_class": ep.outro_class,
-        }
+        episodes_dict[stem] = _episode_to_service_dict(ep, include_bounds=False)
 
     open_pos = [{"score": float(s.score)} for s in state.open_target.positives]
     open_neg = [{"score": float(s.score)} for s in state.open_target.negatives]
@@ -1310,14 +1347,7 @@ def _run_review_loop(
             decisions += 1
             state.save(state_path)
             ep = state.episodes[stem]
-            if kind == "open":
-                ep_class = ep.open_class
-            elif kind == "close":
-                ep_class = ep.close_class
-            elif kind == "intro":
-                ep_class = ep.intro_class
-            else:
-                ep_class = ep.outro_class
+            ep_class = ep.class_for(kind)
             if ep_class == _UNC:
                 # Rejection didn't auto-classify (conservative MoE); defer until re-run.
                 skipped.add((kind, stem))
@@ -1363,8 +1393,8 @@ def _run_quiz(
                 for item in remaining
                 if (item.stem, item.kind, item.candidate_idx) not in skipped_keys
                 and state.episodes.get(item.stem) is not None
-                and _get_kind_class(state.episodes[item.stem], item.kind) == _UNC
-                and item.candidate_idx < len(_kind_candidates(state.episodes[item.stem], item.kind))
+                and state.episodes[item.stem].class_for(item.kind) == _UNC
+                and item.candidate_idx < len(state.episodes[item.stem].candidates_for(item.kind))
             ),
             None,
         )
@@ -1426,7 +1456,7 @@ def _run_quiz(
 
 def _find_best_pair(ep_state: EpisodeState, *, min_gap: float, max_gap: float) -> list[Any] | None:
     """Pass all open/close candidates to pair_ad_segments; return all valid pairs or None."""
-    if not ep_state.open_candidates or not ep_state.close_candidates:
+    if not ep_state.candidates_for("open") or not ep_state.candidates_for("close"):
         return None
     opens = [
         AudioMatch(
@@ -1435,7 +1465,7 @@ def _find_best_pair(ep_state: EpisodeState, *, min_gap: float, max_gap: float) -
             duration_seconds=m.end - m.start,
             score=m.score,
         )
-        for m in ep_state.open_candidates
+        for m in ep_state.candidates_for("open")
     ]
     closes = [
         AudioMatch(
@@ -1444,7 +1474,7 @@ def _find_best_pair(ep_state: EpisodeState, *, min_gap: float, max_gap: float) -
             duration_seconds=m.end - m.start,
             score=m.score,
         )
-        for m in ep_state.close_candidates
+        for m in ep_state.candidates_for("close")
     ]
     try:
         segs, _, _ = pair_ad_segments(opens, closes, min_gap=min_gap, max_gap=max_gap)
@@ -1541,8 +1571,8 @@ def _pair_and_cut(
 
     segments = _find_best_pair(ep_state, min_gap=min_gap, max_gap=max_gap)
     if segments is None:
-        n_o = len(ep_state.open_candidates)
-        n_c = len(ep_state.close_candidates)
+        n_o = len(ep_state.candidates_for("open"))
+        n_c = len(ep_state.candidates_for("close"))
         print(f"  No valid open->close pair ({n_o} open x {n_c} close candidates).")
         return "skipped"
 
@@ -1572,8 +1602,9 @@ def _pair_and_cut(
     else:
         cuts = [(seg.open_end, seg.close_start) for seg in segments]
     intro_trim = None
-    if ep_state.intro_class == _POS and ep_state.intro_candidates:
-        intro_trim = ep_state.intro_start if intro_exclusive else ep_state.intro_end
+    intro_candidates = ep_state.candidates_for("intro")
+    if ep_state.class_for("intro") == _POS and intro_candidates:
+        intro_trim = intro_candidates[0].start if intro_exclusive else intro_candidates[0].end
     plan = build_cut_plan(cuts, intro_trim=intro_trim)
 
     if debug:
