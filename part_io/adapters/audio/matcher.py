@@ -9,6 +9,7 @@ over a 16 kHz analysis stream.
 from __future__ import annotations
 
 import logging
+import math
 from array import array
 from dataclasses import dataclass
 from functools import cache
@@ -25,6 +26,8 @@ _FRAME_SIZE = 2048
 _HOP_SIZE = 1024
 _BAND_COUNT = 32
 _LOG = logging.getLogger(__name__)
+# ~5-minute source chunks for streaming FFT progress (INFO path only)
+_CHUNK_FRAMES: int = _ANALYSIS_RATE * 60 * 5 // _HOP_SIZE
 
 
 @dataclass(frozen=True)
@@ -222,6 +225,18 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
         return features.tolist()
 
 
+def _fmt_duration(seconds: float) -> str:
+    """Format *seconds* as a compact human-readable duration string."""
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m{s:02d}s"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
 def _cross_correlation_search(reference: np.ndarray, source_profile: np.ndarray, hop: int):
     with Timer("matcher._cross_correlation_search"):
         n = source_profile.shape[0]
@@ -247,6 +262,37 @@ def _windowed_search(reference: np.ndarray, source_profile: np.ndarray, hop: int
         return scores
 
 
+def _scores_to_matches(
+    scores: np.ndarray,
+    *,
+    score_threshold: float,
+    z_threshold: float | None,
+    hop: int,
+    frame_hop_seconds: float,
+    frame_offset_seconds: float,
+    sample_duration: float,
+) -> list[AudioMatch]:
+    effective_threshold = score_threshold
+    if z_threshold is not None and scores.size > 1:
+        std = float(np.std(scores))
+        if std > 0:
+            effective_threshold = max(score_threshold, float(np.mean(scores)) + z_threshold * std)
+    matches: list[AudioMatch] = []
+    for start_index, score in enumerate(scores):
+        if score < effective_threshold:
+            continue
+        start_seconds = frame_offset_seconds + start_index * hop * frame_hop_seconds
+        matches.append(
+            AudioMatch(
+                start_seconds=round(start_seconds, 3),
+                end_seconds=round(start_seconds + sample_duration, 3),
+                duration_seconds=round(sample_duration, 3),
+                score=round(float(score), 4),
+            )
+        )
+    return matches
+
+
 def _build_match_candidates(
     *,
     reference: np.ndarray,
@@ -258,30 +304,51 @@ def _build_match_candidates(
     frame_offset_seconds: float = 0.0,
     z_threshold: float | None = None,
 ) -> list[AudioMatch]:
-    with Timer("matcher._build_match_candidates"):
-        scores = _cross_correlation_search(reference, source_profile, hop)
+    n = source_profile.shape[0]
+    m = reference.shape[0]
 
-    effective_threshold = score_threshold
-    if z_threshold is not None and scores.size > 1:
-        std = float(np.std(scores))
-        if std > 0:
-            effective_threshold = max(score_threshold, float(np.mean(scores)) + z_threshold * std)
+    if not _LOG.isEnabledFor(logging.INFO) or n <= _CHUNK_FRAMES:
+        with Timer("matcher._build_match_candidates"):
+            scores = _cross_correlation_search(reference, source_profile, hop)
+        return _scores_to_matches(
+            scores,
+            score_threshold=score_threshold,
+            z_threshold=z_threshold,
+            hop=hop,
+            frame_hop_seconds=frame_hop_seconds,
+            frame_offset_seconds=frame_offset_seconds,
+            sample_duration=sample_duration,
+        )
 
-    matches: list[AudioMatch] = []
-    for start_index, score in enumerate(scores):
-        if score < effective_threshold:
-            continue
-
-        start_seconds = frame_offset_seconds + start_index * hop * frame_hop_seconds
-        matches.append(
-            AudioMatch(
-                start_seconds=round(start_seconds, 3),
-                end_seconds=round(start_seconds + sample_duration, 3),
-                duration_seconds=round(sample_duration, 3),
-                score=round(float(score), 4),
+    # Chunked path: one FFT per ~5-minute block, progress logged after each.
+    # Overlap of m-1 frames between chunks ensures no match is missed at a boundary.
+    stride = max(1, _CHUNK_FRAMES - (m - 1))
+    n_chunks = math.ceil(max(1, n - m + 1) / stride)
+    all_matches: list[AudioMatch] = []
+    for k in range(n_chunks):
+        chunk_start = k * stride
+        chunk_end = min(n, chunk_start + _CHUNK_FRAMES)
+        chunk_offset = frame_offset_seconds + chunk_start * frame_hop_seconds
+        scores = _cross_correlation_search(reference, source_profile[chunk_start:chunk_end], hop)
+        all_matches.extend(
+            _scores_to_matches(
+                scores,
+                score_threshold=score_threshold,
+                z_threshold=z_threshold,
+                hop=hop,
+                frame_hop_seconds=frame_hop_seconds,
+                frame_offset_seconds=chunk_offset,
+                sample_duration=sample_duration,
             )
         )
-    return matches
+        _LOG.info(
+            "  [fft]  chunk %d/%d  @%s  %d hit(s) so far",
+            k + 1,
+            n_chunks,
+            _fmt_duration(frame_offset_seconds + chunk_start * frame_hop_seconds),
+            len(all_matches),
+        )
+    return all_matches
 
 
 def _normalized_similarity(reference: np.ndarray, window: np.ndarray) -> float:
@@ -453,6 +520,14 @@ def find_audio_sample_matches(
     sample_rate = _ANALYSIS_RATE
     frame_hop_seconds = _HOP_SIZE / sample_rate
     hop = max(1, int(step_seconds / frame_hop_seconds))
+    n_steps = max(0, (source_profile.shape[0] - reference.shape[0] + 1 + hop - 1) // hop)
+    _LOG.info(
+        "  [search] %s  source=%s  sample=%.1fs  steps=%d",
+        sample_path.stem,
+        _fmt_duration(source_profile.shape[0] * frame_hop_seconds),
+        sample_duration,
+        n_steps,
+    )
     matches = _build_match_candidates(
         reference=reference,
         source_profile=source_profile,
@@ -465,6 +540,7 @@ def find_audio_sample_matches(
     )
 
     matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
+    _LOG.info("  [match]  %s  %d candidate(s)", sample_path.stem, len(matches))
 
     if refine:
         matches = [
@@ -486,6 +562,11 @@ def warm_source_profile(source_path: Path, cache_dir: Path) -> None:
     so that concurrent workers hit the on-disk cache instead of each launching
     their own full-file ffmpeg decode.  ffmpeg progress is streamed to stderr.
     """
+    cached = _load_cached_profile(source_path, cache_dir)
+    if cached is not None:
+        _LOG.info("[profile] %s — loaded from cache", source_path.stem)
+        return
+    _LOG.info("[profile] %s — building cache", source_path.stem)
     _get_source_profile(source_path, cache_dir=cache_dir, show_progress=True)
 
 
@@ -662,6 +743,13 @@ def find_audio_sample_matches_from_profile(
         frame_offset_seconds = 0.0
 
     hop = max(1, int(step_seconds / frame_hop_seconds))
+    n_steps = max(0, (source_profile.shape[0] - reference.shape[0] + 1 + hop - 1) // hop)
+    _LOG.info(
+        "  [search] consensus  source=%s  sample=%.1fs  steps=%d",
+        _fmt_duration(source_profile.shape[0] * frame_hop_seconds),
+        sample_duration,
+        n_steps,
+    )
     matches = _build_match_candidates(
         reference=reference,
         source_profile=source_profile,
@@ -672,7 +760,9 @@ def find_audio_sample_matches_from_profile(
         frame_offset_seconds=frame_offset_seconds,
         z_threshold=z_threshold,
     )
-    return _suppress_overlapping(matches, min_overlap=dedupe_overlap)
+    matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
+    _LOG.info("  [match]  consensus  %d candidate(s)", len(matches))
+    return matches
 
 
 __all__ = [

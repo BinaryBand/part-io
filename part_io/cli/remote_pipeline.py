@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import json
+import logging
 import math
 import os
 import re
@@ -75,6 +76,7 @@ _STATE_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1] / "models" / "schemas" / "remote_pipeline_state.schema.json"
 )
 _AUDIO_MGR = AudioProcessManager()
+_LOG = logging.getLogger(__name__)
 
 # Classification labels
 _POS = "positive"
@@ -891,6 +893,7 @@ def _detect_batch(
         z_threshold: float | None,
         step_seconds: float,
     ) -> list[AudioMatch]:
+        _LOG.info("  [detect] %s  %s", sample_path.stem, source_path.stem)
         if sample_path in consensus_map:
             matches = find_audio_sample_matches_from_profile(
                 source_path=source_path,
@@ -909,15 +912,6 @@ def _detect_batch(
                 step_seconds=step_seconds,
                 profile_cache_dir=profile_cache_dir,
             )
-        if refine:
-            matches = [
-                cross_correlate_align(
-                    match=anchor_to_onset(match=m, source_path=source_path),
-                    source_path=source_path,
-                    sample_path=sample_path,
-                )
-                for m in matches
-            ]
         return matches
 
     if profile_cache_dir is not None:
@@ -939,6 +933,31 @@ def _detect_batch(
         max_matches=max_matches,
         workers=workers,
     )
+
+    if refine:
+        import dataclasses
+
+        refined_results = []
+        for result in results:
+            refined_matches = [
+                cross_correlate_align(
+                    match=anchor_to_onset(
+                        match=AudioMatch(
+                            start_seconds=m.start_seconds,
+                            end_seconds=m.end_seconds,
+                            duration_seconds=m.end_seconds - m.start_seconds,
+                            score=m.score,
+                        ),
+                        source_path=result.source_path,
+                    ),
+                    source_path=result.source_path,
+                    sample_path=result.sample_path,
+                )
+                for m in result.matches
+            ]
+            refined_results.append(dataclasses.replace(result, matches=refined_matches))
+        results = refined_results
+
     _process_detection_results(results, jobs, state, ep_by_stem, duration_by_stem)
 
 
@@ -2244,9 +2263,19 @@ def _add_remote_dir_arg(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_verbose_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable INFO-level logging (shows ffmpeg decode progress, cache hits, etc.)",
+    )
+
+
 def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("review", help="Detect matches and review them interactively")
     _add_remote_dir_arg(p)
+    _add_verbose_arg(p)
     p.add_argument("--snippets-dir", type=Path, default=None)
     p.add_argument("--open-sample", default=None)
     p.add_argument("--close-sample", default=None)
@@ -2262,6 +2291,7 @@ def _build_review_parser(sub: argparse._SubParsersAction) -> None:
 def _build_cut_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("cut", help="Cut ad segments using labels from __state__.toml")
     _add_remote_dir_arg(p)
+    _add_verbose_arg(p)
     p.add_argument("--output-dir", type=Path, default=None)
     _add_cut_args(p)
 
@@ -2272,6 +2302,7 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
         help="Detect one episode at a time, quiz uncertain candidates, then cut. Run repeatedly.",
     )
     _add_remote_dir_arg(p)
+    _add_verbose_arg(p)
     p.add_argument("--snippets-dir", type=Path, default=None)
     p.add_argument("--open-sample", default=None)
     p.add_argument("--close-sample", default=None)
@@ -2313,6 +2344,9 @@ def main() -> None:
     _build_cut_parser(sub)
     _build_loop_parser(sub)
     args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
 
     if args.subcommand == "review":
         _cmd_review(args)
