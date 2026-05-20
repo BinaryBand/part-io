@@ -24,7 +24,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 
@@ -50,9 +50,13 @@ from part_io.services.cut_planning import build_cut_plan
 from part_io.services.review_orchestration import (
     ReviewItem,
     UndoEntry,
+    apply_review_dict_classes,
+    apply_review_decision,
     collect_uncertain_candidates,
+    episode_to_review_dict,
     next_uncertain_episode_kind,
     reclassify_all_episodes,
+    undo_review_decision,
 )
 from part_io.utils.audio_process import AudioProcessManager
 
@@ -604,27 +608,42 @@ class PipelineState:
 # ---------------------------------------------------------------------------
 
 
-def _episode_to_service_dict(ep: EpisodeState, *, include_bounds: bool) -> dict[str, Any]:
-    """Translate one EpisodeState into service-compatible dict form."""
-    data: dict[str, Any] = {}
-    for kind in _AUDIO_KINDS:
-        if include_bounds:
-            data[f"{kind}_candidates"] = [
-                {"score": float(m.score), "start": float(m.start), "end": float(m.end)}
-                for m in ep.candidates_for(kind)
-            ]
-        else:
-            data[f"{kind}_candidates"] = [
-                {"score": float(m.score)} for m in ep.candidates_for(kind)
-            ]
-        data[f"{kind}_class"] = ep.class_for(kind)
-    return data
+def _target_to_dict_lists(target: TargetState) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    positives = [
+        {"source": s.source, "start": float(s.start), "end": float(s.end), "score": float(s.score)}
+        for s in target.positives
+    ]
+    negatives = [
+        {"source": s.source, "start": float(s.start), "end": float(s.end), "score": float(s.score)}
+        for s in target.negatives
+    ]
+    return positives, negatives
 
 
-def _apply_service_classes(ep: EpisodeState, ep_dict: dict[str, Any]) -> None:
-    """Write service-produced class values back into EpisodeState."""
-    for kind in _AUDIO_KINDS:
-        ep.set_class(kind, str(ep_dict.get(f"{kind}_class", ep.class_for(kind))))
+def _replace_target_from_dict_lists(
+    target: TargetState,
+    *,
+    positives: list[dict[str, Any]],
+    negatives: list[dict[str, Any]],
+) -> None:
+    target.positives = [
+        Segment(
+            source=str(s.get("source", "")),
+            start=float(s.get("start", 0.0)),
+            end=float(s.get("end", 0.0)),
+            score=float(s.get("score", 0.0)),
+        )
+        for s in positives
+    ]
+    target.negatives = [
+        Segment(
+            source=str(s.get("source", "")),
+            start=float(s.get("start", 0.0)),
+            end=float(s.get("end", 0.0)),
+            score=float(s.get("score", 0.0)),
+        )
+        for s in negatives
+    ]
 
 
 def _reclassify_all(state: PipelineState) -> None:
@@ -637,7 +656,7 @@ def _reclassify_all(state: PipelineState) -> None:
     # Build plain-serialisable episodes dict expected by the service
     episodes_dict: dict[str, dict[str, Any]] = {}
     for stem, ep in state.episodes.items():
-        episodes_dict[stem] = _episode_to_service_dict(ep, include_bounds=True)
+        episodes_dict[stem] = episode_to_review_dict(ep, include_bounds=True)
 
     open_pos = [{"score": float(s.score)} for s in state.open_target.positives]
     open_neg = [{"score": float(s.score)} for s in state.open_target.negatives]
@@ -651,7 +670,7 @@ def _reclassify_all(state: PipelineState) -> None:
     for stem, ep_dict in episodes_dict.items():
         if stem not in state.episodes:
             continue
-        _apply_service_classes(state.episodes[stem], ep_dict)
+        apply_review_dict_classes(state.episodes[stem], ep_dict)
 
 
 # ---------------------------------------------------------------------------
@@ -976,9 +995,14 @@ try:
         old = termios.tcgetattr(fd)
         try:
             tty.setraw(fd)
-            return sys.stdin.read(1)
+            ch = sys.stdin.read(1)
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        # In raw mode Ctrl+C arrives as \x03 instead of SIGINT; re-raise it
+        # here after the tty is restored so callers see a normal interrupt.
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        return ch
 
 except ImportError:
 
@@ -1012,49 +1036,53 @@ def _stop_audio(proc: Any | None) -> None:
 
 def _apply_review_decision(
     *,
+    state: PipelineState,
     ep_state: EpisodeState,
     item: ReviewItem,
-    target: TargetState | None,
     source: Path,
-    candidate: _Match,
-    key: str,
-) -> tuple[str, Segment, bool | None]:
-    seg = Segment(
-        source=str(source), start=candidate.start, end=candidate.end, score=candidate.score
-    )
-    if key == "a":
-        if target is not None:
-            target.positives.append(seg)
-        ep_state.set_class(item.kind, _POS)
-        print("\napproved", file=sys.stderr)
-        return "approved", seg, (True if target is not None else None)
+    key: Literal["a", "r"],
+) -> tuple[str, UndoEntry]:
+    ep_dict = episode_to_review_dict(ep_state, include_bounds=True)
+    open_pos, open_neg = _target_to_dict_lists(state.open_target)
+    close_pos, close_neg = _target_to_dict_lists(state.close_target)
 
-    if target is not None:
-        target.negatives.append(seg)
-    if item.kind in ("intro", "outro"):
-        ep_state.set_class(item.kind, _NEG)
-    print("\nrejected", file=sys.stderr)
-    return "rejected", seg, (False if target is not None else None)
+    decision, undo = apply_review_decision(
+        episode=ep_dict,
+        kind=item.kind,
+        candidate_idx=item.candidate_idx,
+        action=key,
+        source=str(source),
+        open_target_positives=open_pos,
+        open_target_negatives=open_neg,
+        close_target_positives=close_pos,
+        close_target_negatives=close_neg,
+    )
+
+    apply_review_dict_classes(ep_state, ep_dict)
+    _replace_target_from_dict_lists(state.open_target, positives=open_pos, negatives=open_neg)
+    _replace_target_from_dict_lists(state.close_target, positives=close_pos, negatives=close_neg)
+    return decision.action, undo
 
 
 def _undo_last_review(state: PipelineState, history: list[UndoEntry]) -> None:
     entry = history.pop()
 
-    if entry.kind in ("open", "close"):
-        target = state.open_target if entry.kind == "open" else state.close_target
-        target_list = target.positives if entry.target_list_was_positive else target.negatives
-        for i, seg in enumerate(target_list):
-            if (
-                seg.source == entry.segment_source
-                and seg.start == entry.segment_start
-                and seg.end == entry.segment_end
-                and seg.score == entry.segment_score
-            ):
-                target_list.pop(i)
-                break
-
     prev_ep = state.episodes[entry.stem]
-    prev_ep.set_class(entry.kind, entry.prev_class)
+    ep_dict = episode_to_review_dict(prev_ep, include_bounds=True)
+    open_pos, open_neg = _target_to_dict_lists(state.open_target)
+    close_pos, close_neg = _target_to_dict_lists(state.close_target)
+    undo_review_decision(
+        episode=ep_dict,
+        undo=entry,
+        open_target_positives=open_pos,
+        open_target_negatives=open_neg,
+        close_target_positives=close_pos,
+        close_target_negatives=close_neg,
+    )
+
+    apply_review_dict_classes(prev_ep, ep_dict)
+    _replace_target_from_dict_lists(state.open_target, positives=open_pos, negatives=open_neg)
+    _replace_target_from_dict_lists(state.close_target, positives=close_pos, negatives=close_neg)
     _reclassify_all(state)
     print(
         f"\nundone ({entry.action} {entry.kind} for {entry.stem[:16]})",
@@ -1085,11 +1113,6 @@ def _review_candidate(
         "outro": outro_sample,
     }
     snippet = snippets[item.kind]
-    targets: dict[str, TargetState] = {
-        "open": state.open_target,
-        "close": state.close_target,
-    }
-    target = targets.get(item.kind)
     all_candidates = ep_state.candidates_for(item.kind)
     prev_class = ep_state.class_for(item.kind)
     candidate = all_candidates[item.candidate_idx]
@@ -1115,28 +1138,31 @@ def _review_candidate(
             current_proc = _start_audio(snippet)
             print(f"\r{legend}", end="", flush=True, file=sys.stderr)
         elif key in ("a", "r"):
-            action, seg, target_list_was_positive = _apply_review_decision(
+            action_key = cast(Literal["a", "r"], key)
+            action, undo = _apply_review_decision(
+                state=state,
                 ep_state=ep_state,
                 item=item,
-                target=target,
                 source=source,
-                candidate=candidate,
-                key=key,
+                key=action_key,
             )
+            undo.stem = item.stem
+            undo.prev_class = prev_class
             history.append(
                 UndoEntry(
-                    stem=item.stem,
-                    kind=item.kind,
-                    action=key,
-                    segment_source=seg.source,
-                    segment_start=seg.start,
-                    segment_end=seg.end,
-                    segment_score=seg.score,
-                    target_list_was_positive=bool(target_list_was_positive),
-                    prev_class=prev_class,
+                    stem=undo.stem,
+                    kind=undo.kind,
+                    action=undo.action,
+                    segment_source=undo.segment_source,
+                    segment_start=undo.segment_start,
+                    segment_end=undo.segment_end,
+                    segment_score=undo.segment_score,
+                    target_list_was_positive=undo.target_list_was_positive,
+                    prev_class=undo.prev_class,
                 )
             )
             _reclassify_all(state)
+            print(f"\n{action}", file=sys.stderr)
             return action
         elif key == "s":
             print("\nskipped", file=sys.stderr)
@@ -1194,7 +1220,7 @@ def _collect_uncertain_candidates(state: PipelineState) -> list[ReviewItem]:
     # Build episodes dict expected by the service
     episodes_dict: dict[str, dict[str, Any]] = {}
     for stem, ep in state.episodes.items():
-        episodes_dict[stem] = _episode_to_service_dict(ep, include_bounds=False)
+        episodes_dict[stem] = episode_to_review_dict(ep, include_bounds=False)
 
     open_pos = [{"score": float(s.score)} for s in state.open_target.positives]
     open_neg = [{"score": float(s.score)} for s in state.open_target.negatives]
@@ -1224,7 +1250,7 @@ def _run_review_loop(
     decisions = 0
     while max_decisions is None or decisions < max_decisions:
         episodes_dict = {
-            stem: _episode_to_service_dict(ep, include_bounds=False)
+            stem: episode_to_review_dict(ep, include_bounds=False)
             for stem, ep in state.episodes.items()
         }
         next_t = next_uncertain_episode_kind(episodes_dict, exclude=skipped)
@@ -2224,21 +2250,200 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     )
 
 
+def _build_precache_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "precache",
+        help="Pre-warm spectral profile cache for all episodes overnight.",
+    )
+    _add_remote_dir_arg(p)
+    _add_verbose_arg(p)
+    p.add_argument(
+        "--sleep",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help="Pause between episodes to reduce sustained CPU load (default: 5)",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Re-build cache entries that already exist",
+    )
+
+
+def _cmd_precache(args: argparse.Namespace) -> None:
+    import time
+
+    remote_dir: Path = args.remote_dir
+    sleep_s: float = args.sleep
+    overwrite: bool = args.overwrite
+    profile_cache_dir = remote_dir.parent / ".profile_cache"
+    profile_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    episodes = _full_episodes(remote_dir)
+    if not episodes:
+        print("No episodes found.", file=sys.stderr)
+        return
+
+    cached = 0
+    built = 0
+    for i, ep in enumerate(episodes, 1):
+        cache_path = profile_cache_dir / f"{ep.stem}.npz"
+        if not overwrite and cache_path.exists():
+            _LOG.info("[precache] %d/%d  %s  (cached)", i, len(episodes), ep.stem)
+            cached += 1
+            continue
+        _LOG.info("[precache] %d/%d  %s  building…", i, len(episodes), ep.stem)
+        print(f"[{i}/{len(episodes)}] {ep.stem}", flush=True)
+        try:
+            warm_source_profile(ep, profile_cache_dir)
+            built += 1
+        except Exception as exc:
+            print(f"  WARNING: failed — {exc}", file=sys.stderr)
+        if i < len(episodes) and sleep_s > 0:
+            time.sleep(sleep_s)
+
+    print(f"\nDone. {built} built, {cached} already cached.", flush=True)
+
+
+def _precache_paths(remote_dir: Path) -> tuple[Path, Path]:
+    """Return (pidfile, logfile) for background precache process."""
+    base = remote_dir.parent
+    return base / ".precache.pid", base / ".precache.log"
+
+
+def _precache_running(pid_path: Path) -> int | None:
+    """Return the running PID if the precache process is alive, else None."""
+    if not pid_path.exists():
+        return None
+    try:
+        pid = int(pid_path.read_text().strip())
+        os.kill(pid, 0)  # signal 0 = existence check
+        return pid
+    except (ValueError, ProcessLookupError, PermissionError):
+        return None
+
+
+def _build_precache_start_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("precache-start", help="Start precache as a background process.")
+    _add_remote_dir_arg(p)
+    p.add_argument("--sleep", type=float, default=10.0, metavar="SECONDS",
+                   help="Pause between episodes (default: 10)")
+    p.add_argument("--overwrite", action="store_true", default=False,
+                   help="Re-build cache entries that already exist")
+
+
+def _build_precache_stop_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("precache-stop", help="Stop a running background precache process.")
+    _add_remote_dir_arg(p)
+
+
+def _build_precache_status_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("precache-status", help="Show background precache status and recent log.")
+    _add_remote_dir_arg(p)
+    p.add_argument("--lines", type=int, default=20, metavar="N",
+                   help="Number of recent log lines to show (default: 20)")
+
+
+def _cmd_precache_start(args: argparse.Namespace) -> None:
+    import subprocess
+
+    remote_dir: Path = args.remote_dir
+    pid_path, log_path = _precache_paths(remote_dir)
+
+    existing = _precache_running(pid_path)
+    if existing is not None:
+        print(f"Already running (pid {existing}). Use precache-stop first.", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = [
+        sys.executable, "-m", "part_io.cli.remote_pipeline", "precache",
+        "--verbose",
+        "--sleep", str(args.sleep),
+        str(remote_dir),
+    ]
+    if args.overwrite:
+        cmd.append("--overwrite")
+
+    log_f = log_path.open("a")
+    proc = subprocess.Popen(  # noqa: S603
+        cmd,
+        stdout=log_f,
+        stderr=log_f,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,  # detach from the terminal's process group
+    )
+    pid_path.write_text(str(proc.pid))
+    print(f"Started precache (pid {proc.pid}).")
+    print(f"Log: {log_path}")
+    print("Stop with: poetry run part-io-tasks remote-precache-stop")
+
+
+def _cmd_precache_stop(args: argparse.Namespace) -> None:
+    import signal
+
+    remote_dir: Path = args.remote_dir
+    pid_path, _ = _precache_paths(remote_dir)
+
+    pid = _precache_running(pid_path)
+    if pid is None:
+        print("No precache process is running.")
+        pid_path.unlink(missing_ok=True)
+        return
+
+    os.kill(pid, signal.SIGTERM)
+    pid_path.unlink(missing_ok=True)
+    print(f"Stopped precache (pid {pid}).")
+
+
+def _cmd_precache_status(args: argparse.Namespace) -> None:
+    remote_dir: Path = args.remote_dir
+    pid_path, log_path = _precache_paths(remote_dir)
+
+    pid = _precache_running(pid_path)
+    if pid is None:
+        print("Precache: not running.")
+        pid_path.unlink(missing_ok=True)
+    else:
+        print(f"Precache: running (pid {pid})")
+
+    if log_path.exists():
+        lines = log_path.read_text().splitlines()
+        tail = lines[-args.lines :]
+        print(f"\n--- last {len(tail)} lines of {log_path} ---")
+        print("\n".join(tail))
+    else:
+        print("No log file found.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Remote episode review and ad-cut pipeline.")
     sub = parser.add_subparsers(dest="subcommand", required=True)
     _build_review_parser(sub)
     _build_cut_parser(sub)
     _build_loop_parser(sub)
+    _build_precache_parser(sub)
+    _build_precache_start_parser(sub)
+    _build_precache_stop_parser(sub)
+    _build_precache_status_parser(sub)
     args = parser.parse_args()
 
-    if args.verbose:
+    if args.verbose if hasattr(args, "verbose") else False:
         logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
 
     if args.subcommand == "review":
         _cmd_review(args)
     elif args.subcommand == "cut":
         _cmd_cut(args)
+    elif args.subcommand == "precache":
+        _cmd_precache(args)
+    elif args.subcommand == "precache-start":
+        _cmd_precache_start(args)
+    elif args.subcommand == "precache-stop":
+        _cmd_precache_stop(args)
+    elif args.subcommand == "precache-status":
+        _cmd_precache_status(args)
     else:
         _cmd_loop(args)
 

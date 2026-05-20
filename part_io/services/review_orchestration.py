@@ -9,9 +9,18 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, Protocol
 
 Classification = Literal["positive", "negative", "uncertain", "undetected"]
+REVIEW_KINDS = ("open", "close", "intro", "outro")
+
+
+class EpisodeStateLike(Protocol):
+    def candidates_for(self, kind: str) -> list[Any]: ...
+
+    def class_for(self, kind: str) -> str: ...
+
+    def set_class(self, kind: str, value: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,136 @@ class UndoEntry:
     segment_score: float
     target_list_was_positive: bool  # True if appended to positives, False if negatives
     prev_class: str  # previous classification before decision
+
+
+def episode_to_review_dict(
+    episode: EpisodeStateLike,
+    *,
+    include_bounds: bool,
+) -> dict[str, Any]:
+    """Convert an episode state object into the dict shape used by this service."""
+    data: dict[str, Any] = {}
+    for kind in REVIEW_KINDS:
+        if include_bounds:
+            data[f"{kind}_candidates"] = [
+                {"score": float(match.score), "start": float(match.start), "end": float(match.end)}
+                for match in episode.candidates_for(kind)
+            ]
+        else:
+            data[f"{kind}_candidates"] = [
+                {"score": float(match.score)} for match in episode.candidates_for(kind)
+            ]
+        data[f"{kind}_class"] = episode.class_for(kind)
+    return data
+
+
+def apply_review_dict_classes(episode: EpisodeStateLike, episode_dict: dict[str, Any]) -> None:
+    """Copy service-produced class values back into an episode state object."""
+    for kind in REVIEW_KINDS:
+        episode.set_class(kind, str(episode_dict.get(f"{kind}_class", episode.class_for(kind))))
+
+
+def apply_review_decision(
+    *,
+    episode: dict,
+    kind: str,
+    candidate_idx: int,
+    action: Literal["a", "r"],
+    source: str,
+    open_target_positives: list[dict],
+    open_target_negatives: list[dict],
+    close_target_positives: list[dict],
+    close_target_negatives: list[dict],
+) -> tuple[ReviewDecision, UndoEntry]:
+    """Apply one review action (approve/reject) to episode and targets.
+
+    Mutates *episode* and relevant target lists in-place and returns the
+    corresponding decision/undo records.
+    """
+    candidates = episode.get(f"{kind}_candidates", [])
+    if candidate_idx < 0 or candidate_idx >= len(candidates):
+        raise IndexError(f"candidate_idx out of range for {kind}: {candidate_idx}")
+
+    cand = candidates[candidate_idx]
+    segment = {
+        "source": source,
+        "start": float(cand.get("start", 0.0)),
+        "end": float(cand.get("end", 0.0)),
+        "score": float(cand.get("score", 0.0)),
+    }
+    prev_class = str(episode.get(f"{kind}_class", "uncertain"))
+
+    if action == "a":
+        if kind == "open":
+            open_target_positives.append(segment)
+        elif kind == "close":
+            close_target_positives.append(segment)
+        episode[f"{kind}_class"] = "positive"
+        decision_action: Literal["approved", "rejected"] = "approved"
+        target_list_was_positive = True
+    else:
+        if kind == "open":
+            open_target_negatives.append(segment)
+        elif kind == "close":
+            close_target_negatives.append(segment)
+        elif kind in ("intro", "outro"):
+            episode[f"{kind}_class"] = "negative"
+        decision_action = "rejected"
+        target_list_was_positive = False
+
+    decision = ReviewDecision(
+        action=decision_action,
+        segment_source=segment["source"],
+        segment_start=float(segment["start"]),
+        segment_end=float(segment["end"]),
+        segment_score=float(segment["score"]),
+    )
+    undo = UndoEntry(
+        stem="",
+        kind=kind,
+        action=action,
+        segment_source=decision.segment_source,
+        segment_start=decision.segment_start,
+        segment_end=decision.segment_end,
+        segment_score=decision.segment_score,
+        target_list_was_positive=target_list_was_positive,
+        prev_class=prev_class,
+    )
+    return decision, undo
+
+
+def undo_review_decision(
+    *,
+    episode: dict,
+    undo: UndoEntry,
+    open_target_positives: list[dict],
+    open_target_negatives: list[dict],
+    close_target_positives: list[dict],
+    close_target_negatives: list[dict],
+) -> None:
+    """Undo one previously applied review decision in-place."""
+
+    def _remove_segment(target_list: list[dict]) -> None:
+        for i, seg in enumerate(target_list):
+            if (
+                str(seg.get("source", "")) == undo.segment_source
+                and float(seg.get("start", 0.0)) == float(undo.segment_start)
+                and float(seg.get("end", 0.0)) == float(undo.segment_end)
+                and float(seg.get("score", 0.0)) == float(undo.segment_score)
+            ):
+                target_list.pop(i)
+                return
+
+    if undo.kind == "open":
+        _remove_segment(
+            open_target_positives if undo.target_list_was_positive else open_target_negatives
+        )
+    elif undo.kind == "close":
+        _remove_segment(
+            close_target_positives if undo.target_list_was_positive else close_target_negatives
+        )
+
+    episode[f"{undo.kind}_class"] = undo.prev_class
 
 
 # Thresholds for 98% t-critical values used in MOE computation.

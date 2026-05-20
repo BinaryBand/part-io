@@ -54,6 +54,7 @@ def _print_help() -> None:
     print("  remote-review       Generate open/close review bundles from downloads/remote/")
     print("  remote-cut          Cut ad segments from labeled remote episodes")
     print("  remote-loop         Generate → review → cut one episode at a time (streamlined)")
+    print("  remote-precache     Pre-warm spectral profile cache for all episodes overnight")
     print("  remote-promote      Safely replace remote files with staged cleaned versions")
     print("  compile         Generate Pydantic model schemas into part_io/models/schemas")
     print("  generate-tasks  Regenerate config/generated.mk")
@@ -162,6 +163,10 @@ _PASSTHROUGH_CMDS = {
     "remote-review",
     "remote-cut",
     "remote-loop",
+    "remote-precache",
+    "remote-precache-start",
+    "remote-precache-stop",
+    "remote-precache-status",
     "remote-promote",
 }
 
@@ -173,7 +178,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("install")
     sub.add_parser("test")
     for cmd in sorted(_PASSTHROUGH_CMDS):
-        sub.add_parser(cmd)
+        sub.add_parser(cmd, add_help=False)
     generate = sub.add_parser("generate-tasks")
     generate.add_argument("--profile", help="Registry profile to generate task targets for")
     check = sub.add_parser("check-tasks")
@@ -201,7 +206,10 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace, extra: 
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_detect", *extra]))
     if args.command == "audio-ad-remove":
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_remove", *extra]))
-    if args.command in ("remote-review", "remote-cut", "remote-loop"):
+    if args.command in (
+        "remote-review", "remote-cut", "remote-loop",
+        "remote-precache", "remote-precache-start", "remote-precache-stop", "remote-precache-status",
+    ):
         sub = args.command.split("-", 1)[1]
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", sub, *extra]))
     if args.command == "remote-promote":

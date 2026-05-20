@@ -2,13 +2,45 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from part_io.services.review_orchestration import (
+    apply_review_dict_classes,
+    apply_review_decision,
     classify_score_with_thresholds,
     collect_uncertain_candidates,
     compute_classification_thresholds,
+    episode_to_review_dict,
     next_uncertain_episode_kind,
     reclassify_all_episodes,
+    undo_review_decision,
 )
+
+
+@dataclass(frozen=True)
+class _FakeMatch:
+    score: float
+    start: float
+    end: float
+
+
+@dataclass
+class _FakeEpisode:
+    candidates: dict[str, list[_FakeMatch]] = field(
+        default_factory=lambda: {kind: [] for kind in ("open", "close", "intro", "outro")}
+    )
+    classes: dict[str, str] = field(
+        default_factory=lambda: {kind: "undetected" for kind in ("open", "close", "intro", "outro")}
+    )
+
+    def candidates_for(self, kind: str) -> list[_FakeMatch]:
+        return self.candidates[kind]
+
+    def class_for(self, kind: str) -> str:
+        return self.classes[kind]
+
+    def set_class(self, kind: str, value: str) -> None:
+        self.classes[kind] = value
 
 
 class TestClassificationThresholds:
@@ -20,6 +52,42 @@ class TestClassificationThresholds:
     def test_no_negatives_returns_neg_inf(self) -> None:
         tp, tm = compute_classification_thresholds([0.9], [])
         assert tm == float("-inf")
+
+
+class TestEpisodeBridge:
+    def test_episode_to_review_dict_includes_bounds_when_requested(self) -> None:
+        episode = _FakeEpisode(
+            candidates={
+                "open": [_FakeMatch(score=0.9, start=1.0, end=2.0)],
+                "close": [],
+                "intro": [],
+                "outro": [],
+            },
+            classes={
+                "open": "uncertain",
+                "close": "undetected",
+                "intro": "undetected",
+                "outro": "undetected",
+            },
+        )
+
+        data = episode_to_review_dict(episode, include_bounds=True)
+        assert data["open_candidates"] == [{"score": 0.9, "start": 1.0, "end": 2.0}]
+        assert data["open_class"] == "uncertain"
+
+    def test_apply_review_dict_classes_writes_back_classes(self) -> None:
+        episode = _FakeEpisode()
+        apply_review_dict_classes(
+            episode,
+            {
+                "open_class": "positive",
+                "close_class": "negative",
+                "intro_class": "uncertain",
+                "outro_class": "undetected",
+            },
+        )
+        assert episode.class_for("open") == "positive"
+        assert episode.class_for("close") == "negative"
         assert tp > 0.9  # moe adds to min positive
 
     def test_positives_set_theta_plus(self) -> None:
@@ -306,3 +374,86 @@ class TestNextUncertainEpisodeKind:
         }
 
         assert next_uncertain_episode_kind(episodes, exclude={("open", "ep1")}) is None
+
+
+class TestApplyAndUndoReviewDecision:
+    def test_apply_approve_open_adds_positive_and_sets_class(self) -> None:
+        episode = {
+            "open_class": "uncertain",
+            "open_candidates": [{"score": 0.9, "start": 10.0, "end": 15.0}],
+        }
+        open_pos: list[dict] = []
+        open_neg: list[dict] = []
+        close_pos: list[dict] = []
+        close_neg: list[dict] = []
+
+        decision, undo = apply_review_decision(
+            episode=episode,
+            kind="open",
+            candidate_idx=0,
+            action="a",
+            source="downloads/ep1.mp3",
+            open_target_positives=open_pos,
+            open_target_negatives=open_neg,
+            close_target_positives=close_pos,
+            close_target_negatives=close_neg,
+        )
+
+        assert decision.action == "approved"
+        assert episode["open_class"] == "positive"
+        assert len(open_pos) == 1
+        assert undo.kind == "open"
+        assert undo.target_list_was_positive is True
+
+    def test_apply_reject_intro_sets_negative_without_target_append(self) -> None:
+        episode = {
+            "intro_class": "uncertain",
+            "intro_candidates": [{"score": 0.7, "start": 3.0, "end": 6.0}],
+        }
+
+        decision, undo = apply_review_decision(
+            episode=episode,
+            kind="intro",
+            candidate_idx=0,
+            action="r",
+            source="downloads/ep1.mp3",
+            open_target_positives=[],
+            open_target_negatives=[],
+            close_target_positives=[],
+            close_target_negatives=[],
+        )
+
+        assert decision.action == "rejected"
+        assert episode["intro_class"] == "negative"
+        assert undo.target_list_was_positive is False
+
+    def test_undo_removes_segment_and_restores_class(self) -> None:
+        episode = {
+            "close_class": "positive",
+            "close_candidates": [{"score": 0.4, "start": 20.0, "end": 24.0}],
+        }
+        close_pos = [{"source": "s.mp3", "start": 20.0, "end": 24.0, "score": 0.4}]
+
+        from part_io.services.review_orchestration import UndoEntry
+
+        undo_review_decision(
+            episode=episode,
+            undo=UndoEntry(
+                stem="ep1",
+                kind="close",
+                action="a",
+                segment_source="s.mp3",
+                segment_start=20.0,
+                segment_end=24.0,
+                segment_score=0.4,
+                target_list_was_positive=True,
+                prev_class="uncertain",
+            ),
+            open_target_positives=[],
+            open_target_negatives=[],
+            close_target_positives=close_pos,
+            close_target_negatives=[],
+        )
+
+        assert episode["close_class"] == "uncertain"
+        assert close_pos == []

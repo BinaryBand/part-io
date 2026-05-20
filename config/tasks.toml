@@ -42,6 +42,34 @@ module = "part_io.cli.lint.ruff"
 description = "Run ruff check or format with settings from config/lint.toml"
 required = true
 
+# ---------------------------------------------------------------------------
+# Operational tasks — not part of any lint profile; run manually as needed.
+# ---------------------------------------------------------------------------
+
+[[tasks]]
+target = "remote.precache"
+module = "part_io.cli.remote_pipeline"
+description = "Pre-warm spectral profile cache for all episodes (foreground)"
+required = false
+
+[[tasks]]
+target = "remote.precache.start"
+module = "part_io.cli.remote_pipeline"
+description = "Start precache as a detached background process (pidfile + log)"
+required = false
+
+[[tasks]]
+target = "remote.precache.stop"
+module = "part_io.cli.remote_pipeline"
+description = "Stop the running background precache process"
+required = false
+
+[[tasks]]
+target = "remote.precache.status"
+module = "part_io.cli.remote_pipeline"
+description = "Show whether precache is running and tail the log"
+required = false
+
 [profiles]
 strict = [
     "lint.coverage",
