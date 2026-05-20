@@ -22,12 +22,20 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from part_io.adapters.audio.ad_segments import pair_ad_segments
-from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
+from part_io.adapters.audio.matcher import (
+    AudioMatch,
+    anchor_to_onset,
+    build_consensus_profile,
+    cross_correlate_align,
+    find_audio_sample_matches,
+    find_audio_sample_matches_from_profile,
+)
 from part_io.adapters.process.runner import run_resolved
 from part_io.cli.audio_ad_remove import _build_filter_complex, _run_ffmpeg
 from part_io.services.audio_detection import (
@@ -183,6 +191,7 @@ class RunSettings:
     fade: float = 0.5
     quiz_size: int = 10
     overwrite: bool = False
+    refine: bool = False
     snippets_dir: str = "downloads/snippets"
     open_sample: str = "open.mp3"
     close_sample: str = "close.mp3"
@@ -281,6 +290,7 @@ def _load_settings(raw: dict) -> RunSettings:
         fade=float(raw.get("fade", 0.5)),
         quiz_size=int(raw.get("quiz_size", 10)),
         overwrite=bool(raw.get("overwrite", False)),
+        refine=bool(raw.get("refine", False)),
         snippets_dir=str(raw.get("snippets_dir", "downloads/snippets")),
         open_sample=str(raw.get("open_sample", "open.mp3")),
         close_sample=str(raw.get("close_sample", "close.mp3")),
@@ -443,6 +453,7 @@ class PipelineState:
             f"fade = {settings.fade:.6g}\n",
             f"quiz_size = {settings.quiz_size}\n",
             f"overwrite = {str(settings.overwrite).lower()}\n",
+            f"refine = {str(settings.refine).lower()}\n",
             f"snippets_dir = {json.dumps(settings.snippets_dir)}\n",
             f"open_sample = {json.dumps(settings.open_sample)}\n",
             f"close_sample = {json.dumps(settings.close_sample)}\n",
@@ -632,11 +643,16 @@ def _reclassify_all(state: PipelineState) -> None:
 # ---------------------------------------------------------------------------
 
 
+_AUDIO_EXTENSIONS = frozenset({".mp3", ".opus"})
+
+
 def _full_episodes(remote_dir: Path) -> list[Path]:
     return sorted(
         p
-        for p in remote_dir.glob("*.mp3")
-        if p.is_file() and p.stat().st_size >= _MIN_EPISODE_BYTES
+        for p in remote_dir.iterdir()
+        if p.suffix.lower() in _AUDIO_EXTENSIONS
+        and p.is_file()
+        and p.stat().st_size >= _MIN_EPISODE_BYTES
     )
 
 
@@ -668,6 +684,7 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     # no_interactive is a session flag — never sticky; always use CLI value (default False)
     args.no_interactive = bool(args.no_interactive)
     args.overwrite = bool(_resolve_opt(args.overwrite, s.overwrite))
+    args.refine = bool(_resolve_opt(args.refine, s.refine))
 
     s.snippets_dir = str(args.snippets_dir)
     s.open_sample = args.open_sample
@@ -679,6 +696,7 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     s.workers = args.workers
     s.max_matches = args.max_matches
     s.overwrite = args.overwrite
+    s.refine = args.refine
 
 
 def _apply_sticky_cut_args(args: argparse.Namespace, state: PipelineState) -> None:
@@ -714,6 +732,18 @@ def _apply_sticky_loop_args(args: argparse.Namespace, state: PipelineState) -> N
 # ---------------------------------------------------------------------------
 
 
+def _build_consensus_from_segments(
+    positives: list[Segment],
+) -> np.ndarray | None:
+    """Attempt to build a consensus spectral profile from confirmed positive segments.
+
+    Returns ``None`` when there are fewer than 2 valid positives or decoding
+    fails for all of them.
+    """
+    tuples = [(Path(seg.source), seg.start, seg.end) for seg in positives if seg.source]
+    return build_consensus_profile(tuples) if tuples else None
+
+
 def _detect_batch(
     episodes: list[Path],
     state: PipelineState,
@@ -727,14 +757,70 @@ def _detect_batch(
     workers: int,
     max_matches: int,
     profile_cache_dir: Path | None = None,
+    refine: bool = False,
 ) -> None:
     """Detect open+close (and optional intro) matches for a batch.
+
+    When confirmed positives exist for a target type the detector uses a
+    consensus spectral profile averaged from all those confirmed segments
+    rather than the static reference file.  This accounts for natural
+    variation in level, EQ, and codec compression across episodes.
 
     Updates pipeline state in-place.
     """
     ep_by_stem = {ep.stem: ep for ep in episodes}
     duration_by_stem = {ep.stem: _probe_audio_duration_seconds(ep) for ep in episodes}
-    detector = partial(find_audio_sample_matches, profile_cache_dir=profile_cache_dir)
+
+    # Build consensus profiles from confirmed positives (if enough exist).
+    open_consensus = _build_consensus_from_segments(state.open_target.positives)
+    close_consensus = _build_consensus_from_segments(state.close_target.positives)
+
+    consensus_map: dict[Path, np.ndarray] = {}
+    if open_consensus is not None:
+        consensus_map[open_sample] = open_consensus
+        _emit(f"  [consensus] open: averaged {len(state.open_target.positives)} positives")
+    if close_consensus is not None:
+        consensus_map[close_sample] = close_consensus
+        _emit(f"  [consensus] close: averaged {len(state.close_target.positives)} positives")
+
+    def _detector(
+        *,
+        source_path: Path,
+        sample_path: Path,
+        score_threshold: float,
+        z_threshold: float | None,
+        step_seconds: float,
+    ) -> list[AudioMatch]:
+        if sample_path in consensus_map:
+            matches = find_audio_sample_matches_from_profile(
+                source_path=source_path,
+                reference=consensus_map[sample_path],
+                score_threshold=score_threshold,
+                step_seconds=step_seconds,
+                z_threshold=z_threshold,
+                profile_cache_dir=profile_cache_dir,
+            )
+        else:
+            matches = find_audio_sample_matches(
+                source_path=source_path,
+                sample_path=sample_path,
+                score_threshold=score_threshold,
+                z_threshold=z_threshold,
+                step_seconds=step_seconds,
+                profile_cache_dir=profile_cache_dir,
+            )
+        if refine:
+            matches = [
+                cross_correlate_align(
+                    match=anchor_to_onset(match=m, source_path=source_path),
+                    source_path=source_path,
+                    sample_path=sample_path,
+                )
+                for m in matches
+            ]
+        return matches
+
+    detector = _detector
     jobs, results = run_detection_batch(
         DetectionBatchRequest(
             episodes=episodes,
@@ -749,7 +835,20 @@ def _detect_batch(
         max_matches=max_matches,
         workers=workers,
     )
+    _process_detection_results(results, jobs, state, ep_by_stem, duration_by_stem)
 
+
+def _process_detection_results(
+    results,
+    jobs,
+    state: PipelineState,
+    ep_by_stem: dict[str, Path],
+    duration_by_stem: dict[str, float | None],
+) -> None:
+    """Apply detection results back into the pipeline state and emit progress.
+
+    Extracted from `_detect_batch` to reduce cyclomatic complexity.
+    """
     for done, result in enumerate(results, start=1):
         stem = result.stem
         kind = result.kind
@@ -1517,7 +1616,17 @@ def _cut_cuttable(
     ]
     n_cut = n_skipped = n_failed = 0
     for stem, ep_state in sorted(cuttable):
-        source = Path(ep_state.source) if ep_state.source else remote_dir / f"{stem}.mp3"
+        if ep_state.source:
+            source = Path(ep_state.source)
+        else:
+            source = next(
+                (
+                    remote_dir / f"{stem}{ext}"
+                    for ext in _AUDIO_EXTENSIONS
+                    if (remote_dir / f"{stem}{ext}").exists()
+                ),
+                remote_dir / f"{stem}.mp3",
+            )
         if not source.exists():
             print(f"SKIP {stem}: source not found at {source}")
             n_skipped += 1
@@ -1572,6 +1681,7 @@ def _collect_loop_candidates(
     close_sample: Path,
     intro_sample: Path,
     outro_sample: Path | None,
+    refine: bool = False,
     profile_cache_dir: Path | None = None,
 ) -> tuple[list[_QuizItem], int]:
     """Detect until enough uncertain candidates are available or no work remains."""
@@ -1594,6 +1704,7 @@ def _collect_loop_candidates(
             step_seconds=step_seconds,
             workers=workers,
             max_matches=max_matches,
+            refine=refine,
             profile_cache_dir=profile_cache_dir,
         )
         _reclassify_all(state)
@@ -1663,6 +1774,7 @@ def _run_loop_once(
     intro_exclusive: bool,
     fade_dur: float,
     debug: bool,
+    refine: bool = False,
 ) -> None:
     """Run one detect/review/cut pass in non-interactive mode."""
     quiz_items, n_unc = _collect_loop_candidates(
@@ -1679,6 +1791,7 @@ def _run_loop_once(
         close_sample=close_sample,
         intro_sample=intro_sample,
         outro_sample=outro_sample,
+        refine=refine,
         profile_cache_dir=remote_dir.parent / ".profile_cache",
     )
     if quiz_items:
@@ -1741,6 +1854,7 @@ def _run_loop_until_clean(
     intro_exclusive: bool,
     fade_dur: float,
     debug: bool,
+    refine: bool = False,
 ) -> None:
     """Run repeat detect/review/cut passes until no work remains or the user quits."""
     while True:
@@ -1758,10 +1872,11 @@ def _run_loop_until_clean(
             close_sample=close_sample,
             intro_sample=intro_sample,
             outro_sample=outro_sample,
+            refine=refine,
             profile_cache_dir=remote_dir.parent / ".profile_cache",
         )
         n_remain_undet, n_remain_unc, n_remain_cut = _loop_work_counts(state, all_full)
-        if not n_remain_undet and not n_remain_unc and not n_remain_cut:
+        if not n_remain_undet and not n_remain_unc and (not n_remain_cut or dry_run):
             _emit("\nDirectory is clean.")
             return
 
@@ -1809,7 +1924,7 @@ def _run_loop_until_clean(
             print(f"Cut: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
         if n_failed:
             sys.exit(1)
-        if not n_remain_undet and not n_remain_unc and not n_remain_cut:
+        if not n_remain_undet and not n_remain_unc and (not n_remain_cut or dry_run):
             _emit("Directory is clean.")
             return
 
@@ -1981,6 +2096,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             intro_exclusive=state.settings.intro_exclusive,
             fade_dur=args.fade,
             debug=args.debug,
+            refine=args.refine,
         )
         return
 
@@ -2008,6 +2124,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         intro_exclusive=state.settings.intro_exclusive,
         fade_dur=args.fade,
         debug=args.debug,
+        refine=args.refine,
     )
 
 
@@ -2036,6 +2153,12 @@ def _add_detect_args(p: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         help="Top-N candidate positions to store",
+    )
+    p.add_argument(
+        "--refine",
+        action="store_true",
+        default=None,
+        help="Apply onset anchoring and cross-correlation alignment to each candidate",
     )
 
 

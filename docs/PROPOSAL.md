@@ -73,10 +73,11 @@ Implementation notes:
 - Per-file pre-filtering: when `z_threshold` is supplied, the raw per-window scores for a file are used to compute `mean` and `std`; an `effective_threshold` is set to
 
 $$
-	ext{effective\_threshold} = \max\bigl(\text{score\_threshold},\; \mu_{scores} + z\_threshold \cdot \sigma_{scores}\bigr)
+ ext{effective\_threshold} = \max\bigl(\text{score\_threshold},\; \mu_{scores} + z\_threshold \cdot \sigma_{scores}\bigr)
 $$
 
 Only peaks above `effective_threshold` are kept. This removes peaks that are not significantly above the local noise floor for that file.
+
 - Overlapping candidate suppression keeps the highest-scoring candidate among matches whose overlap ratio exceeds the configured `dedupe_overlap` (default 0.5).
 - Matches are optionally refined by `anchor_to_onset` (shift to the first clear energy onset inside the matched window) and `cross_correlate_align` (waveform cross-correlation on a padded window for sample-accurate alignment).
 - Source spectral profiles can be cached to disk (`.npz`) and are validated by file mtime and size to avoid stale reuse.
@@ -95,7 +96,7 @@ There are two orthogonal thresholding stages in the implemented pipeline:
 The implemented MoE is the t-distribution based margin on the sample mean:
 
 $$
-	ext{moe}(S) = t_{\alpha/2,\,n-1} \cdot \frac{\sqrt{\operatorname{Var}(S)}}{\sqrt{n}}
+ ext{moe}(S) = t_{\alpha/2,\,n-1} \cdot \frac{\sqrt{\operatorname{Var}(S)}}{\sqrt{n}}
 $$
 
 where $t_{\alpha/2,\,n-1}$ is a 98% two-tailed critical value chosen by sample size ($n$). For $n\ge 31$ the normal approximation is used ($\approx 2.326$). For $n<2$ the implementation treats `moe = +\infty` so that a single confirmed example never triggers auto-classification (the uncertain zone collapses only as evidence accumulates).
@@ -103,14 +104,14 @@ where $t_{\alpha/2,\,n-1}$ is a 98% two-tailed critical value chosen by sample s
 Global classification thresholds are:
 
 $$
-	heta^+(t) = \begin{cases}
+  heta^+(t) = \begin{cases}
 \min P_t + \text{moe}(P_t) & P_t \neq \emptyset \\
  +\infty & P_t = \emptyset
 \end{cases}
 $$
 
 $$
-	heta^-(t) = \begin{cases}
+ heta^-(t) = \begin{cases}
 \max N_t - \text{moe}(N_t) & N_t \neq \emptyset \\
  -\infty & N_t = \emptyset
 \end{cases}

@@ -355,6 +355,7 @@ def find_audio_sample_matches(
     search_end_seconds: float | None = None,
     z_threshold: float | None = None,
     profile_cache_dir: Path | None = None,
+    refine: bool = False,
 ) -> list[AudioMatch]:
     """Find likely occurrences of *sample_path* inside *source_path*.
 
@@ -369,6 +370,9 @@ def find_audio_sample_matches(
     When *profile_cache_dir* is provided the source profile is persisted there
     and reused across runs, skipping the ffmpeg decode and FFT work for
     already-profiled episodes.
+
+    When *refine* is True each candidate is passed through onset anchoring and
+    waveform cross-correlation alignment to tighten the reported start position.
     """
     _validate_match_search_inputs(source_path, sample_path, step_seconds, dedupe_overlap)
 
@@ -399,7 +403,19 @@ def find_audio_sample_matches(
         z_threshold=z_threshold,
     )
 
-    return _suppress_overlapping(matches, min_overlap=dedupe_overlap)
+    matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
+
+    if refine:
+        matches = [
+            cross_correlate_align(
+                match=anchor_to_onset(match=m, source_path=source_path),
+                source_path=source_path,
+                sample_path=sample_path,
+            )
+            for m in matches
+        ]
+
+    return matches
 
 
 def _shift_match(match: AudioMatch, new_start_seconds: float) -> AudioMatch:
@@ -497,9 +513,102 @@ def cross_correlate_align(
     return _shift_match(match, max(0.0, window_start + lag_seconds))
 
 
+def build_consensus_profile(
+    segments: list[tuple[Path, float, float]],
+    *,
+    min_segments: int = 2,
+) -> np.ndarray | None:
+    """Build a mean spectral profile from a list of confirmed (source, start, end) segments.
+
+    Decodes each windowed segment, builds its spectral profile, trims all
+    profiles to the shortest frame count, and returns their element-wise mean.
+    Returns ``None`` when fewer than *min_segments* valid profiles are built.
+
+    Using an averaged template accounts for natural variation in level,
+    EQ, and codec compression across different confirmed occurrences of the
+    same audio content — analogous to how production fingerprinters build
+    consensus embeddings from multiple aligned examples.
+    """
+    with Timer("matcher.build_consensus_profile"):
+        profiles: list[np.ndarray] = []
+        for source, start, end in segments:
+            samples = _decode_pcm_mono_16k_window(source, start, end)
+            if not samples:
+                continue
+            profile = np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
+            if profile.size > 0:
+                profiles.append(profile)
+
+        if len(profiles) < min_segments:
+            return None
+
+        min_len = min(p.shape[0] for p in profiles)
+        stack = np.stack([p[:min_len] for p in profiles])  # [N, T, F]
+        return stack.mean(axis=0)  # [T, F]
+
+
+def find_audio_sample_matches_from_profile(
+    *,
+    source_path: Path,
+    reference: np.ndarray,
+    score_threshold: float = 0.8,
+    step_seconds: float = 0.1,
+    dedupe_overlap: float = 0.5,
+    search_start_seconds: float | None = None,
+    search_end_seconds: float | None = None,
+    z_threshold: float | None = None,
+    profile_cache_dir: Path | None = None,
+) -> list[AudioMatch]:
+    """Like ``find_audio_sample_matches`` but uses a pre-built *reference* profile.
+
+    Use this when a consensus template has been averaged from multiple confirmed
+    positive segments rather than decoded from a single reference file.
+    The ``sample_duration`` is derived from the reference frame count so it
+    accurately reflects the consensus template length rather than any single file.
+    """
+    if not source_path.exists():
+        raise FileNotFoundError(source_path)
+    if reference.size == 0 or reference.ndim != 2:
+        return []
+
+    frame_hop_seconds = _HOP_SIZE / _ANALYSIS_RATE
+    sample_duration = reference.shape[0] * frame_hop_seconds
+
+    full_profile = _get_source_profile(source_path, cache_dir=profile_cache_dir)
+    if full_profile.size == 0 or full_profile.shape[0] < reference.shape[0]:
+        return []
+
+    if search_start_seconds is not None and search_end_seconds is not None:
+        start_frame = max(0, int(search_start_seconds / frame_hop_seconds))
+        end_frame = min(
+            full_profile.shape[0],
+            int(search_end_seconds / frame_hop_seconds) + reference.shape[0],
+        )
+        source_profile = full_profile[start_frame:end_frame]
+        frame_offset_seconds = start_frame * frame_hop_seconds
+    else:
+        source_profile = full_profile
+        frame_offset_seconds = 0.0
+
+    hop = max(1, int(step_seconds / frame_hop_seconds))
+    matches = _build_match_candidates(
+        reference=reference,
+        source_profile=source_profile,
+        sample_duration=sample_duration,
+        frame_hop_seconds=frame_hop_seconds,
+        hop=hop,
+        score_threshold=score_threshold,
+        frame_offset_seconds=frame_offset_seconds,
+        z_threshold=z_threshold,
+    )
+    return _suppress_overlapping(matches, min_overlap=dedupe_overlap)
+
+
 __all__ = [
     "AudioMatch",
     "find_audio_sample_matches",
+    "find_audio_sample_matches_from_profile",
+    "build_consensus_profile",
     "anchor_to_onset",
     "cross_correlate_align",
     "_get_source_profile",
