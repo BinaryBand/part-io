@@ -38,7 +38,7 @@ def synthetic_run(out_path: str, runs: int = 3) -> None:
         _ = matcher._windowed_search(ref, src, 1)
         _ = matcher._cross_correlation_search(ref, src, 1)
 
-        for i in range(runs):
+        for _ in range(runs):
             _ = matcher._windowed_search(ref, src, 1)
             _ = matcher._cross_correlation_search(ref, src, 1)
 
@@ -54,7 +54,7 @@ def summarize(path: str) -> None:
         for line in fh:
             try:
                 obj = json.loads(line)
-            except Exception:
+            except Exception:  # noqa: S112
                 continue
             groups.setdefault(obj.get("label"), []).append(float(obj.get("elapsed_seconds", 0.0)))
 

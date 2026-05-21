@@ -64,22 +64,16 @@ target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-# select = ["E", "F", "W", "I", "N", "A", "B", "S", "D"]
-select = ["E", "F", "W", "I", "N", "A", "B", "S"]
+select = ["E", "F", "W", "I", "N", "A", "B", "S"] # "D"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"**/cli/**/*.py" = ["D"]
-"**/models/**/*.py" = ["D"]
-"**/conftest.py" = ["D"]
 # Tests use `assert` idiomatically — S101 is expected.
-"tests/**/*.py" = ["D", "S101"]
-# Ad segments file has docstring-less properties for internal implementation
-"part_io/adapters/audio/ad_segments.py" = ["D102"]
+"tests/**/*.py" = ["S101"]
 # CLI files often use subprocess with known inputs (not untrusted user input)
-"part_io/cli/**/*.py" = ["D", "S603", "S607"]
+"part_io/cli/**/*.py" = ["S603", "S607"]
 [tool.ty.environment]
 python = ".venv"
 python-version = "3.11"
