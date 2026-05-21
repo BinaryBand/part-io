@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from part_io.cli.remote_pipeline import EpisodeState, PipelineState, _loop_work_counts
+from part_io.cli.remote._state import EpisodeState, PipelineState
+from part_io.cli.remote_pipeline import _loop_work_counts
 
 
 def test_loop_work_counts_reports_remaining_work() -> None:

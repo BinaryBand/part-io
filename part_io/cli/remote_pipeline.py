@@ -15,32 +15,24 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-from part_io.adapters.audio.ad_segments import pair_ad_segments
-from part_io.adapters.audio.matcher import AudioMatch, warm_source_profile
-from part_io.adapters.process.runner import run_resolved
-from part_io.cli.audio_ad_remove import _build_filter_complex, _run_ffmpeg
+from part_io.adapters.audio.matcher import warm_source_profile
+from part_io.cli.remote._cut import CutSettings, _cut_cuttable
 from part_io.cli.remote._detect import _detect_batch
 from part_io.cli.remote._review import (
     ReviewItem,
     _collect_uncertain_candidates,
     _count_uncertain,
-    _getch,
     _reclassify_all,
     _run_quiz,
     _run_review_loop,
 )
 from part_io.cli.remote._state import (
-    _POS,
-    EpisodeState,
     PipelineState,
 )
-from part_io.services.cut_planning import build_cut_plan
 from part_io.utils.config import get_profile_cache_dir
 
 _MIN_EPISODE_BYTES = 10 * 1024 * 1024  # skip promos — < 10 MB ≈ < 5 min at 128 kbps
@@ -135,244 +127,7 @@ def _apply_sticky_loop_args(args: argparse.Namespace, state: PipelineState) -> N
     s.debug = args.debug
 
 
-# ---------------------------------------------------------------------------
-# Pair and cut
-# ---------------------------------------------------------------------------
-
-
-def _find_best_pair(ep_state: EpisodeState, *, min_gap: float, max_gap: float) -> list[Any] | None:
-    """Pass all open/close candidates to pair_ad_segments; return all valid pairs or None."""
-    if not ep_state.candidates_for("open") or not ep_state.candidates_for("close"):
-        return None
-    opens = [
-        AudioMatch(
-            start_seconds=m.start,
-            end_seconds=m.end,
-            duration_seconds=m.end - m.start,
-            score=m.score,
-        )
-        for m in ep_state.candidates_for("open")
-    ]
-    closes = [
-        AudioMatch(
-            start_seconds=m.start,
-            end_seconds=m.end,
-            duration_seconds=m.end - m.start,
-            score=m.score,
-        )
-        for m in ep_state.candidates_for("close")
-    ]
-    try:
-        segs, _, _ = pair_ad_segments(opens, closes, min_gap=min_gap, max_gap=max_gap)
-    except (ValueError, KeyError):
-        return None
-    return segs if segs else None
-
-
-def _write_debug_clips(
-    stem: str,
-    source: Path,
-    cuts: list[tuple[float, float]],
-    output_dir: Path,
-    debug_dir: Path | None,
-) -> bool:
-    """Write debug clip files for each cut segment. Returns True on success."""
-    clip_dir = debug_dir or (output_dir / "debug_ads")
-    clip_dir.mkdir(parents=True, exist_ok=True)
-    wrote = 0
-    for idx, (cut_start, cut_end) in enumerate(cuts, start=1):
-        clip_path = clip_dir / f"{stem}__ad_{idx:02d}.mp3"
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            str(source),
-            "-ss",
-            f"{cut_start:.3f}",
-            "-to",
-            f"{cut_end:.3f}",
-            "-c",
-            "copy",
-            str(clip_path),
-        ]
-        result = run_resolved(cmd, capture_output=True)
-        if result.returncode != 0:
-            print(f"  DEBUG FAILED: could not write {clip_path}", file=sys.stderr)
-            return False
-        wrote += 1
-    print(f"  Debug clips written: {wrote} -> {clip_dir}")
-    return True
-
-
-def _execute_ffmpeg_cut(source: Path, filter_complex: str, output_path: Path) -> bool:
-    """Execute ffmpeg cut and handle file placement. Returns True on success."""
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
-        temp_path = Path(temp_file.name)
-
-    try:
-        exit_code = _run_ffmpeg(source, filter_complex, temp_path)
-        if exit_code != 0:
-            temp_path.unlink(missing_ok=True)
-            print(f"  FAILED: ffmpeg exited {exit_code}", file=sys.stderr)
-            return False
-
-        try:
-            temp_path.replace(output_path)
-        except OSError:
-            # Cross-device (e.g. rclone mount): copy then remove local temp.
-            shutil.copy2(temp_path, output_path)
-            temp_path.unlink(missing_ok=True)
-
-        print(f"  Written: {output_path}")
-        return True
-    except Exception as exc:
-        temp_path.unlink(missing_ok=True)
-        print(f"  FAILED: {exc}", file=sys.stderr)
-        return False
-
-
-def _pair_and_cut(
-    stem: str,
-    source: Path,
-    *,
-    output_dir: Path,
-    ep_state: EpisodeState,
-    min_gap: float,
-    max_gap: float,
-    yes: bool,
-    dry_run: bool,
-    ad_inclusive: bool = True,
-    intro_exclusive: bool = True,
-    fade_dur: float = 0.5,
-    debug: bool = False,
-    debug_dir: Path | None = None,
-) -> str:
-    """Pair open/close from ep_state and cut. Returns 'cut', 'skipped', or 'failed'."""
-    if not ep_state.is_cuttable():
-        print(f"  SKIP {stem}: open and close must both be classified as positive.")
-        return "skipped"
-
-    segments = _find_best_pair(ep_state, min_gap=min_gap, max_gap=max_gap)
-    if segments is None:
-        n_o = len(ep_state.candidates_for("open"))
-        n_c = len(ep_state.candidates_for("close"))
-        print(f"  No valid open->close pair ({n_o} open x {n_c} close candidates).")
-        return "skipped"
-
-    print(f"\n  {len(segments)} ad segment(s) to cut:")
-    for i, seg in enumerate(segments, 1):
-        cut_s = seg.cut_start if ad_inclusive else seg.open_end
-        cut_e = seg.cut_end if ad_inclusive else seg.close_start
-        print(f"    {i}. [{cut_s:.1f}s -> {cut_e:.1f}s]  ({cut_e - cut_s:.1f}s)")
-
-    if dry_run:
-        return "skipped"
-
-    if not yes:
-        n = len(segments)
-        label = "ad" if n == 1 else f"{n} ads"
-        print(f"\n  Cut {label} from {stem}? [y]es / [n]o  ", end="", flush=True)
-        key = _getch().lower()
-        print(key, file=sys.stderr)
-        if key != "y":
-            print("  Skipped.")
-            return "skipped"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{stem}.mp3"
-    if ad_inclusive:
-        cuts = [(seg.cut_start, seg.cut_end) for seg in segments]
-    else:
-        cuts = [(seg.open_end, seg.close_start) for seg in segments]
-    intro_trim = None
-    intro_candidates = ep_state.candidates_for("intro")
-    if ep_state.class_for("intro") == _POS and intro_candidates:
-        intro_trim = intro_candidates[0].start if intro_exclusive else intro_candidates[0].end
-    plan = build_cut_plan(cuts, intro_trim=intro_trim)
-
-    if debug:
-        if not _write_debug_clips(stem, source, plan.cuts, output_dir, debug_dir):
-            return "failed"
-
-    filter_complex, _ = _build_filter_complex(plan.spans, fade_dur=fade_dur)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if not _execute_ffmpeg_cut(source, filter_complex, output_path):
-        return "failed"
-
-    return "cut"
-
-
-# ---------------------------------------------------------------------------
-# Cut helpers
-# ---------------------------------------------------------------------------
-
-
-def _cut_cuttable(
-    state: PipelineState,
-    *,
-    remote_dir: Path,
-    output_dir: Path,
-    min_gap: float,
-    max_gap: float,
-    yes: bool,
-    dry_run: bool,
-    state_path: Path,
-    ad_inclusive: bool = True,
-    intro_exclusive: bool = True,
-    fade_dur: float = 0.5,
-    debug: bool = False,
-    debug_dir: Path | None = None,
-) -> tuple[int, int, int]:
-    """Cut all cuttable episodes. Returns (n_cut, n_skipped, n_failed)."""
-    cuttable = [
-        (stem, ep) for stem, ep in state.episodes.items() if ep.is_cuttable() and not ep.cut
-    ]
-    n_cut = n_skipped = n_failed = 0
-    for stem, ep_state in sorted(cuttable):
-        if ep_state.source:
-            source = Path(ep_state.source)
-        else:
-            source = next(
-                (
-                    remote_dir / f"{stem}{ext}"
-                    for ext in _AUDIO_EXTENSIONS
-                    if (remote_dir / f"{stem}{ext}").exists()
-                ),
-                remote_dir / f"{stem}.mp3",
-            )
-        if not source.exists():
-            print(f"SKIP {stem}: source not found at {source}")
-            n_skipped += 1
-            continue
-        print(f"\n{stem}")
-        result = _pair_and_cut(
-            stem,
-            source,
-            output_dir=output_dir,
-            ep_state=ep_state,
-            min_gap=min_gap,
-            max_gap=max_gap,
-            yes=yes,
-            dry_run=dry_run,
-            ad_inclusive=ad_inclusive,
-            intro_exclusive=intro_exclusive,
-            fade_dur=fade_dur,
-            debug=debug,
-            debug_dir=debug_dir,
-        )
-        if result == "cut":
-            ep_state.cut = True
-            state.save(state_path)
-            n_cut += 1
-        elif result == "failed":
-            n_failed += 1
-        else:
-            n_skipped += 1
-    return n_cut, n_skipped, n_failed
+# Cut helpers moved to part_io.cli.remote._cut
 
 
 def _loop_work_counts(state: PipelineState, all_full: list[Path]) -> tuple[int, int, int]:
@@ -458,19 +213,22 @@ def _run_loop_cut_pass(
     debug: bool,
 ) -> tuple[int, int, int, int, int, int]:
     """Run a cut pass and return counts plus remaining work summary."""
-    n_cut, n_skipped, n_failed = _cut_cuttable(
-        state,
-        remote_dir=remote_dir,
-        output_dir=output_dir,
+    settings = CutSettings(
         min_gap=min_gap,
         max_gap=max_gap,
         yes=yes,
         dry_run=dry_run,
-        state_path=state_path,
         ad_inclusive=ad_inclusive,
         intro_exclusive=intro_exclusive,
         fade_dur=fade_dur,
         debug=debug,
+    )
+    n_cut, n_skipped, n_failed = _cut_cuttable(
+        state,
+        remote_dir=remote_dir,
+        output_dir=output_dir,
+        settings=settings,
+        state_path=state_path,
     )
     n_remain_undet, n_remain_unc, n_remain_cut = _loop_work_counts(state, all_full)
     return n_cut, n_skipped, n_failed, n_remain_undet, n_remain_unc, n_remain_cut
@@ -746,18 +504,21 @@ def _cmd_cut(args: argparse.Namespace) -> None:
         return
 
     print(f"Found {n_cuttable} cuttable episode(s).")
-    n_cut, n_skipped, n_failed = _cut_cuttable(
-        state,
-        remote_dir=remote_dir,
-        output_dir=output_dir,
+    settings = CutSettings(
         min_gap=args.min_gap,
         max_gap=args.max_gap,
         yes=args.yes,
         dry_run=args.dry_run,
-        state_path=state_path,
         ad_inclusive=args.inclusive,
         intro_exclusive=state.settings.intro_exclusive,
         fade_dur=args.fade,
+    )
+    n_cut, n_skipped, n_failed = _cut_cuttable(
+        state,
+        remote_dir=remote_dir,
+        output_dir=output_dir,
+        settings=settings,
+        state_path=state_path,
     )
     print(f"\nDone: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
     if n_failed:
