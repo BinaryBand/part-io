@@ -41,7 +41,6 @@ class TargetStateModel(BaseModel):
 class RunSettingsModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    z_threshold: float | None = None  # relative score cutoff (std devs above mean); None = disabled
     step_seconds: float = 0.1  # sliding-window step size during snippet detection
     workers: int = 2  # parallel detection workers per batch
     max_matches: int = 3  # top-N candidates retained per episode per snippet type

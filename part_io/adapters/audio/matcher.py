@@ -266,20 +266,14 @@ def _scores_to_matches(
     scores: np.ndarray,
     *,
     score_threshold: float,
-    z_threshold: float | None,
     hop: int,
     frame_hop_seconds: float,
     frame_offset_seconds: float,
     sample_duration: float,
 ) -> list[AudioMatch]:
-    effective_threshold = score_threshold
-    if z_threshold is not None and scores.size > 1:
-        std = float(np.std(scores))
-        if std > 0:
-            effective_threshold = max(score_threshold, float(np.mean(scores)) + z_threshold * std)
     matches: list[AudioMatch] = []
     for start_index, score in enumerate(scores):
-        if score < effective_threshold:
+        if score < score_threshold:
             continue
         start_seconds = frame_offset_seconds + start_index * hop * frame_hop_seconds
         matches.append(
@@ -302,7 +296,6 @@ def _build_match_candidates(
     hop: int,
     score_threshold: float,
     frame_offset_seconds: float = 0.0,
-    z_threshold: float | None = None,
 ) -> list[AudioMatch]:
     n = source_profile.shape[0]
     m = reference.shape[0]
@@ -313,7 +306,6 @@ def _build_match_candidates(
         return _scores_to_matches(
             scores,
             score_threshold=score_threshold,
-            z_threshold=z_threshold,
             hop=hop,
             frame_hop_seconds=frame_hop_seconds,
             frame_offset_seconds=frame_offset_seconds,
@@ -334,7 +326,6 @@ def _build_match_candidates(
             _scores_to_matches(
                 scores,
                 score_threshold=score_threshold,
-                z_threshold=z_threshold,
                 hop=hop,
                 frame_hop_seconds=frame_hop_seconds,
                 frame_offset_seconds=chunk_offset,
@@ -481,7 +472,6 @@ def find_audio_sample_matches(
     dedupe_overlap: float = 0.5,
     search_start_seconds: float | None = None,
     search_end_seconds: float | None = None,
-    z_threshold: float | None = None,
     profile_cache_dir: Path | None = None,
     refine: bool = False,
 ) -> list[AudioMatch]:
@@ -536,7 +526,6 @@ def find_audio_sample_matches(
         hop=hop,
         score_threshold=score_threshold,
         frame_offset_seconds=frame_offset_seconds,
-        z_threshold=z_threshold,
     )
 
     matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
@@ -708,7 +697,6 @@ def find_audio_sample_matches_from_profile(
     dedupe_overlap: float = 0.5,
     search_start_seconds: float | None = None,
     search_end_seconds: float | None = None,
-    z_threshold: float | None = None,
     profile_cache_dir: Path | None = None,
 ) -> list[AudioMatch]:
     """Like ``find_audio_sample_matches`` but uses a pre-built *reference* profile.
@@ -758,7 +746,6 @@ def find_audio_sample_matches_from_profile(
         hop=hop,
         score_threshold=score_threshold,
         frame_offset_seconds=frame_offset_seconds,
-        z_threshold=z_threshold,
     )
     matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
     _LOG.info("  [match]  consensus  %d candidate(s)", len(matches))

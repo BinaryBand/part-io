@@ -197,7 +197,6 @@ def _find_and_refine_matches(
     refine: bool = False,
     onset_anchor: bool = False,
     precise: bool = False,
-    z_threshold: float | None = None,
 ) -> list[AudioMatch]:
     """Find matches and optionally refine them."""
     matches = find_audio_sample_matches(
@@ -206,7 +205,6 @@ def _find_and_refine_matches(
         score_threshold=threshold,
         step_seconds=step_seconds,
         dedupe_overlap=dedupe_overlap,
-        z_threshold=z_threshold,
     )
     if refine:
         matches = [
@@ -249,7 +247,6 @@ def _generate_bundle(
     refine: bool = False,
     onset_anchor: bool = False,
     precise: bool = False,
-    z_threshold: float | None = None,
 ) -> tuple[Path, Path, Path, int, int]:
     _validate_args(
         argparse.Namespace(
@@ -278,7 +275,6 @@ def _generate_bundle(
         refine=refine,
         onset_anchor=onset_anchor,
         precise=precise,
-        z_threshold=z_threshold,
     )
 
     ranked_matches = sorted(matches, key=lambda match: match.score, reverse=True)
@@ -317,7 +313,6 @@ def main() -> None:
             refine=args.refine,
             onset_anchor=args.onset_anchor,
             precise=args.precise,
-            z_threshold=args.z_threshold,
         )
     except (FileNotFoundError, ValueError) as exc:
         parser.exit(2, f"{exc}\n")

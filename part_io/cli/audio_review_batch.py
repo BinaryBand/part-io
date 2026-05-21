@@ -34,12 +34,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--open-sample", type=str, default="open.mp3", help="Open sample filename")
     parser.add_argument("--threshold", type=float, default=0.8, help="Match score threshold")
     parser.add_argument(
-        "--z-threshold",
-        type=float,
-        default=None,
-        help="Z-score cutoff: only keep matches scoring >= mean + N*std (e.g. 3.0)",
-    )
-    parser.add_argument(
         "--step-seconds", type=float, default=0.1, help="Sliding-window step in seconds"
     )
     add_review_export_arguments(parser)
@@ -76,7 +70,6 @@ def _run_one(
     refine: bool = False,
     onset_anchor: bool = False,
     precise: bool = False,
-    z_threshold: float | None = None,
 ) -> int:
     command = [
         sys.executable,
@@ -103,8 +96,6 @@ def _run_one(
         command.append("--onset-anchor")
     if precise:
         command.append("--precise")
-    if z_threshold is not None:
-        command.extend(["--z-threshold", str(z_threshold)])
 
     result = run_resolved(command, capture_output=True)
     if result.returncode != 0 and result.stderr:
@@ -173,7 +164,6 @@ def _run_batch_jobs(
     refine: bool,
     onset_anchor: bool,
     precise: bool,
-    z_threshold: float | None = None,
 ) -> None:
     total = len(jobs)
     _emit_progress(f"Processing {total} bundles across {workers} worker(s)...")
@@ -193,7 +183,6 @@ def _run_batch_jobs(
                 refine=refine,
                 onset_anchor=onset_anchor,
                 precise=precise,
-                z_threshold=z_threshold,
             ): bn
             for sf, sp, bn in jobs
         }
@@ -242,7 +231,6 @@ def main() -> None:
         refine=args.refine,
         onset_anchor=args.onset_anchor,
         precise=args.precise,
-        z_threshold=args.z_threshold,
     )
 
 

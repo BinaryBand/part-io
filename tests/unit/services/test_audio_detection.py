@@ -40,7 +40,6 @@ def test_detect_top_matches_sorts_and_limits(monkeypatch, tmp_path: Path) -> Non
         source_path=source,
         sample_path=sample,
         score_threshold=0.1,
-        z_threshold=None,
         step_seconds=0.1,
         max_matches=2,
     )
@@ -96,7 +95,6 @@ def test_run_detection_batch_jobs_collects_results_and_errors(monkeypatch, tmp_p
     results = audio_detection.run_detection_batch_jobs(
         jobs,
         detector=lambda **kwargs: fake_detect_top_matches(**kwargs),
-        z_threshold=None,
         step_seconds=0.1,
         max_matches=3,
         workers=1,
@@ -196,7 +194,6 @@ def test_run_detection_batch_returns_jobs_and_results(monkeypatch, tmp_path: Pat
     jobs, results = audio_detection.run_detection_batch(
         request,
         detector=lambda **_kwargs: [],
-        z_threshold=None,
         step_seconds=0.1,
         max_matches=3,
         workers=1,

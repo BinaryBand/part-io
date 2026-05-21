@@ -155,7 +155,6 @@ def detect_top_matches(
     source_path: Path,
     sample_path: Path,
     score_threshold: float,
-    z_threshold: float | None,
     step_seconds: float,
     max_matches: int,
 ) -> list[MatchLike]:
@@ -167,7 +166,6 @@ def detect_top_matches(
         source_path=source_path,
         sample_path=sample_path,
         score_threshold=score_threshold,
-        z_threshold=z_threshold,
         step_seconds=step_seconds,
     )
 
@@ -194,7 +192,6 @@ def run_detection_batch_jobs(
     jobs: list[DetectionBatchJob],
     *,
     detector: Callable[..., Sequence[MatchLike]],
-    z_threshold: float | None,
     step_seconds: float,
     max_matches: int,
     workers: int,
@@ -209,7 +206,6 @@ def run_detection_batch_jobs(
                 source_path=job.source_path,
                 sample_path=job.sample_path,
                 score_threshold=0.0,
-                z_threshold=z_threshold,
                 step_seconds=step_seconds,
                 max_matches=max_matches,
             ): job
@@ -292,7 +288,6 @@ def run_detection_batch(
     request: DetectionBatchRequest,
     *,
     detector: Callable[..., Sequence[MatchLike]],
-    z_threshold: float | None,
     step_seconds: float,
     max_matches: int,
     workers: int,
@@ -302,7 +297,6 @@ def run_detection_batch(
     results = run_detection_batch_jobs(
         jobs,
         detector=detector,
-        z_threshold=z_threshold,
         step_seconds=step_seconds,
         max_matches=max_matches,
         workers=workers,

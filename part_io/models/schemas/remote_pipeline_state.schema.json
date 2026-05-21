@@ -235,18 +235,6 @@
           "default": false,
           "title": "Yes",
           "type": "boolean"
-        },
-        "z_threshold": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Z Threshold"
         }
       },
       "title": "RunSettingsModel",

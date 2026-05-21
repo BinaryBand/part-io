@@ -22,7 +22,6 @@ def main() -> None:
     parser.add_argument("source", type=Path)
     parser.add_argument("sample", type=Path)
     parser.add_argument("--threshold", type=float, default=0.8)
-    parser.add_argument("--z-threshold", type=float, default=None)
     parser.add_argument("--step-seconds", type=float, default=0.1)
     parser.add_argument(
         "--max-matches",
@@ -37,7 +36,6 @@ def main() -> None:
         source_path=args.source,
         sample_path=args.sample,
         score_threshold=args.threshold,
-        z_threshold=args.z_threshold,
         step_seconds=args.step_seconds,
         max_matches=args.max_matches,
     )

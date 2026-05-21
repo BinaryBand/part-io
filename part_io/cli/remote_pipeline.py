@@ -311,7 +311,6 @@ class EpisodeState:
 
 @dataclass
 class RunSettings:
-    z_threshold: float | None = None
     step_seconds: float = 0.1
     workers: int = 2
     max_matches: int = 3
@@ -402,7 +401,6 @@ def _load_episode(raw: dict) -> EpisodeState:
 
 def _load_settings(raw: dict) -> RunSettings:
     return RunSettings(
-        z_threshold=float(raw["z_threshold"]) if raw.get("z_threshold") is not None else None,
         step_seconds=float(raw.get("step_seconds", 0.1)),
         workers=int(raw.get("workers", 2)),
         max_matches=int(raw.get("max_matches", 3)),
@@ -559,8 +557,6 @@ class PipelineState:
         ]
         settings = self.settings
         setting_lines = ["\n[settings]\n"]
-        if settings.z_threshold is not None:
-            setting_lines.append(f"z_threshold = {settings.z_threshold:.6g}\n")
         setting_lines += [
             f"step_seconds = {settings.step_seconds:.6g}\n",
             f"workers = {settings.workers}\n",
@@ -712,7 +708,6 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     args.close_sample = str(_resolve_opt(args.close_sample, s.close_sample))
     args.intro_sample = str(_resolve_opt(args.intro_sample, s.intro_sample))
     args.outro_sample = _resolve_opt(args.outro_sample, s.outro_sample)
-    args.z_threshold = _resolve_opt(args.z_threshold, s.z_threshold)
     args.step_seconds = float(_resolve_opt(args.step_seconds, s.step_seconds))
     args.workers = int(_resolve_opt(args.workers, s.workers))
     args.max_matches = int(_resolve_opt(args.max_matches, s.max_matches))
@@ -726,7 +721,6 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     s.close_sample = args.close_sample
     s.intro_sample = args.intro_sample
     s.outro_sample = str(args.outro_sample) if args.outro_sample else None
-    s.z_threshold = args.z_threshold
     s.step_seconds = args.step_seconds
     s.workers = args.workers
     s.max_matches = args.max_matches
@@ -787,7 +781,6 @@ def _detect_batch(
     intro_sample: Path | None = None,
     outro_sample: Path | None = None,
     *,
-    z_threshold: float | None,
     step_seconds: float,
     workers: int,
     max_matches: int,
@@ -823,7 +816,6 @@ def _detect_batch(
         source_path: Path,
         sample_path: Path,
         score_threshold: float,
-        z_threshold: float | None,
         step_seconds: float,
     ) -> list[AudioMatch]:
         _LOG.info("  [detect] %s  %s", sample_path.stem, source_path.stem)
@@ -833,7 +825,6 @@ def _detect_batch(
                 reference=consensus_map[sample_path],
                 score_threshold=score_threshold,
                 step_seconds=step_seconds,
-                z_threshold=z_threshold,
                 profile_cache_dir=profile_cache_dir,
             )
         else:
@@ -841,7 +832,6 @@ def _detect_batch(
                 source_path=source_path,
                 sample_path=sample_path,
                 score_threshold=score_threshold,
-                z_threshold=z_threshold,
                 step_seconds=step_seconds,
                 profile_cache_dir=profile_cache_dir,
             )
@@ -861,7 +851,6 @@ def _detect_batch(
             outro_sample=outro_sample,
         ),
         detector=detector,
-        z_threshold=z_threshold,
         step_seconds=step_seconds,
         max_matches=max_matches,
         workers=workers,
@@ -1308,13 +1297,16 @@ def _run_quiz(
     intro_sample: Path,
     outro_sample: Path,
     state_path: Path,
-) -> tuple[int, bool]:
+    pre_skipped: set[tuple[str, str, int]] | None = None,
+) -> tuple[int, bool, set[tuple[str, str, int]]]:
     """Review a pre-collected set of uncertain candidates.
 
-    Returns (decisions_made, interrupted_by_quit).
+    Returns (decisions_made, interrupted_by_quit, skipped_keys).
+    skipped_keys includes both explicit skips and rejected-uncertain candidates
+    that were not auto-classified, so callers can avoid re-presenting them.
     """
     history: list[UndoEntry] = []
-    skipped_keys: set[tuple[str, str, int]] = set()
+    skipped_keys: set[tuple[str, str, int]] = set(pre_skipped or ())
     decisions = 0
     remaining = list(items)
 
@@ -1350,7 +1342,7 @@ def _run_quiz(
             )
         except KeyboardInterrupt:
             _emit("\nInterrupted. Progress saved.")
-            return decisions, True
+            return decisions, True, skipped_keys
 
         if result in ("approved", "rejected"):
             decisions += 1
@@ -1365,6 +1357,10 @@ def _run_quiz(
                 if (i.stem, i.kind, i.candidate_idx) in uncertain_keys
                 and (i.stem, i.kind, i.candidate_idx) != decided_key
             ]
+            # Rejection that didn't auto-classify: mark as decided-this-session so
+            # _run_loop_until_clean won't re-present it in the next outer pass.
+            if result == "rejected" and decided_key in uncertain_keys:
+                skipped_keys.add(decided_key)
         elif result == "skipped":
             skipped_keys.add((active.stem, active.kind, active.candidate_idx))
         else:  # undone
@@ -1378,7 +1374,7 @@ def _run_quiz(
     n_skipped = len(skipped_keys)
     if n_skipped:
         _emit(f"\n{n_skipped} candidate(s) skipped — restart to revisit.")
-    return decisions, False
+    return decisions, False, skipped_keys
 
 
 # ---------------------------------------------------------------------------
@@ -1635,7 +1631,6 @@ def _collect_loop_candidates(
     *,
     overwrite: bool,
     quiz_size: int,
-    z_threshold: float | None,
     step_seconds: float,
     workers: int,
     max_matches: int,
@@ -1646,13 +1641,23 @@ def _collect_loop_candidates(
     outro_sample: Path | None,
     refine: bool = False,
     profile_cache_dir: Path | None = None,
+    exclude_decided: set[tuple[str, str, int]] | None = None,
 ) -> tuple[list[ReviewItem], int]:
-    """Detect until enough uncertain candidates are available or no work remains."""
+    """Detect until enough uncertain candidates are available or no work remains.
+
+    *exclude_decided* filters out candidates already reviewed this session so they
+    are not re-presented before new detections arrive.
+    """
     undetected = [ep for ep in all_full if overwrite or not state.episode(ep.stem).is_detected()]
     n_already = len(all_full) - len(undetected)
     _emit(f"Episodes: {len(all_full)} total, {n_already} detected, {len(undetected)} to detect")
 
-    quiz_items = _collect_uncertain_candidates(state)
+    _excl = exclude_decided or set()
+    quiz_items = [
+        i
+        for i in _collect_uncertain_candidates(state)
+        if (i.stem, i.kind, i.candidate_idx) not in _excl
+    ]
     while len(quiz_items) < quiz_size and undetected:
         ep_path = undetected.pop(0)
         _emit(f"\nDetecting {ep_path.stem}...")
@@ -1663,7 +1668,6 @@ def _collect_loop_candidates(
             close_sample,
             intro_sample,
             outro_sample,
-            z_threshold=z_threshold,
             step_seconds=step_seconds,
             workers=workers,
             max_matches=max_matches,
@@ -1672,7 +1676,11 @@ def _collect_loop_candidates(
         )
         _reclassify_all(state)
         state.save(state_path)
-        quiz_items = _collect_uncertain_candidates(state)
+        quiz_items = [
+            i
+            for i in _collect_uncertain_candidates(state)
+            if (i.stem, i.kind, i.candidate_idx) not in _excl
+        ]
 
     return quiz_items[:quiz_size], _count_uncertain(state)
 
@@ -1724,7 +1732,6 @@ def _run_loop_once(
     outro_sample: Path | None,
     quiz_size: int,
     overwrite: bool,
-    z_threshold: float | None,
     step_seconds: float,
     workers: int,
     max_matches: int,
@@ -1745,7 +1752,6 @@ def _run_loop_once(
         all_full,
         overwrite=overwrite,
         quiz_size=quiz_size,
-        z_threshold=z_threshold,
         step_seconds=step_seconds,
         workers=workers,
         max_matches=max_matches,
@@ -1804,7 +1810,6 @@ def _run_loop_until_clean(
     outro_sample: Path | None,
     quiz_size: int,
     overwrite: bool,
-    z_threshold: float | None,
     step_seconds: float,
     workers: int,
     max_matches: int,
@@ -1820,13 +1825,15 @@ def _run_loop_until_clean(
     refine: bool = False,
 ) -> None:
     """Run repeat detect/review/cut passes until no work remains or the user quits."""
+    # Accumulate rejected-uncertain candidates across outer passes so the same
+    # candidate is never re-presented within the same session.
+    session_skipped: set[tuple[str, str, int]] = set()
     while True:
         quiz_items, n_unc = _collect_loop_candidates(
             state,
             all_full,
             overwrite=overwrite,
             quiz_size=quiz_size,
-            z_threshold=z_threshold,
             step_seconds=step_seconds,
             workers=workers,
             max_matches=max_matches,
@@ -1837,6 +1844,7 @@ def _run_loop_until_clean(
             outro_sample=outro_sample,
             refine=refine,
             profile_cache_dir=remote_dir.parent / ".profile_cache",
+            exclude_decided=session_skipped,
         )
         n_remain_undet, n_remain_unc, n_remain_cut = _loop_work_counts(state, all_full)
         if not n_remain_undet and not n_remain_unc and (not n_remain_cut or dry_run):
@@ -1845,7 +1853,7 @@ def _run_loop_until_clean(
 
         if quiz_items:
             _emit(f"\n{len(quiz_items)} candidate(s) to review ({n_unc} uncertain total).")
-            _, interrupted = _run_quiz(
+            _, interrupted, new_skipped = _run_quiz(
                 state,
                 quiz_items,
                 open_sample=open_sample,
@@ -1853,7 +1861,9 @@ def _run_loop_until_clean(
                 intro_sample=intro_sample,
                 outro_sample=(outro_sample or intro_sample),
                 state_path=state_path,
+                pre_skipped=session_skipped,
             )
+            session_skipped |= new_skipped
             if interrupted:
                 return
         else:
@@ -1937,7 +1947,6 @@ def _cmd_review(args: argparse.Namespace) -> None:
             close_sample,
             intro_sample,
             outro_sample,
-            z_threshold=args.z_threshold,
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
@@ -2046,7 +2055,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             outro_sample=outro_sample,
             quiz_size=args.quiz_size,
             overwrite=args.overwrite,
-            z_threshold=args.z_threshold,
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
@@ -2074,7 +2082,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         outro_sample=outro_sample,
         quiz_size=args.quiz_size,
         overwrite=args.overwrite,
-        z_threshold=args.z_threshold,
         step_seconds=args.step_seconds,
         workers=args.workers,
         max_matches=args.max_matches,
@@ -2097,13 +2104,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
 
 
 def _add_detect_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument(
-        "--z-threshold",
-        type=float,
-        default=None,
-        metavar="N",
-        help="Optional z-score filter: only keep windows > mean + N*std (default: off)",
-    )
     p.add_argument("--step-seconds", type=float, default=None)
     p.add_argument(
         "--workers",
