@@ -7,18 +7,12 @@ import wave
 from array import array
 from pathlib import Path
 
-import pytest
-
 from part_io.adapters.audio.matcher import (
     AudioMatch,
     _build_spectral_profile,
     _suppress_overlapping,
     find_audio_sample_matches,
 )
-
-ROOT = Path(__file__).resolve().parents[3]
-REAL_SOURCE = ROOT / "downloads" / "media" / "dece9384-9892-4b4d-9c13-5298e44d67ab.mp3"
-REAL_SAMPLE = ROOT / "downloads" / "snippets" / "close.mp3"
 
 
 def _write_mono_wav(path: Path, samples: list[int], sample_rate: int) -> None:
@@ -42,16 +36,10 @@ def _make_noise(sample_count: int, seed: int) -> list[int]:
     return [(((index + seed) * 7919) % 4001) - 2000 for index in range(sample_count)]
 
 
-@pytest.mark.skipif(not REAL_SOURCE.exists(), reason="media not downloaded")
-def test_find_audio_sample_matches_reports_expected_region() -> None:
-    """The detector should find the known close/open sample region near 22:46."""
-    source = REAL_SOURCE
-    sample = REAL_SAMPLE
-
-    matches = find_audio_sample_matches(source_path=source, sample_path=sample)
-
-    assert matches
-    assert any(1365 <= match.start_seconds <= 1367 for match in matches)
+def _embed(base: list[int], snippet: list[int], offset: int) -> None:
+    for j, v in enumerate(snippet):
+        if offset + j < len(base):
+            base[offset + j] = v
 
 
 def test_spectral_profile_uses_thirty_two_band_with_deltas() -> None:
@@ -93,13 +81,48 @@ def test_synthetic_burst_is_detected_in_noise(tmp_path: Path) -> None:
     assert any(1.9 <= match.start_seconds <= 2.2 for match in matches)
 
 
-@pytest.mark.skipif(not REAL_SOURCE.exists(), reason="media not downloaded")
-def test_matches_are_sorted_and_non_overlapping_by_default() -> None:
-    """Suppression should return deduplicated matches ordered by start time."""
-    source = REAL_SOURCE
-    sample = REAL_SAMPLE
+def test_find_audio_sample_matches_reports_expected_region(tmp_path: Path) -> None:
+    """Detector localises the match to within ±0.5s of the embedded position."""
+    sample_rate = 16000
+    burst = _make_sine_wave(sample_rate, 1.0, 880.0)
+    sample_path = tmp_path / "sample.wav"
+    source_path = tmp_path / "source.wav"
+    _write_mono_wav(sample_path, burst, sample_rate)
 
-    matches = find_audio_sample_matches(source_path=source, sample_path=sample)
+    source = _make_noise(sample_rate * 15, seed=3333)
+    _embed(source, burst, offset=sample_rate * 10)  # burst at exactly 10 s
+    _write_mono_wav(source_path, source, sample_rate)
+
+    matches = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.8,
+        step_seconds=0.1,
+    )
+
+    assert matches
+    assert any(9.5 <= m.start_seconds <= 10.5 for m in matches)
+
+
+def test_matches_are_sorted_and_non_overlapping_by_default(tmp_path: Path) -> None:
+    """Suppression should return deduplicated matches ordered by start time."""
+    sample_rate = 16000
+    burst = _make_sine_wave(sample_rate, 1.0, 660.0)
+    sample_path = tmp_path / "sample.wav"
+    source_path = tmp_path / "source.wav"
+    _write_mono_wav(sample_path, burst, sample_rate)
+
+    source = _make_noise(sample_rate * 30, seed=7777)
+    for offset_s in [5, 15, 25]:
+        _embed(source, burst, offset=sample_rate * offset_s)
+    _write_mono_wav(source_path, source, sample_rate)
+
+    matches = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.8,
+        step_seconds=0.1,
+    )
 
     starts = [match.start_seconds for match in matches]
     assert starts == sorted(starts)

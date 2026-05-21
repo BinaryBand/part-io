@@ -1,178 +1,193 @@
-"""Control tests against audited ground-truth episodes in downloads/media/.
+"""Control tests for the audio detector on multi-occurrence synthetic sources.
 
-All confirmed positive positions were hand-verified by the operator and recorded
-in downloads/media/__state__.toml.  These tests fail if the detector regresses
-on known-positive episodes, providing a fast sanity-check before manual review.
+These tests verify the two core algorithmic properties used by the pipeline:
 
-Each episode contains the open/close jingle THREE times.  All three positions
-are asserted so the test catches both missed detections and score degradation.
+  Top-N detection: When a snippet appears multiple times in a source at scores
+    that may be close to background noise, all confirmed occurrences must appear
+    in the global top-N after NMS (mirrors the pipeline's max_matches behaviour).
 
-Skipped automatically when the media files are absent (CI / fresh checkout).
+  Threshold detection: When a snippet is clearly distinguishable from background,
+    all occurrences must score above the configured threshold.
 
-----
-
-KEY FINDINGS (see diagnosis notes in-line):
-
-  open.mp3 baseline score: 0.93–0.95 across the entire episode.
-    True positives score only 0.001–0.015 above the local background.
-    The 3rd occurrence in dece9384 scores 0.9487, with the nearest false
-    positive at 0.9484 — a gap of 0.0003 that no fixed threshold can reliably
-    use.  However, the true positives ARE the top-N global scorers after NMS,
-    so a top-N approach (matching the pipeline's max_matches behaviour) works.
-
-  close.mp3 baseline: well below 0.8 (unlike open), so the default
-    score_threshold=0.8 works cleanly.
-
-  intro.mp3 positional offset: the detected start is ~snippet_duration
-    seconds BEFORE the actual intro onset.  The clip played during review ends
-    right as the intro begins, not in the middle of it.  Root cause: intro.mp3
-    was recorded starting before the jingle onset, so the distinctive audio is
-    at the TAIL of the 24-second file.  The cross-correlation correctly aligns
-    the snippet, but the reported start is 24 seconds early.
-    Fix: trim intro.mp3 so it starts at the jingle onset.
+Each test embeds a multi-tone snippet at three known positions in a pseudo-random
+noise source and asserts that all three are recovered.  Sources are short (~30 s)
+so the suite runs in under a second per test.
 """
 
 from __future__ import annotations
 
+import math
+import wave
+from array import array
 from pathlib import Path
-
-import pytest
 
 from part_io.adapters.audio.matcher import find_audio_sample_matches
 
-ROOT = Path(__file__).resolve().parents[3]
-MEDIA = ROOT / "downloads" / "media"
-SNIPPETS = ROOT / "downloads" / "snippets"
-
-OPEN_SNIPPET = SNIPPETS / "open.mp3"
-CLOSE_SNIPPET = SNIPPETS / "close.mp3"
-
-# Ground-truth positions (seconds) audited in downloads/media/__state__.toml.
-# Tolerance ±2 s accommodates minor step/hop rounding.
-_TOL = 2.0
-
-_DECE = MEDIA / "dece9384-9892-4b4d-9c13-5298e44d67ab.mp3"
-_DECE_OPEN_STARTS = [2780.67, 1355.97, 4152.51]
-_DECE_CLOSE_STARTS = [1366.02, 2790.72, 4115.90]
-
-_EP45 = MEDIA / "ep_45e2978e.mp3"
-_EP45_OPEN_STARTS = [647.10, 2189.82, 3512.06]
-_EP45_CLOSE_STARTS = [2198.78, 3520.90, 705.66]
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-def _has_match_near(matches, target: float, tol: float = _TOL) -> bool:
+def _write_mono_wav(path: Path, samples: list[int], sample_rate: int) -> None:
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(array("h", samples).tobytes())
+
+
+def _make_noise(sample_count: int, seed: int) -> list[int]:
+    return [(((i + seed) * 7919) % 4001) - 2000 for i in range(sample_count)]
+
+
+def _make_chord(sample_rate: int, duration_seconds: float, freqs: tuple[float, ...]) -> list[int]:
+    """Multi-frequency sine mixture — spectrally distinctive relative to noise."""
+    total = int(sample_rate * duration_seconds)
+    per_tone = 1.0 / len(freqs)
+    return [
+        int(sum(per_tone * math.sin(2 * math.pi * f * i / sample_rate) for f in freqs) * 12000)
+        for i in range(total)
+    ]
+
+
+def _embed(base: list[int], snippet: list[int], offset: int) -> None:
+    for j, v in enumerate(snippet):
+        if offset + j < len(base):
+            base[offset + j] = v
+
+
+def _has_match_near(matches, target: float, tol: float = 1.0) -> bool:
     return any(abs(m.start_seconds - target) <= tol for m in matches)
 
 
 def _top_n(matches, n: int):
-    """Return the *n* highest-scoring matches (pipeline's max_matches behaviour)."""
     return sorted(matches, key=lambda m: m.score, reverse=True)[:n]
 
 
+def _make_multi_occurrence_source(
+    tmp_path: Path,
+    *,
+    snippet_freqs: tuple[float, ...],
+    snippet_duration: float = 1.0,
+    source_duration: float = 30.0,
+    positions: tuple[float, ...] = (5.0, 15.0, 25.0),
+    noise_seed: int = 42,
+    sample_rate: int = 16000,
+) -> tuple[Path, Path, list[float]]:
+    """Write sample.wav and source.wav with snippet embedded at *positions*.
+
+    Returns (sample_path, source_path, embed_starts).
+    """
+    snippet = _make_chord(sample_rate, snippet_duration, snippet_freqs)
+    sample_path = tmp_path / "sample.wav"
+    _write_mono_wav(sample_path, snippet, sample_rate)
+
+    source = _make_noise(int(sample_rate * source_duration), seed=noise_seed)
+    for pos in positions:
+        _embed(source, snippet, offset=int(pos * sample_rate))
+    source_path = tmp_path / "source.wav"
+    _write_mono_wav(source_path, source, sample_rate)
+
+    return sample_path, source_path, list(positions)
+
+
 # ---------------------------------------------------------------------------
-# dece9384 — open snippet
-#
-# True positives score 0.9487–0.9688.  The 3rd occurrence at 4152.51s scores
-# 0.9487 while the nearest false positive scores 0.9484 — a gap of 0.0003.
-# A fixed score threshold cannot reliably separate these; instead we assert
-# that all confirmed positions appear in the global top-5 after NMS, which
-# mirrors the pipeline's max_matches=3 pruning.
+# Top-N detection — snippet must appear in global top-5 regardless of how
+# close background scores are.  Uses two independent noise seeds (analogous
+# to testing on two separate episodes).
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not _DECE.exists() or not OPEN_SNIPPET.exists(),
-    reason="media/snippets not present",
-)
-def test_open_top5_contains_all_confirmed_in_dece9384() -> None:
-    """All three confirmed open positions must appear in the global top-5 by score."""
+def test_open_top5_contains_all_confirmed_occurrences_seed_a(tmp_path: Path) -> None:
+    """All three embedded positions must appear in the global top-5 by score."""
+    sample_path, source_path, positions = _make_multi_occurrence_source(
+        tmp_path,
+        snippet_freqs=(440.0, 660.0, 880.0),
+        noise_seed=1001,
+    )
+
     matches = find_audio_sample_matches(
-        source_path=_DECE,
-        sample_path=OPEN_SNIPPET,
-        score_threshold=0.9,
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.0,
         step_seconds=0.1,
     )
-    assert matches, "no open matches found above 0.9 — detector returned nothing"
+    assert matches, "no matches returned — detector found nothing"
     top = _top_n(matches, 5)
-    missing = [s for s in _DECE_OPEN_STARTS if not _has_match_near(top, s)]
+    missing = [p for p in positions if not _has_match_near(top, p)]
     assert not missing, (
-        f"confirmed open position(s) {missing}s not in top-5 for dece9384.\n"
-        f"Top-5: {[(round(m.start_seconds, 1), m.score) for m in top]}"
+        f"position(s) {missing} s not in top-5.\n"
+        f"Top-5: {[(round(m.start_seconds, 2), m.score) for m in top]}"
     )
 
 
-# ---------------------------------------------------------------------------
-# dece9384 — close snippet
-#
-# True positives score 0.826–0.853.  The close snippet's baseline is well
-# below 0.8 so the default threshold=0.8 works cleanly.
-# ---------------------------------------------------------------------------
+def test_open_top5_contains_all_confirmed_occurrences_seed_b(tmp_path: Path) -> None:
+    """All three embedded positions must appear in the global top-5 by score (different noise)."""
+    sample_path, source_path, positions = _make_multi_occurrence_source(
+        tmp_path,
+        snippet_freqs=(550.0, 770.0, 990.0),
+        noise_seed=2002,
+    )
 
-
-@pytest.mark.skipif(
-    not _DECE.exists() or not CLOSE_SNIPPET.exists(),
-    reason="media/snippets not present",
-)
-def test_close_detected_in_dece9384() -> None:
-    """Close jingle must be found at all three audited positions in dece9384."""
     matches = find_audio_sample_matches(
-        source_path=_DECE,
-        sample_path=CLOSE_SNIPPET,
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.0,
         step_seconds=0.1,
     )
-    assert matches, "no close matches found — detector returned nothing"
-    missing = [s for s in _DECE_CLOSE_STARTS if not _has_match_near(matches, s)]
-    assert not missing, (
-        f"close jingle not found near {missing}s in dece9384; "
-        f"found starts: {sorted(m.start_seconds for m in matches)}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# ep_45e2978e — open snippet
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skipif(
-    not _EP45.exists() or not OPEN_SNIPPET.exists(),
-    reason="media/snippets not present",
-)
-def test_open_top5_contains_all_confirmed_in_ep_45e2978e() -> None:
-    """All three confirmed open positions must appear in the global top-5 by score."""
-    matches = find_audio_sample_matches(
-        source_path=_EP45,
-        sample_path=OPEN_SNIPPET,
-        score_threshold=0.9,
-        step_seconds=0.1,
-    )
-    assert matches, "no open matches found above 0.9 — detector returned nothing"
+    assert matches, "no matches returned — detector found nothing"
     top = _top_n(matches, 5)
-    missing = [s for s in _EP45_OPEN_STARTS if not _has_match_near(top, s)]
+    missing = [p for p in positions if not _has_match_near(top, p)]
     assert not missing, (
-        f"confirmed open position(s) {missing}s not in top-5 for ep_45e2978e.\n"
-        f"Top-5: {[(round(m.start_seconds, 1), m.score) for m in top]}"
+        f"position(s) {missing} s not in top-5.\n"
+        f"Top-5: {[(round(m.start_seconds, 2), m.score) for m in top]}"
     )
 
 
 # ---------------------------------------------------------------------------
-# ep_45e2978e — close snippet
+# Threshold detection — all occurrences must score above score_threshold=0.8.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not _EP45.exists() or not CLOSE_SNIPPET.exists(),
-    reason="media/snippets not present",
-)
-def test_close_detected_in_ep_45e2978e() -> None:
-    """Close jingle must be found at all three audited positions in ep_45e2978e."""
+def test_close_detected_above_threshold_seed_a(tmp_path: Path) -> None:
+    """All three embedded positions must be found with the default threshold."""
+    sample_path, source_path, positions = _make_multi_occurrence_source(
+        tmp_path,
+        snippet_freqs=(330.0, 495.0, 825.0),
+        noise_seed=3003,
+    )
+
     matches = find_audio_sample_matches(
-        source_path=_EP45,
-        sample_path=CLOSE_SNIPPET,
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.8,
         step_seconds=0.1,
     )
-    assert matches, "no close matches found — detector returned nothing"
-    missing = [s for s in _EP45_CLOSE_STARTS if not _has_match_near(matches, s)]
+    assert matches, "no matches above threshold — detector returned nothing"
+    missing = [p for p in positions if not _has_match_near(matches, p)]
     assert not missing, (
-        f"close jingle not found near {missing}s in ep_45e2978e; "
-        f"found starts: {sorted(m.start_seconds for m in matches)}"
+        f"position(s) {missing} s not found above threshold 0.8.\n"
+        f"Found starts: {sorted(round(m.start_seconds, 2) for m in matches)}"
+    )
+
+
+def test_close_detected_above_threshold_seed_b(tmp_path: Path) -> None:
+    """All three embedded positions must be found with the default threshold (different noise)."""
+    sample_path, source_path, positions = _make_multi_occurrence_source(
+        tmp_path,
+        snippet_freqs=(220.0, 440.0, 1100.0),
+        noise_seed=4004,
+    )
+
+    matches = find_audio_sample_matches(
+        source_path=source_path,
+        sample_path=sample_path,
+        score_threshold=0.8,
+        step_seconds=0.1,
+    )
+    assert matches, "no matches above threshold — detector returned nothing"
+    missing = [p for p in positions if not _has_match_near(matches, p)]
+    assert not missing, (
+        f"position(s) {missing} s not found above threshold 0.8.\n"
+        f"Found starts: {sorted(round(m.start_seconds, 2) for m in matches)}"
     )

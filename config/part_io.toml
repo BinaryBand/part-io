@@ -1,0 +1,10 @@
+# Centralized defaults for part-io
+
+[defaults]
+# Where to store spectral profile cache (relative to repo root if not absolute)
+profile_cache_dir = "downloads/.profile_cache"
+
+[weights]
+# Placeholder tunables for matcher/decision weights. Tune as needed.
+match_score = 1.0
+cross_correlation = 1.0

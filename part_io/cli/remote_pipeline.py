@@ -58,6 +58,7 @@ from part_io.services.review_orchestration import (
     undo_review_decision,
 )
 from part_io.utils.audio_process import AudioProcessManager
+from part_io.utils.config import get_profile_cache_dir
 
 if TYPE_CHECKING:  # pragma: no cover - type-only import
     import tomllib
@@ -1742,7 +1743,7 @@ def _run_loop_once(
         close_sample=close_sample,
         intro_sample=intro_sample,
         outro_sample=outro_sample,
-        profile_cache_dir=remote_dir.parent / ".profile_cache",
+        profile_cache_dir=get_profile_cache_dir(remote_dir),
     )
     if quiz_items:
         _emit(f"\n{len(quiz_items)} candidate(s) to review ({n_unc} uncertain total).")
@@ -1822,7 +1823,7 @@ def _run_loop_until_clean(
             close_sample=close_sample,
             intro_sample=intro_sample,
             outro_sample=outro_sample,
-            profile_cache_dir=remote_dir.parent / ".profile_cache",
+            profile_cache_dir=get_profile_cache_dir(remote_dir),
             exclude_decided=session_skipped,
         )
         n_remain_undet, n_remain_unc, n_remain_cut = _loop_work_counts(state, all_full)
@@ -1929,7 +1930,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
-            profile_cache_dir=remote_dir.parent / ".profile_cache",
+            profile_cache_dir=get_profile_cache_dir(remote_dir),
         )
         _reclassify_all(state)
         state.save(state_path)
@@ -2249,7 +2250,7 @@ def _cmd_precache(args: argparse.Namespace) -> None:
     remote_dir: Path = args.remote_dir
     sleep_s: float = args.sleep
     overwrite: bool = args.overwrite
-    profile_cache_dir = remote_dir.parent / ".profile_cache"
+    profile_cache_dir = get_profile_cache_dir(remote_dir)
     profile_cache_dir.mkdir(parents=True, exist_ok=True)
 
     episodes = _full_episodes(remote_dir)
