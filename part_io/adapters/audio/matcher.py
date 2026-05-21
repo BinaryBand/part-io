@@ -473,7 +473,6 @@ def find_audio_sample_matches(
     search_start_seconds: float | None = None,
     search_end_seconds: float | None = None,
     profile_cache_dir: Path | None = None,
-    refine: bool = False,
 ) -> list[AudioMatch]:
     """Find likely occurrences of *sample_path* inside *source_path*.
 
@@ -489,8 +488,6 @@ def find_audio_sample_matches(
     and reused across runs, skipping the ffmpeg decode and FFT work for
     already-profiled episodes.
 
-    When *refine* is True each candidate is passed through onset anchoring and
-    waveform cross-correlation alignment to tighten the reported start position.
     """
     _validate_match_search_inputs(source_path, sample_path, step_seconds, dedupe_overlap)
 
@@ -530,16 +527,6 @@ def find_audio_sample_matches(
 
     matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
     _LOG.info("  [match]  %s  %d candidate(s)", sample_path.stem, len(matches))
-
-    if refine:
-        matches = [
-            cross_correlate_align(
-                match=anchor_to_onset(match=m, source_path=source_path),
-                source_path=source_path,
-                sample_path=sample_path,
-            )
-            for m in matches
-        ]
 
     return matches
 

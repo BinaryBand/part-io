@@ -31,13 +31,12 @@ import numpy as np
 from part_io.adapters.audio.ad_segments import pair_ad_segments
 from part_io.adapters.audio.matcher import (
     AudioMatch,
-    anchor_to_onset,
     build_consensus_profile,
-    cross_correlate_align,
     find_audio_sample_matches,
     find_audio_sample_matches_from_profile,
     warm_source_profile,
 )
+from part_io.adapters.audio.refine_plugin import apply_optional_refine, refine_plugin_enabled
 from part_io.adapters.process.runner import run_resolved
 from part_io.cli.audio_ad_remove import _build_filter_complex, _run_ffmpeg
 from part_io.services.audio_detection import (
@@ -325,7 +324,6 @@ class RunSettings:
     fade: float = 0.5
     quiz_size: int = 10
     overwrite: bool = False
-    refine: bool = False
     snippets_dir: str = "downloads/snippets"
     open_sample: str = "open.mp3"
     close_sample: str = "close.mp3"
@@ -411,7 +409,6 @@ def _load_settings(raw: dict) -> RunSettings:
         fade=float(raw.get("fade", 0.5)),
         quiz_size=int(raw.get("quiz_size", 10)),
         overwrite=bool(raw.get("overwrite", False)),
-        refine=bool(raw.get("refine", False)),
         snippets_dir=str(raw.get("snippets_dir", "downloads/snippets")),
         open_sample=str(raw.get("open_sample", "open.mp3")),
         close_sample=str(raw.get("close_sample", "close.mp3")),
@@ -568,7 +565,6 @@ class PipelineState:
             f"fade = {settings.fade:.6g}\n",
             f"quiz_size = {settings.quiz_size}\n",
             f"overwrite = {str(settings.overwrite).lower()}\n",
-            f"refine = {str(settings.refine).lower()}\n",
             f"snippets_dir = {json.dumps(settings.snippets_dir)}\n",
             f"open_sample = {json.dumps(settings.open_sample)}\n",
             f"close_sample = {json.dumps(settings.close_sample)}\n",
@@ -714,7 +710,6 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     # no_interactive is a session flag — never sticky; always use CLI value (default False)
     args.no_interactive = bool(args.no_interactive)
     args.overwrite = bool(_resolve_opt(args.overwrite, s.overwrite))
-    args.refine = bool(_resolve_opt(args.refine, s.refine))
 
     s.snippets_dir = str(args.snippets_dir)
     s.open_sample = args.open_sample
@@ -725,7 +720,6 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     s.workers = args.workers
     s.max_matches = args.max_matches
     s.overwrite = args.overwrite
-    s.refine = args.refine
 
 
 def _apply_sticky_cut_args(args: argparse.Namespace, state: PipelineState) -> None:
@@ -785,7 +779,6 @@ def _detect_batch(
     workers: int,
     max_matches: int,
     profile_cache_dir: Path | None = None,
-    refine: bool = False,
 ) -> None:
     """Detect open+close (and optional intro) matches for a batch.
 
@@ -856,28 +849,23 @@ def _detect_batch(
         workers=workers,
     )
 
-    if refine:
-        import dataclasses
-
+    if refine_plugin_enabled():
         refined_results = []
         for result in results:
-            refined_matches = [
-                cross_correlate_align(
-                    match=anchor_to_onset(
-                        match=AudioMatch(
-                            start_seconds=m.start_seconds,
-                            end_seconds=m.end_seconds,
-                            duration_seconds=m.end_seconds - m.start_seconds,
-                            score=m.score,
-                        ),
-                        source_path=result.source_path,
-                    ),
+            refined_results.append(
+                type(result)(
+                    stem=result.stem,
                     source_path=result.source_path,
                     sample_path=result.sample_path,
+                    kind=result.kind,
+                    matches=apply_optional_refine(
+                        matches=list(result.matches),
+                        source_path=result.source_path,
+                        sample_path=result.sample_path,
+                    ),
+                    error=result.error,
                 )
-                for m in result.matches
-            ]
-            refined_results.append(dataclasses.replace(result, matches=refined_matches))
+            )
         results = refined_results
 
     _process_detection_results(results, jobs, state, ep_by_stem, duration_by_stem)
@@ -1639,7 +1627,6 @@ def _collect_loop_candidates(
     close_sample: Path,
     intro_sample: Path,
     outro_sample: Path | None,
-    refine: bool = False,
     profile_cache_dir: Path | None = None,
     exclude_decided: set[tuple[str, str, int]] | None = None,
 ) -> tuple[list[ReviewItem], int]:
@@ -1671,7 +1658,6 @@ def _collect_loop_candidates(
             step_seconds=step_seconds,
             workers=workers,
             max_matches=max_matches,
-            refine=refine,
             profile_cache_dir=profile_cache_dir,
         )
         _reclassify_all(state)
@@ -1744,7 +1730,6 @@ def _run_loop_once(
     intro_exclusive: bool,
     fade_dur: float,
     debug: bool,
-    refine: bool = False,
 ) -> None:
     """Run one detect/review/cut pass in non-interactive mode."""
     quiz_items, n_unc = _collect_loop_candidates(
@@ -1760,7 +1745,6 @@ def _run_loop_once(
         close_sample=close_sample,
         intro_sample=intro_sample,
         outro_sample=outro_sample,
-        refine=refine,
         profile_cache_dir=remote_dir.parent / ".profile_cache",
     )
     if quiz_items:
@@ -1822,7 +1806,6 @@ def _run_loop_until_clean(
     intro_exclusive: bool,
     fade_dur: float,
     debug: bool,
-    refine: bool = False,
 ) -> None:
     """Run repeat detect/review/cut passes until no work remains or the user quits."""
     # Accumulate rejected-uncertain candidates across outer passes so the same
@@ -1842,7 +1825,6 @@ def _run_loop_until_clean(
             close_sample=close_sample,
             intro_sample=intro_sample,
             outro_sample=outro_sample,
-            refine=refine,
             profile_cache_dir=remote_dir.parent / ".profile_cache",
             exclude_decided=session_skipped,
         )
@@ -2067,7 +2049,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             intro_exclusive=state.settings.intro_exclusive,
             fade_dur=args.fade,
             debug=args.debug,
-            refine=args.refine,
         )
         return
 
@@ -2094,7 +2075,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         intro_exclusive=state.settings.intro_exclusive,
         fade_dur=args.fade,
         debug=args.debug,
-        refine=args.refine,
     )
 
 
@@ -2116,12 +2096,6 @@ def _add_detect_args(p: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         help="Top-N candidate positions to store",
-    )
-    p.add_argument(
-        "--refine",
-        action="store_true",
-        default=None,
-        help="Apply onset anchoring and cross-correlation alignment to each candidate",
     )
 
 

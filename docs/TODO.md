@@ -96,7 +96,10 @@ part_io/
 
 Manual review identified cases where reported audio onset can be 3+ seconds off true alignment due to coarse feature-frame granularity. See [.alignment_plan.md](.alignment_plan.md) for detailed root-cause analysis and refinement strategy (sub-step refinement, onset anchoring, cross-correlation).
 
-- [x] Implement sub-step refinement (`--refine` flag). ✓ Phase 1 complete.
-- [ ] Benchmark refinement on typical episodes; measure alignment error reduction.
-- [ ] Add onset-anchoring heuristics if sub-step insufficient.
-- [ ] Consider cross-correlation `--precise` mode for highest fidelity.
+Current policy: the `--refine` path is disabled in active CLIs and moved behind an optional experimental plugin seam. Baseline detection is the default operational path.
+
+- [x] Partition refine into optional plugin boundary (`part_io.utils.refine_plugin`).
+- [x] Remove `--refine` from active CLI surfaces.
+- [ ] Fix plugin refinement offset bug and verify lag convention.
+- [ ] Benchmark plugin refinement on typical episodes; compare against baseline.
+- [ ] Re-enable refine only after tests prove net alignment improvement.

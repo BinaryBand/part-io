@@ -27,39 +27,6 @@ from part_io.utils.cli import (
 )
 
 
-def _refine_match(
-    *,
-    coarse_match: AudioMatch,
-    source_path: Path,
-    sample_path: Path,
-    threshold: float,
-    refine_step_seconds: float = 0.01,
-    refine_window_seconds: float = 5.0,
-) -> AudioMatch:
-    """Refine a coarse match via finer-grained local search.
-
-    Searches around the coarse winner within ±refine_window_seconds at finer
-    resolution (refine_step_seconds). Returns best refined match from finer scan.
-    """
-    window_start = max(0.0, coarse_match.start_seconds - refine_window_seconds)
-    window_end = coarse_match.start_seconds + coarse_match.duration_seconds + refine_window_seconds
-
-    candidates = find_audio_sample_matches(
-        source_path=source_path,
-        sample_path=sample_path,
-        score_threshold=min(threshold, coarse_match.score * 0.9),
-        step_seconds=refine_step_seconds,
-        dedupe_overlap=0.5,
-        search_start_seconds=window_start,
-        search_end_seconds=window_end,
-    )
-
-    if not candidates:
-        return coarse_match
-
-    return max(candidates, key=lambda m: m.score)
-
-
 def _format_clip_name(index: int, match: AudioMatch) -> str:
     score = f"{match.score:.4f}".replace(".", "_")
     start = f"{match.start_seconds:.3f}".replace(".", "_")
@@ -187,18 +154,17 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-clips must be >= 0")
 
 
-def _find_and_refine_matches(
+def _find_and_postprocess_matches(
     *,
     source_path: Path,
     sample_path: Path,
     threshold: float,
     step_seconds: float,
     dedupe_overlap: float,
-    refine: bool = False,
     onset_anchor: bool = False,
     precise: bool = False,
 ) -> list[AudioMatch]:
-    """Find matches and optionally refine them."""
+    """Find matches and optionally apply alignment post-processing."""
     matches = find_audio_sample_matches(
         source_path=source_path,
         sample_path=sample_path,
@@ -206,17 +172,6 @@ def _find_and_refine_matches(
         step_seconds=step_seconds,
         dedupe_overlap=dedupe_overlap,
     )
-    if refine:
-        matches = [
-            _refine_match(
-                coarse_match=match,
-                source_path=source_path,
-                sample_path=sample_path,
-                threshold=threshold,
-            )
-            for match in matches
-        ]
-        matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
     if onset_anchor:
         matches = [anchor_to_onset(match=match, source_path=source_path) for match in matches]
         matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
@@ -244,7 +199,6 @@ def _generate_bundle(
     output_root: Path,
     bundle_name: str | None,
     overwrite: bool,
-    refine: bool = False,
     onset_anchor: bool = False,
     precise: bool = False,
 ) -> tuple[Path, Path, Path, int, int]:
@@ -266,13 +220,12 @@ def _generate_bundle(
         raise ValueError(f"Bundle already exists: {bundle_dir} (use --overwrite)")
 
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    matches = _find_and_refine_matches(
+    matches = _find_and_postprocess_matches(
         source_path=source_path,
         sample_path=sample_path,
         threshold=threshold,
         step_seconds=step_seconds,
         dedupe_overlap=dedupe_overlap,
-        refine=refine,
         onset_anchor=onset_anchor,
         precise=precise,
     )
@@ -310,7 +263,6 @@ def main() -> None:
             output_root=args.output_root,
             bundle_name=args.bundle_name,
             overwrite=args.overwrite,
-            refine=args.refine,
             onset_anchor=args.onset_anchor,
             precise=args.precise,
         )

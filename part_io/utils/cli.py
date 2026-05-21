@@ -41,12 +41,7 @@ def add_review_export_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def add_alignment_refinement_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add alignment refinement flags shared by audio review CLIs."""
-    parser.add_argument(
-        "--refine",
-        action="store_true",
-        help="Refine coarse matches via finer-grained local search",
-    )
+    """Add alignment post-processing flags shared by audio review CLIs."""
     parser.add_argument(
         "--onset-anchor",
         action="store_true",

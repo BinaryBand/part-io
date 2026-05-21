@@ -67,7 +67,6 @@ def _run_one(
     output_root: Path,
     bundle_name: str,
     overwrite: bool,
-    refine: bool = False,
     onset_anchor: bool = False,
     precise: bool = False,
 ) -> int:
@@ -90,8 +89,6 @@ def _run_one(
     ]
     if overwrite:
         command.append("--overwrite")
-    if refine:
-        command.append("--refine")
     if onset_anchor:
         command.append("--onset-anchor")
     if precise:
@@ -161,7 +158,6 @@ def _run_batch_jobs(
     max_clips: int,
     output_root: Path,
     overwrite: bool,
-    refine: bool,
     onset_anchor: bool,
     precise: bool,
 ) -> None:
@@ -180,7 +176,6 @@ def _run_batch_jobs(
                 max_clips=max_clips,
                 output_root=output_root,
                 overwrite=overwrite,
-                refine=refine,
                 onset_anchor=onset_anchor,
                 precise=precise,
             ): bn
@@ -228,7 +223,6 @@ def main() -> None:
         max_clips=args.max_clips,
         output_root=args.output_root,
         overwrite=args.overwrite,
-        refine=args.refine,
         onset_anchor=args.onset_anchor,
         precise=args.precise,
     )
