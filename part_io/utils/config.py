@@ -34,7 +34,25 @@ def load_config() -> Dict[str, Any]:
     global _CONFIG_CACHE
     if _CONFIG_CACHE is not None:
         return _CONFIG_CACHE
+    # Prefer pyproject.toml [tool.part_io] when available; fallback to
+    # config/part_io.toml for backwards compatibility.
+    repo = _repo_root()
+    pyproject = repo / "pyproject.toml"
+    if pyproject.exists() and _tomllib is not None:
+        try:
+            with pyproject.open("rb") as fh:
+                data = _tomllib.load(fh)
+        except Exception:
+            data = {}
+        else:
+            # Expect structure: {"tool": {"part_io": { ... }}}
+            tool = data.get("tool", {})
+            part_cfg = tool.get("part_io") if isinstance(tool, dict) else None
+            if isinstance(part_cfg, dict):
+                _CONFIG_CACHE = part_cfg
+                return _CONFIG_CACHE
 
+    # Fallback to legacy config file
     cfg_file = _config_path()
     if cfg_file.exists() and _tomllib is not None:
         try:

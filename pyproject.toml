@@ -92,3 +92,11 @@ include = ["part_io", "tests"]
 [tool.ty.terminal]
 error-on-warning = true
 output-format = "full"
+
+[tool.part_io]
+[tool.part_io.defaults]
+profile_cache_dir = "downloads/.profile_cache"
+
+[tool.part_io.weights]
+match_score = 1.0
+cross_correlation = 1.0
