@@ -635,9 +635,8 @@ def cross_correlate_align(
     smp_fft = np.fft.rfft(sample_arr, n=fft_size)
     corr = np.fft.irfft(src_fft * np.conj(smp_fft), n=fft_size)[:n]
     peak_index = int(np.argmax(corr))
-    # lag > 0  →  sample starts lag samples into the source window
-    lag_samples = peak_index - (len(sample_arr) - 1)
-    lag_seconds = lag_samples / _ANALYSIS_RATE
+    # xcorr(smp, src)[k] peaks at k = start offset of smp in source_window
+    lag_seconds = peak_index / _ANALYSIS_RATE
     return _shift_match(match, max(0.0, window_start + lag_seconds))
 
 

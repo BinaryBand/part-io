@@ -36,7 +36,7 @@ from part_io.adapters.audio.matcher import (
     find_audio_sample_matches_from_profile,
     warm_source_profile,
 )
-from part_io.adapters.audio.refine_plugin import apply_optional_refine, refine_plugin_enabled
+from part_io.adapters.audio.refine_impl import refine_matches as _refine_matches
 from part_io.adapters.process.runner import run_resolved
 from part_io.cli.audio_ad_remove import _build_filter_complex, _run_ffmpeg
 from part_io.services.audio_detection import (
@@ -849,24 +849,21 @@ def _detect_batch(
         workers=workers,
     )
 
-    if refine_plugin_enabled():
-        refined_results = []
-        for result in results:
-            refined_results.append(
-                type(result)(
-                    stem=result.stem,
-                    source_path=result.source_path,
-                    sample_path=result.sample_path,
-                    kind=result.kind,
-                    matches=apply_optional_refine(
-                        matches=list(result.matches),
-                        source_path=result.source_path,
-                        sample_path=result.sample_path,
-                    ),
-                    error=result.error,
-                )
-            )
-        results = refined_results
+    results = [
+        type(result)(
+            stem=result.stem,
+            source_path=result.source_path,
+            sample_path=result.sample_path,
+            kind=result.kind,
+            matches=_refine_matches(
+                matches=list(result.matches),
+                source_path=result.source_path,
+                sample_path=result.sample_path,
+            ),
+            error=result.error,
+        )
+        for result in results
+    ]
 
     _process_detection_results(results, jobs, state, ep_by_stem, duration_by_stem)
 
