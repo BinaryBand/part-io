@@ -738,6 +738,24 @@ def find_audio_sample_matches_from_profile(
     return matches
 
 
+def band_center_frequencies(
+    sample_rate: int = _ANALYSIS_RATE,
+    band_count: int = _BAND_COUNT,
+) -> list[float]:
+    """Return the geometric-mean center frequency (Hz) for each filterbank band."""
+    edges = np.geomspace(20.0, sample_rate / 2, band_count + 1)
+    return [float(np.sqrt(edges[i] * edges[i + 1])) for i in range(band_count)]
+
+
+def compute_audio_file_profile(path: Path) -> np.ndarray:
+    """Decode *path* and return its full spectral profile as a float32 array.
+
+    Shape is ``(n_frames, 64)`` — 32 band energies followed by 32 deltas per frame.
+    """
+    samples = _decode_pcm_mono_16k(path)
+    return np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
+
+
 __all__ = [
     "AudioMatch",
     "find_audio_sample_matches",
@@ -745,6 +763,8 @@ __all__ = [
     "build_consensus_profile",
     "anchor_to_onset",
     "cross_correlate_align",
+    "band_center_frequencies",
+    "compute_audio_file_profile",
     "_get_source_profile",
     "_suppress_overlapping",
 ]

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from part_io.adapters.audio.matcher import warm_source_profile
+from part_io.adapters.audio.snippet_profile import is_profile_current, write_snippet_profile
 from part_io.cli.remote._cut import CutSettings, _cut_cuttable
 from part_io.cli.remote._detect import _detect_batch
 from part_io.cli.remote._review import (
@@ -48,6 +49,14 @@ _LOG = logging.getLogger(__name__)
 
 
 _AUDIO_EXTENSIONS = frozenset({".mp3", ".opus"})
+
+
+def _ensure_snippet_profiles(snippets: list[Path]) -> None:
+    """Write (or refresh) a ``.profile.toml`` for each snippet whose profile is absent or stale."""
+    for path in snippets:
+        if not is_profile_current(path):
+            _emit(f"  [profile] writing {path.stem}.profile.toml")
+            write_snippet_profile(path)
 
 
 def _full_episodes(remote_dir: Path) -> list[Path]:
@@ -438,6 +447,9 @@ def _cmd_review(args: argparse.Namespace) -> None:
         if not path.exists():
             sys.exit(f"{label} not found: {path}")
 
+    active_snippets = [s for s in [open_sample, close_sample, intro_sample, outro_sample] if s]
+    _ensure_snippet_profiles(active_snippets)
+
     all_full = _full_episodes(remote_dir)
     if not all_full:
         sys.exit(f"No full-length MP3s (>= 10 MB) found in {remote_dir}")
@@ -552,6 +564,9 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     ]:
         if not path.exists():
             sys.exit(f"{label} not found: {path}")
+
+    active_snippets = [s for s in [open_sample, close_sample, intro_sample, outro_sample] if s]
+    _ensure_snippet_profiles(active_snippets)
 
     all_full = _full_episodes(remote_dir)
     if not all_full:
