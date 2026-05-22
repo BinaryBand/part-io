@@ -15,8 +15,8 @@ from part_io.models.ports import (
     TasksForProfileFn,
     WriteLintReportFn,
 )
-from part_io.models.registry import TaskRegistry, TaskSpec
-from part_io.models.results import LintRunReport, TaskRunResult
+from part_io.models.tasks.registry import TaskRegistry, TaskSpec
+from part_io.models.tasks.results import LintRunReport, TaskRunResult
 
 
 def select_lint_tasks(

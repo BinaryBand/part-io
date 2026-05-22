@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 from part_io.adapters.config.task_registry_loader import load_registry, tasks_for_profile
-from part_io.models.registry import TaskSpec
+from part_io.models.tasks.registry import TaskSpec
 
 _OUTPUT = Path("config/generated.mk")
 

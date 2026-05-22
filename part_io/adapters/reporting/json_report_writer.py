@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from part_io.models.results import LintRunReport
+from part_io.models.tasks.results import LintRunReport
 
 
 def write_lint_report(report_path: Path, report: LintRunReport) -> None:

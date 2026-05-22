@@ -2,7 +2,7 @@
 
 import pytest
 
-from part_io.models.registry import TaskRegistry, TaskSpec
+from part_io.models.tasks.registry import TaskRegistry, TaskSpec
 from part_io.utils.coverage import cleanup_coverage_temp_files
 
 

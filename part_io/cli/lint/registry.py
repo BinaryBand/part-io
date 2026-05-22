@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from part_io.models.lint import ToolSpec
+from part_io.models.tasks.lint import ToolSpec
 
 Builder = Callable[[dict], list[str]]
 

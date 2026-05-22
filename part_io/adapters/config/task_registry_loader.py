@@ -11,7 +11,7 @@ from typing import Any, cast
 
 from pydantic import ValidationError
 
-from part_io.models.registry import TaskRegistry, TaskSpec
+from part_io.models.tasks.registry import TaskRegistry, TaskSpec
 
 DEFAULT_REGISTRY_PATH = Path("config/tasks.toml")
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from part_io.cli.lint import registry as lint_registry
-from part_io.models.lint import ToolSpec
+from part_io.models.tasks.lint import ToolSpec
 
 
 def test_tool_specs_are_typed() -> None:

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from part_io.cli.generate import tasks as generate_tasks
-from part_io.models.registry import TaskSpec
+from part_io.models.tasks.registry import TaskSpec
 
 
 def _single_task() -> list[TaskSpec]:

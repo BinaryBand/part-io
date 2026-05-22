@@ -104,10 +104,6 @@ class PipelineStateModel(BaseModel):
     episodes: dict[str, EpisodeStateModel] = Field(default_factory=dict)
 
 
-# Backward-compat alias used by compile.py and any external consumers.
-RemotePipelineStateModel = PipelineStateModel
-
-
 class GenericStateModel(BaseModel):
     """Lenient base for future state files without a strict schema yet."""
 

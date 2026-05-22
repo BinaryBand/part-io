@@ -1,6 +1,6 @@
 {
   "additionalProperties": true,
-  "description": "Lenient base model for future state files without a strict schema yet.",
+  "description": "Lenient base for future state files without a strict schema yet.",
   "properties": {
     "schema_version": {
       "anyOf": [

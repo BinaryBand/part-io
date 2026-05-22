@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from part_io.models.remote_state import GenericStateModel, RemotePipelineStateModel
+from part_io.models.pipeline.state import GenericStateModel, PipelineStateModel
 
 
 def _write_schema(path: Path, schema: dict) -> None:
@@ -17,7 +17,7 @@ def main() -> None:
     schemas_dir = Path(__file__).resolve().parents[2] / "models" / "schemas"
     _write_schema(
         schemas_dir / "remote_pipeline_state.schema.json",
-        RemotePipelineStateModel.model_json_schema(),
+        PipelineStateModel.model_json_schema(),
     )
     _write_schema(
         schemas_dir / "generic_state.schema.json",

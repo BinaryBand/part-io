@@ -2,88 +2,52 @@
   "$defs": {
     "EpisodeStateModel": {
       "additionalProperties": false,
+      "description": "Detection state for one episode.\n\n``candidates`` and ``classes`` are keyed by snippet name (e.g. ``\"open\"``,\n``\"close\"``, ``\"intro\"``), mirroring the runtime ``EpisodeState`` dataclass.",
       "properties": {
-        "close_candidates": {
-          "items": {
-            "$ref": "#/$defs/MatchModel"
+        "candidates": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/MatchModel"
+            },
+            "type": "array"
           },
-          "title": "Close Candidates",
-          "type": "array"
+          "title": "Candidates",
+          "type": "object"
         },
-        "close_class": {
-          "default": "undetected",
-          "enum": [
-            "positive",
-            "negative",
-            "uncertain",
-            "undetected"
-          ],
-          "title": "Close Class",
-          "type": "string"
+        "classes": {
+          "additionalProperties": {
+            "enum": [
+              "positive",
+              "negative",
+              "uncertain",
+              "undetected"
+            ],
+            "type": "string"
+          },
+          "title": "Classes",
+          "type": "object"
         },
         "cut": {
           "default": false,
           "title": "Cut",
           "type": "boolean"
         },
-        "intro_candidates": {
-          "items": {
-            "$ref": "#/$defs/MatchModel"
-          },
-          "title": "Intro Candidates",
-          "type": "array"
-        },
-        "intro_class": {
-          "default": "undetected",
-          "enum": [
-            "positive",
-            "negative",
-            "uncertain",
-            "undetected"
-          ],
-          "title": "Intro Class",
-          "type": "string"
-        },
-        "open_candidates": {
-          "items": {
-            "$ref": "#/$defs/MatchModel"
-          },
-          "title": "Open Candidates",
-          "type": "array"
-        },
-        "open_class": {
-          "default": "undetected",
-          "enum": [
-            "positive",
-            "negative",
-            "uncertain",
-            "undetected"
-          ],
-          "title": "Open Class",
-          "type": "string"
-        },
-        "outro_candidates": {
-          "items": {
-            "$ref": "#/$defs/MatchModel"
-          },
-          "title": "Outro Candidates",
-          "type": "array"
-        },
-        "outro_class": {
-          "default": "undetected",
-          "enum": [
-            "positive",
-            "negative",
-            "uncertain",
-            "undetected"
-          ],
-          "title": "Outro Class",
-          "type": "string"
-        },
         "source": {
           "default": "",
           "title": "Source",
           "type": "string"
+        },
+        "source_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Hash"
         }
       },
       "title": "EpisodeStateModel",
@@ -91,6 +55,7 @@
     },
     "MatchModel": {
       "additionalProperties": false,
+      "description": "A single detection candidate within one episode.",
       "properties": {
         "end": {
           "title": "End",
@@ -113,22 +78,15 @@
       "title": "MatchModel",
       "type": "object"
     },
-    "RemotePipelineTargetsModel": {
-      "additionalProperties": false,
-      "properties": {
-        "close": {
-          "$ref": "#/$defs/TargetStateModel"
-        },
-        "open": {
-          "$ref": "#/$defs/TargetStateModel"
-        }
-      },
-      "title": "RemotePipelineTargetsModel",
-      "type": "object"
-    },
     "RunSettingsModel": {
       "additionalProperties": false,
+      "description": "Operational settings persisted in ``[settings]``.\n\nFields marked *\u2192 config* will migrate to ``__config__.toml`` once the new\ndeclarative config is wired in; they remain here for backward compatibility.",
       "properties": {
+        "ad_inclusive": {
+          "default": true,
+          "title": "Ad Inclusive",
+          "type": "boolean"
+        },
         "close_sample": {
           "default": "close.mp3",
           "title": "Close Sample",
@@ -139,20 +97,10 @@
           "title": "Debug",
           "type": "boolean"
         },
-        "dry_run": {
-          "default": false,
-          "title": "Dry Run",
-          "type": "boolean"
-        },
         "fade": {
           "default": 0.5,
           "title": "Fade",
           "type": "number"
-        },
-        "ad_inclusive": {
-          "default": true,
-          "title": "Ad Inclusive",
-          "type": "boolean"
         },
         "intro_exclusive": {
           "default": true,
@@ -230,68 +178,14 @@
           "default": 2,
           "title": "Workers",
           "type": "integer"
-        },
-        "yes": {
-          "default": false,
-          "title": "Yes",
-          "type": "boolean"
         }
       },
       "title": "RunSettingsModel",
       "type": "object"
-    },
-    "SegmentModel": {
-      "additionalProperties": false,
-      "properties": {
-        "end": {
-          "title": "End",
-          "type": "number"
-        },
-        "score": {
-          "title": "Score",
-          "type": "number"
-        },
-        "source": {
-          "title": "Source",
-          "type": "string"
-        },
-        "start": {
-          "title": "Start",
-          "type": "number"
-        }
-      },
-      "required": [
-        "source",
-        "start",
-        "end",
-        "score"
-      ],
-      "title": "SegmentModel",
-      "type": "object"
-    },
-    "TargetStateModel": {
-      "additionalProperties": false,
-      "properties": {
-        "negatives": {
-          "items": {
-            "$ref": "#/$defs/SegmentModel"
-          },
-          "title": "Negatives",
-          "type": "array"
-        },
-        "positives": {
-          "items": {
-            "$ref": "#/$defs/SegmentModel"
-          },
-          "title": "Positives",
-          "type": "array"
-        }
-      },
-      "title": "TargetStateModel",
-      "type": "object"
     }
   },
   "additionalProperties": false,
+  "description": "Root model for ``__state__.toml``.",
   "properties": {
     "episodes": {
       "additionalProperties": {
@@ -302,11 +196,8 @@
     },
     "settings": {
       "$ref": "#/$defs/RunSettingsModel"
-    },
-    "targets": {
-      "$ref": "#/$defs/RemotePipelineTargetsModel"
     }
   },
-  "title": "RemotePipelineStateModel",
+  "title": "PipelineStateModel",
   "type": "object"
 }
