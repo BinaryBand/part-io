@@ -90,10 +90,7 @@ def _process_detection_results(
 def _detect_batch(
     episodes: list[Path],
     state: PipelineState,
-    open_sample: Path,
-    close_sample: Path,
-    intro_sample: Path | None = None,
-    outro_sample: Path | None = None,
+    snippets: dict[str, Path],
     *,
     step_seconds: float,
     workers: int,
@@ -103,15 +100,14 @@ def _detect_batch(
     ep_by_stem = {ep.stem: ep for ep in episodes}
     duration_by_stem = {ep.stem: _probe_audio_duration_seconds(ep) for ep in episodes}
 
-    open_consensus = _build_consensus_from_segments(state.open_target.positives)
-    close_consensus = _build_consensus_from_segments(state.close_target.positives)
-
     consensus_map: dict[Path, np.ndarray] = {}
-    if open_consensus is not None:
-        consensus_map[open_sample] = open_consensus
+    open_consensus = _build_consensus_from_segments(state.open_target.positives)
+    if open_consensus is not None and "open" in snippets:
+        consensus_map[snippets["open"]] = open_consensus
         _emit(f"  [consensus] open: averaged {len(state.open_target.positives)} positives")
-    if close_consensus is not None:
-        consensus_map[close_sample] = close_consensus
+    close_consensus = _build_consensus_from_segments(state.close_target.positives)
+    if close_consensus is not None and "close" in snippets:
+        consensus_map[snippets["close"]] = close_consensus
         _emit(f"  [consensus] close: averaged {len(state.close_target.positives)} positives")
 
     def _detector(
@@ -144,10 +140,7 @@ def _detect_batch(
     jobs, results = run_detection_batch(
         DetectionBatchRequest(
             episodes=episodes,
-            open_sample=open_sample,
-            close_sample=close_sample,
-            intro_sample=intro_sample,
-            outro_sample=outro_sample,
+            snippets=snippets,
         ),
         detector=detector,
         step_seconds=step_seconds,

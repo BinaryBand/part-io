@@ -189,21 +189,12 @@ def _review_candidate(
     state: PipelineState,
     item: ReviewItem,
     *,
-    open_sample: Path,
-    close_sample: Path,
-    intro_sample: Path,
-    outro_sample: Path,
+    snippets: dict[str, Path],
     history: list[UndoEntry],
 ) -> str:
     ep_state = state.episodes[item.stem]
     source = Path(ep_state.source)
-    snippets: dict[str, Path] = {
-        "open": open_sample,
-        "close": close_sample,
-        "intro": intro_sample,
-        "outro": outro_sample,
-    }
-    snippet = snippets[item.kind]
+    snippet = snippets.get(item.kind)
     all_candidates = ep_state.candidates_for(item.kind)
     prev_class = ep_state.class_for(item.kind)
     candidate = all_candidates[item.candidate_idx]
@@ -226,7 +217,8 @@ def _review_candidate(
             current_proc = _start_audio_segment(source, candidate.start, candidate.end)
             _write_stderr(f"\r{legend}", end="", flush=True)
         elif key == "c":
-            current_proc = _start_audio(snippet)
+            if snippet is not None:
+                current_proc = _start_audio(snippet)
             _write_stderr(f"\r{legend}", end="", flush=True)
         elif key in ("a", "r"):
             action_key = cast(Literal["a", "r"], key)
@@ -271,10 +263,7 @@ def _review_one_target(
     stem: str,
     kind: str,
     *,
-    open_sample: Path,
-    close_sample: Path,
-    intro_sample: Path,
-    outro_sample: Path,
+    snippets: dict[str, Path],
     history: list[UndoEntry],
 ) -> str:
     ep_state = state.episodes[stem]
@@ -285,10 +274,7 @@ def _review_one_target(
     result = _review_candidate(
         state,
         item,
-        open_sample=open_sample,
-        close_sample=close_sample,
-        intro_sample=intro_sample,
-        outro_sample=outro_sample,
+        snippets=snippets,
         history=history,
     )
     return "classified" if result in ("approved", "rejected") else result
@@ -297,10 +283,7 @@ def _review_one_target(
 def _run_review_loop(
     state: PipelineState,
     *,
-    open_sample: Path,
-    close_sample: Path,
-    intro_sample: Path,
-    outro_sample: Path,
+    snippets: dict[str, Path],
     state_path: Path,
     max_decisions: int | None = None,
 ) -> None:
@@ -327,10 +310,7 @@ def _run_review_loop(
             state,
             stem,
             kind,
-            open_sample=open_sample,
-            close_sample=close_sample,
-            intro_sample=intro_sample,
-            outro_sample=outro_sample,
+            snippets=snippets,
             history=history,
         )
         if result == "classified":
@@ -360,10 +340,7 @@ def _run_quiz(
     state: PipelineState,
     items: list[ReviewItem],
     *,
-    open_sample: Path,
-    close_sample: Path,
-    intro_sample: Path,
-    outro_sample: Path,
+    snippets: dict[str, Path],
     state_path: Path,
     pre_skipped: set[tuple[str, str, int]] | None = None,
 ) -> tuple[int, bool, set[tuple[str, str, int]]]:
@@ -396,10 +373,7 @@ def _run_quiz(
             result = _review_candidate(
                 state,
                 active,
-                open_sample=open_sample,
-                close_sample=close_sample,
-                intro_sample=intro_sample,
-                outro_sample=outro_sample,
+                snippets=snippets,
                 history=history,
             )
         except KeyboardInterrupt:

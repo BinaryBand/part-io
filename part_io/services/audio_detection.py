@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Protocol
+from typing import Any, Callable, Literal, Protocol, cast
 
 
 class MatchLike(Protocol):
@@ -106,10 +106,7 @@ class DetectionBatchRequest:
     """Inputs needed to build and run a detection batch for episodes."""
 
     episodes: list[Path]
-    open_sample: Path
-    close_sample: Path
-    intro_sample: Path | None
-    outro_sample: Path | None
+    snippets: dict[str, Path]  # kind → path; required keys: "open", "close"
 
 
 def filter_matches_by_position(
@@ -240,47 +237,20 @@ def run_detection_batch_jobs(
 
 
 def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[DetectionBatchJob]:
-    """Build detection jobs for open/close and optional intro/outro samples."""
-    jobs = [
-        DetectionBatchJob(
-            stem=episode.stem,
-            source_path=episode,
-            sample_path=request.open_sample,
-            kind="open",
-        )
-        for episode in request.episodes
-    ] + [
-        DetectionBatchJob(
-            stem=episode.stem,
-            source_path=episode,
-            sample_path=request.close_sample,
-            kind="close",
-        )
-        for episode in request.episodes
-    ]
-
-    if request.intro_sample is not None and request.intro_sample.exists():
-        jobs += [
+    """Build detection jobs for each snippet kind in the request."""
+    jobs: list[DetectionBatchJob] = []
+    for kind, sample_path in request.snippets.items():
+        if not sample_path.exists():
+            continue
+        jobs.extend(
             DetectionBatchJob(
                 stem=episode.stem,
                 source_path=episode,
-                sample_path=request.intro_sample,
-                kind="intro",
+                sample_path=sample_path,
+                kind=cast(DetectionKind, kind),
             )
             for episode in request.episodes
-        ]
-
-    if request.outro_sample is not None and request.outro_sample.exists():
-        jobs += [
-            DetectionBatchJob(
-                stem=episode.stem,
-                source_path=episode,
-                sample_path=request.outro_sample,
-                kind="outro",
-            )
-            for episode in request.episodes
-        ]
-
+        )
     return jobs
 
 

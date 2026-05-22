@@ -277,11 +277,6 @@ class RunSettings:
     fade: float = 0.5
     quiz_size: int = 10
     overwrite: bool = False
-    snippets_dir: str = "downloads/snippets"
-    open_sample: str = "open.mp3"
-    close_sample: str = "close.mp3"
-    intro_sample: str = "intro.mp3"
-    outro_sample: str | None = None
     output_dir: str = "downloads/remove"
     debug: bool = False
 
@@ -367,11 +362,6 @@ def _load_settings(raw: dict) -> RunSettings:
         fade=float(raw.get("fade", 0.5)),
         quiz_size=int(raw.get("quiz_size", 10)),
         overwrite=bool(raw.get("overwrite", False)),
-        snippets_dir=str(raw.get("snippets_dir", "downloads/snippets")),
-        open_sample=str(raw.get("open_sample", "open.mp3")),
-        close_sample=str(raw.get("close_sample", "close.mp3")),
-        intro_sample=str(raw.get("intro_sample", "intro.mp3")),
-        outro_sample=(str(raw["outro_sample"]) if raw.get("outro_sample") else None),
         output_dir=str(raw.get("output_dir", "downloads/remove")),
         debug=bool(raw.get("debug", False)),
     )
@@ -529,15 +519,6 @@ class PipelineState:
             f"fade = {settings.fade:.6g}\n",
             f"quiz_size = {settings.quiz_size}\n",
             f"overwrite = {str(settings.overwrite).lower()}\n",
-            f"snippets_dir = {json.dumps(settings.snippets_dir)}\n",
-            f"open_sample = {json.dumps(settings.open_sample)}\n",
-            f"close_sample = {json.dumps(settings.close_sample)}\n",
-            f"intro_sample = {json.dumps(settings.intro_sample)}\n",
-            (
-                f"outro_sample = {json.dumps(settings.outro_sample)}\n"
-                if settings.outro_sample
-                else ""
-            ),
             f"output_dir = {json.dumps(settings.output_dir)}\n",
             f"debug = {str(settings.debug).lower()}\n",
         ]

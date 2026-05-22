@@ -91,10 +91,12 @@ def test_run_quiz_approve_counts_and_saves(tmp_path: Path, monkeypatch) -> None:
     decisions, interrupted, skipped = _run_quiz(
         state,
         items,
-        open_sample=tmp_path / "open.mp3",
-        close_sample=tmp_path / "close.mp3",
-        intro_sample=tmp_path / "intro.mp3",
-        outro_sample=tmp_path / "outro.mp3",
+        snippets={
+            "open": tmp_path / "open.mp3",
+            "close": tmp_path / "close.mp3",
+            "intro": tmp_path / "intro.mp3",
+            "outro": tmp_path / "outro.mp3",
+        },
         state_path=tmp_path / "state.toml",
     )
 
@@ -123,10 +125,12 @@ def test_run_quiz_keyboard_interrupt_returns_interrupted(tmp_path: Path, monkeyp
     decisions, interrupted, skipped = _run_quiz(
         state,
         items,
-        open_sample=tmp_path / "open.mp3",
-        close_sample=tmp_path / "close.mp3",
-        intro_sample=tmp_path / "intro.mp3",
-        outro_sample=tmp_path / "outro.mp3",
+        snippets={
+            "open": tmp_path / "open.mp3",
+            "close": tmp_path / "close.mp3",
+            "intro": tmp_path / "intro.mp3",
+            "outro": tmp_path / "outro.mp3",
+        },
         state_path=tmp_path / "state.toml",
     )
 
@@ -157,10 +161,12 @@ def test_run_quiz_rejected_uncertain_candidate_marked_skipped(tmp_path: Path, mo
     decisions, interrupted, skipped = _run_quiz(
         state,
         [item],
-        open_sample=tmp_path / "open.mp3",
-        close_sample=tmp_path / "close.mp3",
-        intro_sample=tmp_path / "intro.mp3",
-        outro_sample=tmp_path / "outro.mp3",
+        snippets={
+            "open": tmp_path / "open.mp3",
+            "close": tmp_path / "close.mp3",
+            "intro": tmp_path / "intro.mp3",
+            "outro": tmp_path / "outro.mp3",
+        },
         state_path=tmp_path / "state.toml",
     )
 

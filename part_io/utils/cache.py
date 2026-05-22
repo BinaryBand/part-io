@@ -11,36 +11,35 @@ from typing import Any
 
 import numpy as np
 
+from part_io.utils.hash import partial_file_hash
+
 
 def load_npz_profile(source_path: Path, cache_dir: Path) -> Any | None:
     """Load a numpy `.npz` profile for *source_path* from *cache_dir*.
 
-    Returns the stored profile object or ``None`` when the cache is missing
-    or invalid. Failures are debug-logged.
+    The cache key is a hash of the first 64 KB of *source_path*, so entries
+    survive renames and are never confused with a cut/modified version of the
+    same file. Returns the stored profile or ``None`` on miss or error.
     """
-    cache_path = cache_dir / f"{source_path.stem}.npz"
+    cache_path = cache_dir / f"{partial_file_hash(source_path)}.npz"
     if not cache_path.exists():
         return None
     try:
-        stat = source_path.stat()
-        cached = np.load(cache_path)
-        if float(cached["mtime"]) == stat.st_mtime and int(cached["size"]) == stat.st_size:
-            return cached["profile"]
+        return np.load(cache_path)["profile"]
     except Exception as exc:  # pragma: no cover - benign cache read failures
         logging.debug("Failed to load cached profile '%s': %s", cache_path, exc, exc_info=True)
     return None
 
 
 def save_npz_profile(source_path: Path, profile: Any, cache_dir: Path) -> None:
-    """Persist *profile* to *cache_dir* keyed by the source filename.
+    """Persist *profile* to *cache_dir* keyed by a hash of *source_path*.
 
     Failures are debug-logged and otherwise ignored to keep detection fast-fail
     tolerant in environments like network mounts.
     """
-    cache_path = cache_dir / f"{source_path.stem}.npz"
+    cache_path = cache_dir / f"{partial_file_hash(source_path)}.npz"
     try:
-        stat = source_path.stat()
         cache_dir.mkdir(parents=True, exist_ok=True)
-        np.savez(cache_path, profile=profile, mtime=stat.st_mtime, size=stat.st_size)
+        np.savez(cache_path, profile=profile)
     except Exception as exc:  # pragma: no cover - benign cache write failures
         logging.debug("Failed to save cached profile '%s': %s", cache_path, exc, exc_info=True)

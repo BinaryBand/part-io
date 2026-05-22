@@ -33,7 +33,9 @@ from part_io.cli.remote._review import (
 )
 from part_io.cli.remote._state import (
     PipelineState,
+    tomllib,
 )
+from part_io.models.pipeline.config import PipelineConfigModel
 from part_io.utils.config import get_profile_cache_dir
 
 _MIN_EPISODE_BYTES = 10 * 1024 * 1024  # skip promos — < 10 MB ≈ < 5 min at 128 kbps
@@ -57,6 +59,18 @@ def _ensure_snippet_profiles(snippets: list[Path]) -> None:
         if not is_profile_current(path):
             _emit(f"  [profile] writing {path.stem}.profile.toml")
             write_snippet_profile(path)
+
+
+def _load_snippets(config_path: Path) -> dict[str, Path]:
+    """Load snippet kind→path mapping from a ``__config__.toml`` file."""
+    if not config_path.exists():
+        sys.exit(f"Config not found: {config_path}\nCreate it with [[snippet]] entries.")
+    if tomllib is None:
+        sys.exit("TOML library unavailable — cannot load config.")
+    with config_path.open("rb") as f:
+        raw = tomllib.load(f)
+    config = PipelineConfigModel.model_validate(raw)
+    return {s.name: Path(s.seed_path) for s in config.snippets}
 
 
 def _full_episodes(remote_dir: Path) -> list[Path]:
@@ -85,11 +99,6 @@ def _resolve_opt(cli_value: Any, state_value: Any) -> Any:
 
 def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) -> None:
     s = state.settings
-    args.snippets_dir = Path(_resolve_opt(args.snippets_dir, s.snippets_dir))
-    args.open_sample = str(_resolve_opt(args.open_sample, s.open_sample))
-    args.close_sample = str(_resolve_opt(args.close_sample, s.close_sample))
-    args.intro_sample = str(_resolve_opt(args.intro_sample, s.intro_sample))
-    args.outro_sample = _resolve_opt(args.outro_sample, s.outro_sample)
     args.step_seconds = float(_resolve_opt(args.step_seconds, s.step_seconds))
     args.workers = int(_resolve_opt(args.workers, s.workers))
     args.max_matches = int(_resolve_opt(args.max_matches, s.max_matches))
@@ -97,11 +106,6 @@ def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) ->
     args.no_interactive = bool(args.no_interactive)
     args.overwrite = bool(_resolve_opt(args.overwrite, s.overwrite))
 
-    s.snippets_dir = str(args.snippets_dir)
-    s.open_sample = args.open_sample
-    s.close_sample = args.close_sample
-    s.intro_sample = args.intro_sample
-    s.outro_sample = str(args.outro_sample) if args.outro_sample else None
     s.step_seconds = args.step_seconds
     s.workers = args.workers
     s.max_matches = args.max_matches
@@ -157,10 +161,7 @@ def _collect_loop_candidates(
     workers: int,
     max_matches: int,
     state_path: Path,
-    open_sample: Path,
-    close_sample: Path,
-    intro_sample: Path,
-    outro_sample: Path | None,
+    snippets: dict[str, Path],
     profile_cache_dir: Path | None = None,
     exclude_decided: set[tuple[str, str, int]] | None = None,
 ) -> tuple[list[ReviewItem], int]:
@@ -185,10 +186,7 @@ def _collect_loop_candidates(
         _detect_batch(
             [ep_path],
             state,
-            open_sample,
-            close_sample,
-            intro_sample,
-            outro_sample,
+            snippets,
             step_seconds=step_seconds,
             workers=workers,
             max_matches=max_matches,
@@ -249,10 +247,7 @@ def _run_loop_once(
     all_full: list[Path],
     remote_dir: Path,
     output_dir: Path,
-    open_sample: Path,
-    close_sample: Path,
-    intro_sample: Path,
-    outro_sample: Path | None,
+    snippets: dict[str, Path],
     quiz_size: int,
     overwrite: bool,
     step_seconds: float,
@@ -278,10 +273,7 @@ def _run_loop_once(
         workers=workers,
         max_matches=max_matches,
         state_path=state_path,
-        open_sample=open_sample,
-        close_sample=close_sample,
-        intro_sample=intro_sample,
-        outro_sample=outro_sample,
+        snippets=snippets,
         profile_cache_dir=get_profile_cache_dir(remote_dir),
     )
     if quiz_items:
@@ -325,10 +317,7 @@ def _run_loop_until_clean(
     all_full: list[Path],
     remote_dir: Path,
     output_dir: Path,
-    open_sample: Path,
-    close_sample: Path,
-    intro_sample: Path,
-    outro_sample: Path | None,
+    snippets: dict[str, Path],
     quiz_size: int,
     overwrite: bool,
     step_seconds: float,
@@ -358,10 +347,7 @@ def _run_loop_until_clean(
             workers=workers,
             max_matches=max_matches,
             state_path=state_path,
-            open_sample=open_sample,
-            close_sample=close_sample,
-            intro_sample=intro_sample,
-            outro_sample=outro_sample,
+            snippets=snippets,
             profile_cache_dir=get_profile_cache_dir(remote_dir),
             exclude_decided=session_skipped,
         )
@@ -375,10 +361,7 @@ def _run_loop_until_clean(
             _, interrupted, new_skipped = _run_quiz(
                 state,
                 quiz_items,
-                open_sample=open_sample,
-                close_sample=close_sample,
-                intro_sample=intro_sample,
-                outro_sample=(outro_sample or intro_sample),
+                snippets=snippets,
                 state_path=state_path,
                 pre_skipped=session_skipped,
             )
@@ -434,21 +417,18 @@ def _cmd_review(args: argparse.Namespace) -> None:
     _apply_sticky_review_args(args, state)
     state.save(state_path)
 
-    open_sample = args.snippets_dir / args.open_sample
-    close_sample = args.snippets_dir / args.close_sample
-    intro_sample = args.snippets_dir / args.intro_sample
-    outro_sample = args.snippets_dir / args.outro_sample if args.outro_sample else None
+    config_path: Path = args.config or (remote_dir / "__config__.toml")
+    snippets = _load_snippets(config_path)
 
-    for path, label in [
-        (remote_dir, "Remote dir"),
-        (open_sample, "Open sample"),
-        (close_sample, "Close sample"),
-    ]:
-        if not path.exists():
-            sys.exit(f"{label} not found: {path}")
+    for key in ("open", "close"):
+        if key not in snippets:
+            sys.exit(f"Missing required snippet '{key}' in {config_path}")
+        if not snippets[key].exists():
+            sys.exit(f"{key} sample not found: {snippets[key]}")
+    if not remote_dir.exists():
+        sys.exit(f"Remote dir not found: {remote_dir}")
 
-    active_snippets = [s for s in [open_sample, close_sample, intro_sample, outro_sample] if s]
-    _ensure_snippet_profiles(active_snippets)
+    _ensure_snippet_profiles(list(snippets.values()))
 
     all_full = _full_episodes(remote_dir)
     if not all_full:
@@ -465,10 +445,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
         _detect_batch(
             to_detect,
             state,
-            open_sample,
-            close_sample,
-            intro_sample,
-            outro_sample,
+            snippets,
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
@@ -489,10 +466,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
 
     _run_review_loop(
         state,
-        open_sample=open_sample,
-        close_sample=close_sample,
-        intro_sample=intro_sample,
-        outro_sample=(outro_sample or intro_sample),
+        snippets=snippets,
         state_path=state_path,
     )
 
@@ -552,21 +526,19 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     state.save(state_path)
 
     output_dir: Path = args.output_dir
-    open_sample = args.snippets_dir / args.open_sample
-    close_sample = args.snippets_dir / args.close_sample
-    intro_sample = args.snippets_dir / args.intro_sample
-    outro_sample = args.snippets_dir / args.outro_sample if args.outro_sample else None
 
-    for path, label in [
-        (remote_dir, "Remote dir"),
-        (open_sample, "Open sample"),
-        (close_sample, "Close sample"),
-    ]:
-        if not path.exists():
-            sys.exit(f"{label} not found: {path}")
+    config_path: Path = args.config or (remote_dir / "__config__.toml")
+    snippets = _load_snippets(config_path)
 
-    active_snippets = [s for s in [open_sample, close_sample, intro_sample, outro_sample] if s]
-    _ensure_snippet_profiles(active_snippets)
+    for key in ("open", "close"):
+        if key not in snippets:
+            sys.exit(f"Missing required snippet '{key}' in {config_path}")
+        if not snippets[key].exists():
+            sys.exit(f"{key} sample not found: {snippets[key]}")
+    if not remote_dir.exists():
+        sys.exit(f"Remote dir not found: {remote_dir}")
+
+    _ensure_snippet_profiles(list(snippets.values()))
 
     all_full = _full_episodes(remote_dir)
     if not all_full:
@@ -577,10 +549,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             all_full=all_full,
             remote_dir=remote_dir,
             output_dir=output_dir,
-            open_sample=open_sample,
-            close_sample=close_sample,
-            intro_sample=intro_sample,
-            outro_sample=outro_sample,
+            snippets=snippets,
             quiz_size=args.quiz_size,
             overwrite=args.overwrite,
             step_seconds=args.step_seconds,
@@ -603,10 +572,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         all_full=all_full,
         remote_dir=remote_dir,
         output_dir=output_dir,
-        open_sample=open_sample,
-        close_sample=close_sample,
-        intro_sample=intro_sample,
-        outro_sample=outro_sample,
+        snippets=snippets,
         quiz_size=args.quiz_size,
         overwrite=args.overwrite,
         step_seconds=args.step_seconds,
@@ -709,11 +675,13 @@ def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("review", help="Detect matches and review them interactively")
     _add_remote_dir_arg(p)
     _add_verbose_arg(p)
-    p.add_argument("--snippets-dir", type=Path, default=None)
-    p.add_argument("--open-sample", default=None)
-    p.add_argument("--close-sample", default=None)
-    p.add_argument("--intro-sample", default=None)
-    p.add_argument("--outro-sample", default=None)
+    p.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="CONFIG_TOML",
+        help="Path to __config__.toml (default: REMOTE_DIR/__config__.toml)",
+    )
     _add_detect_args(p)
     p.add_argument("--overwrite", action="store_true", default=None)
     p.add_argument(
@@ -736,11 +704,13 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     )
     _add_remote_dir_arg(p)
     _add_verbose_arg(p)
-    p.add_argument("--snippets-dir", type=Path, default=None)
-    p.add_argument("--open-sample", default=None)
-    p.add_argument("--close-sample", default=None)
-    p.add_argument("--intro-sample", default=None)
-    p.add_argument("--outro-sample", default=None)
+    p.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="CONFIG_TOML",
+        help="Path to __config__.toml (default: REMOTE_DIR/__config__.toml)",
+    )
     p.add_argument("--output-dir", type=Path, default=None)
     _add_detect_args(p)
     _add_cut_args(p)

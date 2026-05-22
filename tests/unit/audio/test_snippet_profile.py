@@ -50,7 +50,7 @@ def _make_sine_mix(duration_seconds: float, frequencies: list[float]) -> list[in
 
 
 def _profile_data_from_matrix(matrix: np.ndarray) -> _ProfileData:
-    return _ProfileData(source_hash="cafebabe", matrix=matrix)
+    return _ProfileData.from_matrix(source_hash="cafebabe", matrix=matrix)
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ class TestProfileRoundTrip:
         model = _build_profile_model(d)
 
         matrix = decode_matrix(model.data, model.n_frames, model.band_count)
-        np.testing.assert_allclose(matrix, d.to_matrix(), atol=np.finfo(np.float32).eps * 16)
+        np.testing.assert_allclose(matrix, d.to_matrix(), atol=float(np.finfo(np.float32).eps * 16))
 
     def test_toml_round_trip(self):
         """SnippetProfileModel survives model_dump → tomli_w → tomllib → model_validate."""
@@ -128,7 +128,7 @@ class TestProfileRoundTrip:
         assert restored.source_hash == model.source_hash
 
         matrix = decode_matrix(restored.data, restored.n_frames, restored.band_count)
-        np.testing.assert_allclose(matrix, d.to_matrix(), atol=np.finfo(np.float32).eps * 16)
+        np.testing.assert_allclose(matrix, d.to_matrix(), atol=float(np.finfo(np.float32).eps * 16))
 
 
 # ---------------------------------------------------------------------------

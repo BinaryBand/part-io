@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 import tomli_w
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from part_io.adapters.audio.matcher import (
     _ANALYSIS_RATE,
@@ -96,17 +96,18 @@ class _ProfileData(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
     source_hash: str
-    seed: np.ndarray    # shape (band_count * 2,) — frame 0 verbatim
+    seed: np.ndarray  # shape (band_count * 2,) — frame 0 verbatim
     deltas: np.ndarray  # shape (n_frames - 1, band_count * 2) — frame diffs
 
-    @model_validator(mode="before")
     @classmethod
-    def _from_matrix(cls, data: object) -> object:
-        if isinstance(data, dict) and "matrix" in data:
-            matrix = np.asarray(data.pop("matrix"), dtype=np.float32)
-            data["seed"] = matrix[0].copy()
-            data["deltas"] = np.diff(matrix, axis=0)
-        return data
+    def from_matrix(cls, *, source_hash: str, matrix: np.ndarray) -> "_ProfileData":
+        """Build profile data from a full detection matrix."""
+        matrix_f32 = np.asarray(matrix, dtype=np.float32)
+        return cls(
+            source_hash=source_hash,
+            seed=matrix_f32[0].copy(),
+            deltas=np.diff(matrix_f32, axis=0),
+        )
 
     @property
     def n_frames(self) -> int:
@@ -126,7 +127,7 @@ def _compute(snippet_path: Path) -> _ProfileData:
         raise ValueError(
             f"Could not compute profile for {snippet_path}: audio too short or decode failed"
         )
-    return _ProfileData(source_hash=partial_file_hash(snippet_path), matrix=profile)
+    return _ProfileData.from_matrix(source_hash=partial_file_hash(snippet_path), matrix=profile)
 
 
 # ---------------------------------------------------------------------------

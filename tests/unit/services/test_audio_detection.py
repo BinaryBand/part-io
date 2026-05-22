@@ -124,10 +124,7 @@ def test_build_detection_batch_jobs_includes_intro_when_present(tmp_path: Path) 
 
     request = audio_detection.DetectionBatchRequest(
         episodes=[episode_a, episode_b],
-        open_sample=open_sample,
-        close_sample=close_sample,
-        intro_sample=intro_sample,
-        outro_sample=None,
+        snippets={"open": open_sample, "close": close_sample, "intro": intro_sample},
     )
 
     jobs = audio_detection.build_detection_batch_jobs(request)
@@ -148,10 +145,7 @@ def test_build_detection_batch_jobs_includes_optional_outro_when_present(tmp_pat
 
     request = audio_detection.DetectionBatchRequest(
         episodes=[episode_a],
-        open_sample=open_sample,
-        close_sample=close_sample,
-        intro_sample=None,
-        outro_sample=outro_sample,
+        snippets={"open": open_sample, "close": close_sample, "outro": outro_sample},
     )
 
     jobs = audio_detection.build_detection_batch_jobs(request)
@@ -185,10 +179,7 @@ def test_run_detection_batch_returns_jobs_and_results(monkeypatch, tmp_path: Pat
 
     request = audio_detection.DetectionBatchRequest(
         episodes=[episode],
-        open_sample=open_sample,
-        close_sample=close_sample,
-        intro_sample=None,
-        outro_sample=None,
+        snippets={"open": open_sample, "close": close_sample},
     )
 
     jobs, results = audio_detection.run_detection_batch(
