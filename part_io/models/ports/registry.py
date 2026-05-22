@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from part_io.models.registry import TaskRegistry, TaskSpec
+from part_io.models.tasks.registry import TaskRegistry, TaskSpec
 
 LoadRegistryFn = Callable[[], TaskRegistry]
 SelectTasksFn = Callable[[TaskRegistry, list[str]], list[TaskSpec]]

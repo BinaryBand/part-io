@@ -1,28 +1,35 @@
-"""Backward-compat re-export — prefer ``part_io.models.pipeline.state``."""
-
+from part_io.models.pipeline.config import (
+    AudioSnippetModel,
+    CutRuleModel,
+    PairCutRuleModel,
+    PipelineConfigModel,
+    TrimAfterRuleModel,
+    TrimBeforeRuleModel,
+)
 from part_io.models.pipeline.state import (
-    Classification,
     EpisodeStateModel,
     GenericStateModel,
     MatchModel,
     PipelineStateModel,
-    RemotePipelineStateModel,
     RunSettingsModel,
     SegmentModel,
     TargetStateModel,
 )
 
-# Legacy name kept for any code that referenced the old targets wrapper.
-RemotePipelineTargetsModel = None  # removed — targets now live on AudioSnippetModel
-
 __all__ = [
-    "Classification",
+    # state
     "SegmentModel",
     "MatchModel",
     "TargetStateModel",
     "RunSettingsModel",
     "EpisodeStateModel",
     "PipelineStateModel",
-    "RemotePipelineStateModel",
     "GenericStateModel",
+    # config
+    "AudioSnippetModel",
+    "PairCutRuleModel",
+    "TrimBeforeRuleModel",
+    "TrimAfterRuleModel",
+    "CutRuleModel",
+    "PipelineConfigModel",
 ]
