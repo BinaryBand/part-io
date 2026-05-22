@@ -23,6 +23,7 @@ from part_io.services.audio_detection import (
     filter_matches_by_position,
     run_detection_batch,
 )
+from part_io.utils.hash import partial_file_hash
 
 _LOG = logging.getLogger(__name__)
 
@@ -77,7 +78,12 @@ def _process_detection_results(
         )
         if error_msg:
             _emit(error_msg)
-        ep_state.source = str(ep_by_stem[stem])
+        source_path = ep_by_stem[stem]
+        ep_state.source = str(source_path)
+        try:
+            ep_state.source_hash = partial_file_hash(source_path)
+        except OSError:
+            ep_state.source_hash = None
         _emit(f"  [{done}/{len(jobs)}] {kind:5}  {stem}  ({score_str})")
 
 

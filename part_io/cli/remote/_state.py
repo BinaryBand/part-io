@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from part_io.utils.hash import partial_file_hash
+
 _tomllib_runtime: Any = None
 try:  # pragma: no cover - runtime optional deps
     import tomllib as _tomllib_std
@@ -64,6 +66,7 @@ class _Match:
 @dataclass
 class EpisodeState:
     source: str = ""
+    source_hash: str | None = None  # SHA-256 of first 64 KB of source; None means unverified
     candidates: dict[str, list[_Match]] = field(
         default_factory=lambda: {kind: [] for kind in _AUDIO_KINDS}
     )
@@ -73,6 +76,7 @@ class EpisodeState:
     def __init__(
         self,
         source: str = "",
+        source_hash: str | None = None,
         candidates: dict[str, list[_Match]] | None = None,
         classes: dict[str, str] | None = None,
         cut: bool = False,
@@ -87,6 +91,7 @@ class EpisodeState:
         outro_class: str = _UND,
     ) -> None:
         self.source = source
+        self.source_hash = source_hash
         self.cut = cut
         self.candidates = {kind: [] for kind in _AUDIO_KINDS}
         self.classes = {kind: _UND for kind in _AUDIO_KINDS}
@@ -136,6 +141,15 @@ class EpisodeState:
     def end_for(self, kind: str) -> float:
         first = self.first_candidate_for(kind)
         return first.end if first is not None else 0.0
+
+    def source_hash_valid(self, path: Path) -> bool:
+        """Return True if *path* matches the stored hash, False if stale or unverified."""
+        if not self.source_hash:
+            return False
+        try:
+            return partial_file_hash(path) == self.source_hash
+        except OSError:
+            return False
 
     # Compatibility properties: keep old attribute-style accesses while
     # storing data in dict-backed fields.
@@ -311,7 +325,12 @@ def _load_target(raw: dict) -> TargetState:
 
 
 def _load_episode(raw: dict) -> EpisodeState:
-    ep = EpisodeState(source=str(raw.get("source", "")), cut=bool(raw.get("cut", False)))
+    raw_hash = raw.get("source_hash")
+    ep = EpisodeState(
+        source=str(raw.get("source", "")),
+        source_hash=str(raw_hash) if raw_hash is not None else None,
+        cut=bool(raw.get("cut", False)),
+    )
     for kind in _AUDIO_KINDS:
         ep.set_class(kind, str(raw.get(f"{kind}_class", _UND)))
 
@@ -524,19 +543,40 @@ class PipelineState:
         ]
         lines += setting_lines
         for kind, target in [("open", self.open_target), ("close", self.close_target)]:
-            pos = ", ".join(_fmt_seg(s) for s in target.positives)
-            neg = ", ".join(_fmt_seg(s) for s in target.negatives)
+            seen: set[tuple[str, float, float]] = set()
+            deduped_pos: list[Segment] = []
+            for s in target.positives:
+                key = (s.source, s.start, s.end)
+                if key not in seen:
+                    seen.add(key)
+                    deduped_pos.append(s)
+            seen = set()
+            deduped_neg: list[Segment] = []
+            for s in target.negatives:
+                key = (s.source, s.start, s.end)
+                if key not in seen:
+                    seen.add(key)
+                    deduped_neg.append(s)
+            pos = ", ".join(_fmt_seg(s) for s in deduped_pos)
+            neg = ", ".join(_fmt_seg(s) for s in deduped_neg)
             lines += [f"\n[targets.{kind}]\n", f"positives = [{pos}]\n", f"negatives = [{neg}]\n"]
         for stem, ep in sorted(self.episodes.items()):
             lines.append(f'\n[episodes."{stem}"]\n')
             lines.append(f"source           = {json.dumps(ep.source)}\n")
+            if ep.source_hash is not None:
+                lines.append(f"source_hash      = {json.dumps(ep.source_hash)}\n")
             for kind in _AUDIO_KINDS:
-                key_pad = f"{kind}_candidates".ljust(16)
-                class_pad = f"{kind}_class".ljust(16)
-                candidates = ", ".join(_fmt_match(m) for m in ep.candidates_for(kind))
-                lines.append(f"{key_pad} = [{candidates}]\n")
-                lines.append(f'{class_pad} = "{ep.class_for(kind)}"\n')
-            lines.append(f"cut = {str(ep.cut).lower()}\n")
+                candidates = ep.candidates_for(kind)
+                cls = ep.class_for(kind)
+                if candidates:
+                    key_pad = f"{kind}_candidates".ljust(16)
+                    formatted = ", ".join(_fmt_match(m) for m in candidates)
+                    lines.append(f"{key_pad} = [{formatted}]\n")
+                if cls != _UND:
+                    class_pad = f"{kind}_class".ljust(16)
+                    lines.append(f'{class_pad} = "{cls}"\n')
+            if ep.cut:
+                lines.append("cut = true\n")
         _atomic_write_text(path, "".join(lines))
 
 

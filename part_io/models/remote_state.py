@@ -72,6 +72,7 @@ class EpisodeStateModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str = ""
+    source_hash: str | None = None  # SHA-256 of first 64 KB; None means unverified
     open_candidates: list[MatchModel] = Field(default_factory=list)
     open_class: Classification = "undetected"
     close_candidates: list[MatchModel] = Field(default_factory=list)
