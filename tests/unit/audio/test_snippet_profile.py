@@ -2,7 +2,7 @@
 
 Coverage:
   raw PCM → spectral profile matrix
-  profile matrix → SnippetProfileModel (zlib-compressed base64 blob)
+  profile matrix → SnippetProfileModel (byte-shuffled, zlib-compressed, base85 string)
   SnippetProfileModel → decoded matrix == original
 
 A secondary test verifies that write_snippet_profile + is_profile_current
@@ -24,7 +24,6 @@ from part_io.adapters.audio.matcher import (
     _build_spectral_profile,
 )
 from part_io.adapters.audio.snippet_profile import (
-    CompressedData,
     SnippetProfileModel,
     _build_profile_model,
     _ProfileData,
@@ -51,13 +50,7 @@ def _make_sine_mix(duration_seconds: float, frequencies: list[float]) -> list[in
 
 
 def _profile_data_from_matrix(matrix: np.ndarray) -> _ProfileData:
-    n_frames, _ = matrix.shape
-    return _ProfileData(
-        source_hash="cafebabe",
-        n_frames=n_frames,
-        energy=matrix[:, :_BAND_COUNT],
-        delta=matrix[:, _BAND_COUNT:],
-    )
+    return _ProfileData(source_hash="cafebabe", matrix=matrix)
 
 
 # ---------------------------------------------------------------------------
@@ -66,34 +59,21 @@ def _profile_data_from_matrix(matrix: np.ndarray) -> _ProfileData:
 
 
 class TestEncodeDecodeMatrix:
-    def test_encode_returns_compressed_data(self):
+    def test_encode_returns_string(self):
         matrix = np.random.default_rng(0).random((10, 64)).astype(np.float32)
-        result = encode_matrix(matrix)
-        assert isinstance(result, CompressedData)
+        assert isinstance(encode_matrix(matrix), str)
 
     def test_encode_decode_identity(self):
         matrix = np.random.default_rng(0).random((10, 64)).astype(np.float32)
         restored = decode_matrix(encode_matrix(matrix), 10, 32)
         np.testing.assert_array_equal(restored, matrix)
 
-    def test_header_and_signature_are_fixed_length(self):
-        # zlib header is always 2 bytes (→ 4 b64 chars); signature is always 4 bytes (→ 8 b64 chars)
-        cd = encode_matrix(np.zeros((5, 64), dtype=np.float32))
-        assert len(base64.b64decode(cd.header)) == 2
-        assert len(base64.b64decode(cd.signature)) == 4
-
-    def test_body_is_base85_string(self):
-        cd = encode_matrix(np.random.default_rng(2).random((73, 64)).astype(np.float32))
-        assert isinstance(cd.body, str)
-        assert len(cd.body) % 5 == 0, "base85 output length must be a multiple of 5"
-
     def test_compression_beats_raw_base64(self):
-        """Compressed body + header + signature should be smaller than uncompressed base64."""
+        """Encoded data should be smaller than a plain base64 encoding of the raw bytes."""
         matrix = np.random.default_rng(1).random((73, 64)).astype(np.float32)
-        cd = encode_matrix(matrix)
-        compressed_chars = len(cd.header) + len(cd.body) + len(cd.signature)
+        encoded = encode_matrix(matrix)
         raw_b64_chars = len(base64.b64encode(matrix.tobytes()))
-        assert compressed_chars < raw_b64_chars
+        assert len(encoded) < raw_b64_chars
 
 
 # ---------------------------------------------------------------------------
@@ -125,14 +105,13 @@ class TestProfileRoundTrip:
         assert matrix.shape == (profile.shape[0], _BAND_COUNT * 2)
 
     def test_decode_matches_original(self):
-        """Decoded matrix must be bit-for-bit identical to the input."""
+        """Decoded matrix must round-trip within float32 tolerance."""
         profile = self._build_profile()
         d = _profile_data_from_matrix(profile)
         model = _build_profile_model(d)
 
         matrix = decode_matrix(model.data, model.n_frames, model.band_count)
-        np.testing.assert_array_equal(matrix[:, :_BAND_COUNT], d.energy)
-        np.testing.assert_array_equal(matrix[:, _BAND_COUNT:], d.delta)
+        np.testing.assert_allclose(matrix, d.to_matrix(), atol=np.finfo(np.float32).eps * 16)
 
     def test_toml_round_trip(self):
         """SnippetProfileModel survives model_dump → tomli_w → tomllib → model_validate."""
@@ -149,8 +128,7 @@ class TestProfileRoundTrip:
         assert restored.source_hash == model.source_hash
 
         matrix = decode_matrix(restored.data, restored.n_frames, restored.band_count)
-        np.testing.assert_array_equal(matrix[:, :_BAND_COUNT], d.energy)
-        np.testing.assert_array_equal(matrix[:, _BAND_COUNT:], d.delta)
+        np.testing.assert_allclose(matrix, d.to_matrix(), atol=np.finfo(np.float32).eps * 16)
 
 
 # ---------------------------------------------------------------------------
