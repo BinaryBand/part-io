@@ -47,6 +47,12 @@ required = true
 # ---------------------------------------------------------------------------
 
 [[tasks]]
+target = "audio.snippet-profile"
+module = "part_io.cli.audio_snippet_profile"
+description = "Overwrite .profile.toml for every audio snippet in a given directory"
+required = false
+
+[[tasks]]
 target = "remote.precache"
 module = "part_io.cli.remote_pipeline"
 description = "Pre-warm spectral profile cache for all episodes (foreground)"

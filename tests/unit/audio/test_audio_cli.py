@@ -89,7 +89,7 @@ def test_coverage_adapter_build_cmd_uses_current_python() -> None:
     cfg = {"floor": 90}
     cmd = coverage._build_cmd(cfg)
 
-    assert cmd[:3] == ["python", "-m", "pytest"]
+    assert cmd[:3] == [sys.executable, "-m", "pytest"]
     assert "--cov-fail-under=90" in cmd
 
 

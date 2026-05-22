@@ -12,6 +12,7 @@ dependencies = [
     "numpy (>=1.26.0,<3.0.0)",
     "pytest (>=9.0.3,<10.0.0)",
     "tomli-w (>=1.0.0,<2.0.0)",
+    "cryptography (>=3.4.0,<48)",
 ]
 keywords = ["python", "cli", "automation", "lint", "tasks"]
 classifiers = [

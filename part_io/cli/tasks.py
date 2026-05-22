@@ -48,6 +48,7 @@ def _print_help() -> None:
     print("  help            Show this message")
     print("  install         Install development dependencies via poetry")
     print("  test            Run pytest")
+    print("  audio-snippet-profile  Overwrite .profile.toml for every snippet in a directory")
     print("  audio-review-batch  Run batch audio review generation")
     print("  audio-ad-detect     Pair open/close detections into ad_segments.json")
     print("  audio-ad-remove     Cut detected ad segments from an episode MP3")
@@ -160,6 +161,7 @@ _PASSTHROUGH_CMDS = {
     "audio-review-batch",
     "audio-ad-detect",
     "audio-ad-remove",
+    "audio-snippet-profile",
     "remote-review",
     "remote-cut",
     "remote-loop",
@@ -200,6 +202,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace, extra: 
         sys.exit(_run_cmd(["poetry", "install", "--with", "dev"]))
     if args.command == "test":
         sys.exit(_run_cmd(["poetry", "run", "pytest"]))
+    if args.command == "audio-snippet-profile":
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_snippet_profile", *extra]))
     if args.command == "audio-review-batch":
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_review_batch", *extra]))
     if args.command == "audio-ad-detect":

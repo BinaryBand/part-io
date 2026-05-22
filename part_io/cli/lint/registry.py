@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 
 from part_io.models.tasks.lint import ToolSpec
@@ -26,7 +27,7 @@ def get_tool_builder(tool_key: str) -> Builder:
 def _build_coverage_cmd(cfg: dict) -> list[str]:
     floor = cfg.get("floor", 80)
     return [
-        "python",
+        sys.executable,
         "-m",
         "pytest",
         "-q",

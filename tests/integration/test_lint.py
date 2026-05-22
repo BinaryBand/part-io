@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -62,7 +63,7 @@ class TestSemgrep:
     def test_semgrep(self):
         """Fail if Semgrep reports any architecture or process violations."""
         result = run_resolved(
-            ["poetry", "run", "python", "-m", "part_io.cli.lint.semgrep"],
+            [sys.executable, "-m", "part_io.cli.lint.semgrep"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -76,7 +77,7 @@ class TestVulture:
 
     def test_vulture(self):
         """Fail if Vulture reports unused code above the configured confidence threshold."""
-        result = run_resolved(["poetry", "run", "python", "-m", "part_io.cli.lint.vulture"])
+        result = run_resolved([sys.executable, "-m", "part_io.cli.lint.vulture"])
         assert result.returncode == 0
 
 
@@ -93,7 +94,7 @@ class TestLizard:
 
     def test_function_complexity(self):
         """Production functions must not exceed the configured CCN and length limits."""
-        result = run_resolved(["poetry", "run", "python", "-m", "part_io.cli.lint.lizard"])
+        result = run_resolved([sys.executable, "-m", "part_io.cli.lint.lizard"])
         assert result.returncode == 0
 
 
@@ -103,7 +104,7 @@ class TestCoverage:
     def test_coverage_floor(self) -> None:
         """Fail if total coverage of part_io/ is below the configured floor."""
         result = run_resolved(
-            ["poetry", "run", "python", "-m", "part_io.cli.lint.coverage"],
+            [sys.executable, "-m", "part_io.cli.lint.coverage"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -119,7 +120,7 @@ class TestCpd:
     def test_cpd(self) -> None:
         """Fail if jscpd reports duplicate code above configured threshold."""
         result = run_resolved(
-            ["poetry", "run", "python", "-m", "part_io.cli.lint.cpd"],
+            [sys.executable, "-m", "part_io.cli.lint.cpd"],
             capture_output=True,
             text=True,
             encoding="utf-8",

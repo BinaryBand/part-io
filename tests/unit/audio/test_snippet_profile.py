@@ -2,8 +2,8 @@
 
 Coverage:
   raw PCM → spectral profile matrix
-  profile matrix → SnippetProfileModel (delta-encoded)
-  SnippetProfileModel → reconstructed matrix ≈ original
+  profile matrix → SnippetProfileModel (zlib-compressed base64 blob)
+  SnippetProfileModel → decoded matrix == original
 
 A secondary test verifies that write_snippet_profile + is_profile_current
 honour the source_hash staleness check.
@@ -11,12 +11,12 @@ honour the source_hash staleness check.
 
 from __future__ import annotations
 
+import base64
 import math
 import tomllib
 from unittest.mock import patch
 
 import numpy as np
-import pytest
 
 from part_io.adapters.audio.matcher import (
     _ANALYSIS_RATE,
@@ -24,9 +24,12 @@ from part_io.adapters.audio.matcher import (
     _build_spectral_profile,
 )
 from part_io.adapters.audio.snippet_profile import (
+    CompressedData,
     SnippetProfileModel,
     _build_profile_model,
     _ProfileData,
+    decode_matrix,
+    encode_matrix,
     is_profile_current,
     write_snippet_profile,
 )
@@ -48,35 +51,53 @@ def _make_sine_mix(duration_seconds: float, frequencies: list[float]) -> list[in
 
 
 def _profile_data_from_matrix(matrix: np.ndarray) -> _ProfileData:
-    n_frames, n_dims = matrix.shape
+    n_frames, _ = matrix.shape
     return _ProfileData(
         source_hash="cafebabe",
         n_frames=n_frames,
-        n_dims=n_dims,
         energy=matrix[:, :_BAND_COUNT],
         delta=matrix[:, _BAND_COUNT:],
-        generated_at="2026-01-01T00:00:00Z",
     )
 
 
-def _reconstruct_matrix(model: SnippetProfileModel) -> tuple[np.ndarray, np.ndarray]:
-    """Reconstruct per-frame energy and delta arrays from a SnippetProfileModel."""
-    n = model.n_frames
-    energy = np.zeros((n, model.band_count), dtype=np.float64)
-    delta = np.zeros((n, model.band_count), dtype=np.float64)
+# ---------------------------------------------------------------------------
+# Encode / decode round-trip
+# ---------------------------------------------------------------------------
 
-    energy[0] = model.keyframe_energy
-    delta[0] = model.keyframe_delta
 
-    for i, diff in enumerate(model.diffs):
-        energy[i + 1] = energy[i] + np.array(diff.energy)
-        delta[i + 1] = delta[i] + np.array(diff.delta)
+class TestEncodeDecodeMatrix:
+    def test_encode_returns_compressed_data(self):
+        matrix = np.random.default_rng(0).random((10, 64)).astype(np.float32)
+        result = encode_matrix(matrix)
+        assert isinstance(result, CompressedData)
 
-    return energy, delta
+    def test_encode_decode_identity(self):
+        matrix = np.random.default_rng(0).random((10, 64)).astype(np.float32)
+        restored = decode_matrix(encode_matrix(matrix), 10, 32)
+        np.testing.assert_array_equal(restored, matrix)
+
+    def test_header_and_signature_are_fixed_length(self):
+        # zlib header is always 2 bytes (→ 4 b64 chars); signature is always 4 bytes (→ 8 b64 chars)
+        cd = encode_matrix(np.zeros((5, 64), dtype=np.float32))
+        assert len(base64.b64decode(cd.header)) == 2
+        assert len(base64.b64decode(cd.signature)) == 4
+
+    def test_body_is_base85_string(self):
+        cd = encode_matrix(np.random.default_rng(2).random((73, 64)).astype(np.float32))
+        assert isinstance(cd.body, str)
+        assert len(cd.body) % 5 == 0, "base85 output length must be a multiple of 5"
+
+    def test_compression_beats_raw_base64(self):
+        """Compressed body + header + signature should be smaller than uncompressed base64."""
+        matrix = np.random.default_rng(1).random((73, 64)).astype(np.float32)
+        cd = encode_matrix(matrix)
+        compressed_chars = len(cd.header) + len(cd.body) + len(cd.signature)
+        raw_b64_chars = len(base64.b64encode(matrix.tobytes()))
+        assert compressed_chars < raw_b64_chars
 
 
 # ---------------------------------------------------------------------------
-# Round-trip: raw PCM → profile matrix → model → reconstructed matrix
+# Round-trip: raw PCM → profile matrix → model → decoded matrix
 # ---------------------------------------------------------------------------
 
 
@@ -87,92 +108,49 @@ class TestProfileRoundTrip:
         assert profile.size > 0, "spectral profile must be non-empty"
         return profile
 
-    def test_model_frame_count(self):
+    def test_model_fields(self):
         profile = self._build_profile()
-        d = _profile_data_from_matrix(profile)
-        model = _build_profile_model(d)
+        model = _build_profile_model(_profile_data_from_matrix(profile))
 
         assert model.n_frames == profile.shape[0]
-        assert len(model.diffs) == profile.shape[0] - 1
-
-    def test_model_band_count(self):
-        profile = self._build_profile()
-        d = _profile_data_from_matrix(profile)
-        model = _build_profile_model(d)
-
         assert model.band_count == _BAND_COUNT
-        assert len(model.keyframe_energy) == _BAND_COUNT
-        assert len(model.keyframe_delta) == _BAND_COUNT
-        for diff in model.diffs:
-            assert len(diff.energy) == _BAND_COUNT
-            assert len(diff.delta) == _BAND_COUNT
+        assert model.analysis_rate == _ANALYSIS_RATE
+        assert model.hop_size == 1024  # _HOP_SIZE
 
-    def test_reconstruction_matches_original(self):
-        """Cumulative sum of diffs must reproduce every original frame."""
+    def test_decode_shape(self):
+        profile = self._build_profile()
+        model = _build_profile_model(_profile_data_from_matrix(profile))
+
+        matrix = decode_matrix(model.data, model.n_frames, model.band_count)
+        assert matrix.shape == (profile.shape[0], _BAND_COUNT * 2)
+
+    def test_decode_matches_original(self):
+        """Decoded matrix must be bit-for-bit identical to the input."""
         profile = self._build_profile()
         d = _profile_data_from_matrix(profile)
         model = _build_profile_model(d)
 
-        energy_rec, delta_rec = _reconstruct_matrix(model)
+        matrix = decode_matrix(model.data, model.n_frames, model.band_count)
+        np.testing.assert_array_equal(matrix[:, :_BAND_COUNT], d.energy)
+        np.testing.assert_array_equal(matrix[:, _BAND_COUNT:], d.delta)
 
-        # Tolerance: rounding to 5 decimal places, accumulated over n_frames steps.
-        atol = model.n_frames * 1e-5
-
-        np.testing.assert_allclose(energy_rec, d.energy, atol=atol, err_msg="energy mismatch")
-        np.testing.assert_allclose(delta_rec, d.delta, atol=atol, err_msg="delta mismatch")
-
-    def test_keyframe_matches_first_frame(self):
-        profile = self._build_profile()
-        d = _profile_data_from_matrix(profile)
-        model = _build_profile_model(d)
-
-        np.testing.assert_allclose(
-            model.keyframe_energy, d.energy[0], atol=1e-5, err_msg="keyframe energy"
-        )
-        np.testing.assert_allclose(
-            model.keyframe_delta, d.delta[0], atol=1e-5, err_msg="keyframe delta"
-        )
-
-    def test_silent_frames_produce_zero_diffs(self):
-        """Silent frames have identical spectral shapes → all diffs should be zero."""
-        # Build a profile from constant (non-zero) samples so L2-norm is stable
-        n_samples = _ANALYSIS_RATE * 2
-        samples = [8000] * n_samples
-        profile = np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
-        if profile.shape[0] < 2:
-            pytest.skip("profile too short for this assertion")
-
-        d = _profile_data_from_matrix(profile)
-        model = _build_profile_model(d)
-
-        for diff in model.diffs:
-            np.testing.assert_allclose(
-                diff.energy, [0.0] * _BAND_COUNT, atol=1e-5, err_msg="expected zero energy diffs"
-            )
-            np.testing.assert_allclose(
-                diff.delta, [0.0] * _BAND_COUNT, atol=1e-5, err_msg="expected zero delta diffs"
-            )
-
-    def test_toml_round_trip(self, tmp_path):
-        """SnippetProfileModel survives a model_dump → tomli_w → tomllib parse cycle."""
+    def test_toml_round_trip(self):
+        """SnippetProfileModel survives model_dump → tomli_w → tomllib → model_validate."""
         import tomli_w
 
         profile = self._build_profile()
         d = _profile_data_from_matrix(profile)
         model = _build_profile_model(d)
 
-        toml_bytes = tomli_w.dumps(model.model_dump()).encode("utf-8")
-        parsed = tomllib.loads(toml_bytes.decode("utf-8"))
-        restored = SnippetProfileModel.model_validate(parsed)
+        toml_text = tomli_w.dumps(model.model_dump())
+        restored = SnippetProfileModel.model_validate(tomllib.loads(toml_text))
 
         assert restored.n_frames == model.n_frames
         assert restored.source_hash == model.source_hash
-        assert len(restored.diffs) == len(model.diffs)
 
-        energy_rec, delta_rec = _reconstruct_matrix(restored)
-        atol = model.n_frames * 1e-5
-        np.testing.assert_allclose(energy_rec, d.energy, atol=atol)
-        np.testing.assert_allclose(delta_rec, d.delta, atol=atol)
+        matrix = decode_matrix(restored.data, restored.n_frames, restored.band_count)
+        np.testing.assert_array_equal(matrix[:, :_BAND_COUNT], d.energy)
+        np.testing.assert_array_equal(matrix[:, _BAND_COUNT:], d.delta)
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +165,7 @@ class TestWriteAndStaleness:
 
     def test_written_file_is_valid_toml(self, tmp_path):
         snippet = tmp_path / "test.mp3"
-        snippet.write_bytes(b"\xff\xfb" * 1024)  # dummy file for hash
+        snippet.write_bytes(b"\xff\xfb" * 1024)
 
         fake_profile = self._fake_profile()
         with patch(
@@ -197,8 +175,7 @@ class TestWriteAndStaleness:
             out = write_snippet_profile(snippet)
 
         assert out.exists()
-        parsed = tomllib.loads(out.read_text(encoding="utf-8"))
-        model = SnippetProfileModel.model_validate(parsed)
+        model = SnippetProfileModel.model_validate(tomllib.loads(out.read_text(encoding="utf-8")))
         assert model.n_frames == fake_profile.shape[0]
 
     def test_is_profile_current_true_after_write(self, tmp_path):
@@ -223,7 +200,7 @@ class TestWriteAndStaleness:
         ):
             write_snippet_profile(snippet)
 
-        snippet.write_bytes(b"\x00" * 2048)  # replace content → hash changes
+        snippet.write_bytes(b"\x00" * 2048)
         assert not is_profile_current(snippet)
 
     def test_is_profile_current_false_when_missing(self, tmp_path):

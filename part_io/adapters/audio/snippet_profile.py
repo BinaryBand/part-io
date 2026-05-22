@@ -1,26 +1,35 @@
 """Compute and persist spectral fingerprints for snippet audio files.
 
 ``.profile.toml`` is written alongside each snippet.  It serialises a
-:class:`SnippetProfileModel` — provenance metadata, a verbatim keyframe
-(frame 0), and ``[[diffs]]`` entries for frames 1 … n_frames-1.
+:class:`SnippetProfileModel` whose ``[data]`` section stores the full
+``(n_frames, band_count * 2)`` float32 detection matrix as zlib-compressed
+base64, split into three named parts:
 
-Reconstruct frame *k* from the stored data::
+``header``
+    The 2-byte zlib CMF+FLG preamble (compression method and flags).
+``body``
+    The raw deflate stream as a TOML array of 76-character base64 chunks
+    (57 raw bytes each — standard PEM line width).
+``signature``
+    The 4-byte Adler-32 checksum of the uncompressed data.
 
-    energy_k = keyframe_energy + sum(diffs[0..k-1].energy)
-    delta_k  = keyframe_delta  + sum(diffs[0..k-1].delta)
+Reconstruct the matrix::
 
-Relationships between fields::
+    matrix = decode_matrix(model.data, model.n_frames, model.band_count)
+    energy = matrix[:, :model.band_count]   # shape (n_frames, band_count)
+    delta  = matrix[:, model.band_count:]   # shape (n_frames, band_count)
 
-    duration_s = n_frames * hop_size / analysis_rate
-    # full matrix shape: (n_frames, band_count * 2)
-    # energy columns: matrix[:, :band_count]
-    # delta  columns: matrix[:, band_count:]
+Derivable from stored fields::
+
+    duration_s  = n_frames * hop_size / analysis_rate
+    band_labels = band_center_frequencies(analysis_rate, band_count)
 """
 
 from __future__ import annotations
 
+import base64
+import zlib
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -31,71 +40,83 @@ from part_io.adapters.audio.matcher import (
     _ANALYSIS_RATE,
     _BAND_COUNT,
     _HOP_SIZE,
-    band_center_frequencies,
     compute_audio_file_profile,
 )
 from part_io.utils.hash import partial_file_hash
 
 PROFILE_VERSION = 1
 
-_FREQ_LABELS: list[str] = [
-    f"band_{i:02d}_{round(hz):d}hz" for i, hz in enumerate(band_center_frequencies())
-]
-
-_FLOAT_PRECISION = 5  # decimal places stored in .profile.toml
-
 
 # ---------------------------------------------------------------------------
-# Pydantic models
+# Compressed-data model
 # ---------------------------------------------------------------------------
 
 
-class FrameDiff(BaseModel):
-    """Per-band spectral difference from the previous frame.
+class CompressedData(BaseModel):
+    """zlib-compressed float32 matrix, split into its three structural parts.
 
-    ``energy`` holds the change in normalised log-energy for each of the
-    ``band_count`` frequency bands.  ``delta`` holds the change in the
-    first-order spectral-delta features for the same bands.
-
-    A value of ``0.0`` means the band was identical to the previous frame;
-    positive means it grew, negative means it shrank.
+    Reassemble with ``header + body + signature`` before passing to
+    ``zlib.decompress``.  The Adler-32 ``signature`` is verified automatically
+    during decompression.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    energy: list[float]
-    delta: list[float]
+    header: str  # base64 of 2-byte zlib CMF+FLG preamble
+    body: str  # base85-encoded raw deflate stream
+    signature: str  # base64 of 4-byte Adler-32 checksum
+
+
+# ---------------------------------------------------------------------------
+# Encode / decode  (bi-directional transformation layer)
+# ---------------------------------------------------------------------------
+
+
+def encode_matrix(matrix: np.ndarray) -> CompressedData:
+    """Compress a float32 matrix and return its split :class:`CompressedData`."""
+    compressed = zlib.compress(matrix.astype(np.float32).tobytes())
+    header_bytes = compressed[:2]
+    signature_bytes = compressed[-4:]
+    body_bytes = compressed[2:-4]
+    return CompressedData(
+        header=base64.b64encode(header_bytes).decode("ascii"),
+        body=base64.b85encode(body_bytes).decode("ascii"),
+        signature=base64.b64encode(signature_bytes).decode("ascii"),
+    )
+
+
+def decode_matrix(data: CompressedData, n_frames: int, band_count: int) -> np.ndarray:
+    """Reassemble and decompress a :class:`CompressedData` into a float32 matrix."""
+    compressed = (
+        base64.b64decode(data.header)
+        + base64.b85decode(data.body)
+        + base64.b64decode(data.signature)
+    )
+    flat = np.frombuffer(zlib.decompress(compressed), dtype=np.float32).copy()
+    return flat.reshape(n_frames, band_count * 2)
+
+
+# ---------------------------------------------------------------------------
+# Profile model
+# ---------------------------------------------------------------------------
 
 
 class SnippetProfileModel(BaseModel):
-    """Delta-encoded spectral profile for one snippet audio file.
+    """Spectral profile for one snippet audio file.
 
-    The detection matrix (shape ``n_frames × band_count * 2``) is stored as a
-    keyframe followed by ``n_frames - 1`` :class:`FrameDiff` entries.
-    Reconstruct frame *k*::
-
-        energy_k = keyframe_energy + sum(d.energy for d in diffs[:k])
-        delta_k  = keyframe_delta  + sum(d.delta  for d in diffs[:k])
+    ``data`` stores the full detection matrix ``(n_frames, band_count * 2)``
+    as a zlib-compressed, split :class:`CompressedData`.
+    Decode with :func:`decode_matrix`.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    # provenance
     source_hash: str
     n_frames: int
     analysis_rate: int
     hop_size: int
     band_count: int
-    generated_at: str
-    profile_version: int
-    band_labels: list[str]
-
-    # frame 0 — verbatim
-    keyframe_energy: list[float]
-    keyframe_delta: list[float]
-
-    # frames 1 … n_frames-1 — difference from the preceding frame
-    diffs: list[FrameDiff]
+    data: CompressedData
 
 
 # ---------------------------------------------------------------------------
@@ -107,10 +128,8 @@ class SnippetProfileModel(BaseModel):
 class _ProfileData:
     source_hash: str
     n_frames: int
-    n_dims: int
     energy: np.ndarray  # shape (n_frames, band_count)
     delta: np.ndarray  # shape (n_frames, band_count)
-    generated_at: str
 
 
 def _compute(snippet_path: Path) -> _ProfileData:
@@ -119,14 +138,12 @@ def _compute(snippet_path: Path) -> _ProfileData:
         raise ValueError(
             f"Could not compute profile for {snippet_path}: audio too short or decode failed"
         )
-    n_frames, n_dims = profile.shape
+    n_frames, _ = profile.shape
     return _ProfileData(
         source_hash=partial_file_hash(snippet_path),
         n_frames=n_frames,
-        n_dims=n_dims,
         energy=profile[:, :_BAND_COUNT],
         delta=profile[:, _BAND_COUNT:],
-        generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
 
 
@@ -135,30 +152,15 @@ def _compute(snippet_path: Path) -> _ProfileData:
 # ---------------------------------------------------------------------------
 
 
-def _round_row(row: np.ndarray) -> list[float]:
-    return [round(float(v), _FLOAT_PRECISION) for v in row]
-
-
 def _build_profile_model(d: _ProfileData) -> SnippetProfileModel:
-    diffs: list[FrameDiff] = [
-        FrameDiff(
-            energy=_round_row(d.energy[i] - d.energy[i - 1]),
-            delta=_round_row(d.delta[i] - d.delta[i - 1]),
-        )
-        for i in range(1, d.n_frames)
-    ]
+    matrix = np.concatenate([d.energy, d.delta], axis=1)
     return SnippetProfileModel(
         source_hash=d.source_hash,
         n_frames=d.n_frames,
         analysis_rate=_ANALYSIS_RATE,
         hop_size=_HOP_SIZE,
         band_count=_BAND_COUNT,
-        generated_at=d.generated_at,
-        profile_version=PROFILE_VERSION,
-        band_labels=_FREQ_LABELS,
-        keyframe_energy=_round_row(d.energy[0]),
-        keyframe_delta=_round_row(d.delta[0]),
-        diffs=diffs,
+        data=encode_matrix(matrix),
     )
 
 
@@ -169,9 +171,10 @@ def _build_profile_model(d: _ProfileData) -> SnippetProfileModel:
 _PROFILE_HEADER = (
     "# Re-generate with: poetry run part-io-tasks snippet-profile <path>\n"
     "#\n"
-    "# Reconstruct frame k:\n"
-    "#   energy_k = keyframe_energy + sum(diffs[0..k-1].energy)\n"
-    "#   delta_k  = keyframe_delta  + sum(diffs[0..k-1].delta)\n"
+    "# Decode the matrix (Python):\n"
+    "#   from part_io.adapters.audio.snippet_profile import decode_matrix\n"
+    "#   matrix = decode_matrix(model.data, model.n_frames, model.band_count)\n"
+    "#   energy, delta = matrix[:, :band_count], matrix[:, band_count:]\n"
     "\n"
 )
 
@@ -217,7 +220,9 @@ def is_profile_current(snippet_path: Path) -> bool:
 
 __all__ = [
     "SnippetProfileModel",
-    "FrameDiff",
+    "CompressedData",
+    "encode_matrix",
+    "decode_matrix",
     "write_snippet_profile",
     "is_profile_current",
     "PROFILE_VERSION",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from part_io.adapters.errors import LintConfigError, LintProcessError
@@ -14,7 +16,7 @@ def test_adapter_coverage_build_cmd() -> None:
     cfg = {"floor": 90}
     cmd = coverage._build_cmd(cfg)
 
-    assert cmd[:3] == ["python", "-m", "pytest"]
+    assert cmd[:3] == [sys.executable, "-m", "pytest"]
     assert "--cov-fail-under=90" in cmd
 
 

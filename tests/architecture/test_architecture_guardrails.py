@@ -19,6 +19,7 @@ ENTRYPOINT_PATHS = {
     ROOT / "part_io" / "cli" / "download_unmatched.py",
     ROOT / "part_io" / "cli" / "remote_pipeline.py",
     ROOT / "part_io" / "cli" / "remote_promote.py",
+    ROOT / "part_io" / "cli" / "audio_snippet_profile.py",
 }
 ENTRYPOINT_DIRS = {
     ROOT / "part_io" / "cli" / "lint",
