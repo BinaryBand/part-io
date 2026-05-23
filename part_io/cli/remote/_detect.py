@@ -90,8 +90,9 @@ def _process_detection_results(
 def _detect_batch(
     episodes: list[Path],
     state: PipelineState,
-    snippets: dict[str, Path],
+    snippets: dict[str, Path | None],
     *,
+    snippet_profiles: dict[str, np.ndarray] | None = None,
     step_seconds: float,
     workers: int,
     max_matches: int,
@@ -100,29 +101,37 @@ def _detect_batch(
     ep_by_stem = {ep.stem: ep for ep in episodes}
     duration_by_stem = {ep.stem: _probe_audio_duration_seconds(ep) for ep in episodes}
 
-    consensus_map: dict[Path, np.ndarray] = {}
+    profile_map = dict(snippet_profiles or {})
     open_consensus = _build_consensus_from_segments(state.open_target.positives)
     if open_consensus is not None and "open" in snippets:
-        consensus_map[snippets["open"]] = open_consensus
+        profile_map["open"] = open_consensus
         _emit(f"  [consensus] open: averaged {len(state.open_target.positives)} positives")
     close_consensus = _build_consensus_from_segments(state.close_target.positives)
     if close_consensus is not None and "close" in snippets:
-        consensus_map[snippets["close"]] = close_consensus
+        profile_map["close"] = close_consensus
         _emit(f"  [consensus] close: averaged {len(state.close_target.positives)} positives")
 
+    path_to_kind = {
+        sample_path: kind for kind, sample_path in snippets.items() if sample_path is not None
+    }
+
     def _detector(
-        *, source_path: Path, sample_path: Path, score_threshold: float, step_seconds: float
+        *, source_path: Path, sample_path: Path | None, score_threshold: float, step_seconds: float
     ) -> list[AudioMatch]:
-        _LOG.info("  [detect] %s  %s", sample_path.stem, source_path.stem)
-        if sample_path in consensus_map:
+        kind = path_to_kind.get(sample_path, "") if sample_path is not None else ""
+        if kind and kind in profile_map:
             matches = find_audio_sample_matches_from_profile(
                 source_path=source_path,
-                reference=consensus_map[sample_path],
+                reference=profile_map[kind],
                 score_threshold=score_threshold,
                 step_seconds=step_seconds,
                 profile_cache_dir=profile_cache_dir,
             )
         else:
+            if sample_path is None:
+                msg = "missing sample path and no embedded profile"
+                raise ValueError(msg)
+            _LOG.info("  [detect] %s  %s", sample_path.stem, source_path.stem)
             matches = find_audio_sample_matches(
                 source_path=source_path,
                 sample_path=sample_path,
@@ -154,10 +163,14 @@ def _detect_batch(
             source_path=result.source_path,
             sample_path=result.sample_path,
             kind=result.kind,
-            matches=_refine_matches(
-                matches=list(result.matches),
-                source_path=result.source_path,
-                sample_path=result.sample_path,
+            matches=(
+                _refine_matches(
+                    matches=list(result.matches),
+                    source_path=result.source_path,
+                    sample_path=result.sample_path,
+                )
+                if result.sample_path is not None and result.sample_path.exists()
+                else list(result.matches)
             ),
             error=result.error,
         )

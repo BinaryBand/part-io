@@ -6,20 +6,27 @@ config can be committed to version control while state is gitignored.
 
 Example ``__config__.toml``::
 
-    [[snippet]]
-    name       = "ad_open"
-    seed_path  = "downloads/snippets/open.mp3"
-    seed_hash  = "a3f1..."          # SHA-256 of first 64 KB
+    [[snippets]]
+    name = "ad_open"
 
-    [[snippet]]
-    name       = "ad_close"
-    seed_path  = "downloads/snippets/close.mp3"
-    seed_hash  = "b7c2..."
+    [snippets.profile]
+    source_hash = "a3f1..."
+    n_frames = 155
+    analysis_rate = 16000
+    hop_size = 1024
+    band_count = 32
+    data = "<base85-zlib-profile>"
 
-    [[snippet]]
-    name       = "intro"
-    seed_path  = "downloads/snippets/intro.mp3"
-    seed_hash  = "d9e4..."
+    [[snippets]]
+    name = "ad_close"
+
+    [snippets.profile]
+    source_hash = "b7c2..."
+    n_frames = 162
+    analysis_rate = 16000
+    hop_size = 1024
+    band_count = 32
+    data = "<base85-zlib-profile>"
 
     [[cut_rule]]
     type         = "pair"
@@ -55,9 +62,21 @@ class AudioSnippetModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str  # logical key, e.g. "ad_open", "intro"
-    seed_path: str  # path to the seed audio file
-    seed_hash: str | None = None  # SHA-256 of first 64 KB; None = unverified
+    profile: "SnippetProfileConfigModel"
     targets: TargetStateModel = Field(default_factory=TargetStateModel)
+
+
+class SnippetProfileConfigModel(BaseModel):
+    """Inline spectral fingerprint used as the canonical snippet reference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_hash: str
+    n_frames: int
+    analysis_rate: int
+    hop_size: int
+    band_count: int
+    data: str
 
 
 class PairCutRuleModel(BaseModel):

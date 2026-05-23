@@ -179,6 +179,12 @@ def write_snippet_profile(snippet_path: Path) -> Path:
     return out
 
 
+def snapshot_snippet_profile(snippet_path: Path) -> SnippetProfileModel:
+    """Compute a spectral profile model for *snippet_path* without writing files."""
+    d = _compute(snippet_path)
+    return _build_profile_model(d)
+
+
 # ---------------------------------------------------------------------------
 # Staleness check
 # ---------------------------------------------------------------------------
@@ -204,6 +210,7 @@ __all__ = [
     "SnippetProfileModel",
     "encode_matrix",
     "decode_matrix",
+    "snapshot_snippet_profile",
     "write_snippet_profile",
     "is_profile_current",
     "PROFILE_VERSION",

@@ -16,11 +16,17 @@ import argparse
 import logging
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import tomli_w
+
 from part_io.adapters.audio.matcher import warm_source_profile
-from part_io.adapters.audio.snippet_profile import is_profile_current, write_snippet_profile
+from part_io.adapters.audio.snippet_profile import (
+    decode_matrix,
+    snapshot_snippet_profile,
+)
 from part_io.cli.remote._cut import CutSettings, _cut_cuttable
 from part_io.cli.remote._detect import _detect_batch
 from part_io.cli.remote._review import (
@@ -53,24 +59,150 @@ _LOG = logging.getLogger(__name__)
 _AUDIO_EXTENSIONS = frozenset({".mp3", ".opus"})
 
 
-def _ensure_snippet_profiles(snippets: list[Path]) -> None:
-    """Write (or refresh) a ``.profile.toml`` for each snippet whose profile is absent or stale."""
-    for path in snippets:
-        if not is_profile_current(path):
-            _emit(f"  [profile] writing {path.stem}.profile.toml")
-            write_snippet_profile(path)
+@dataclass(frozen=True)
+class LoadedSnippets:
+    profiles: dict[str, Any]
 
 
-def _load_snippets(config_path: Path) -> dict[str, Path]:
-    """Load snippet kind→path mapping from a ``__config__.toml`` file."""
+def _prepare_runtime_snippets(
+    *,
+    loaded: LoadedSnippets,
+    config_path: Path,
+) -> tuple[dict[str, Path], dict[str, Path | None], dict[str, Any]]:
+    """Resolve config snippets for review and detection runtime.
+
+    Returns:
+    - ``review_snippets``: only existing files (safe for A/B compare playback)
+    - ``detect_snippets``: path when file exists else ``None`` (profile-only mode)
+    - ``snippet_profiles``: inline spectral profiles keyed by snippet name
+    """
+    snippet_profiles = loaded.profiles
+    for key in ("open", "close"):
+        if key not in snippet_profiles:
+            sys.exit(f"Missing required snippet '{key}' embedded profile in {config_path}")
+    # Profile-only mode: detection runs against embedded references.
+    # Review compare playback is optional and disabled by default.
+    review_snippets: dict[str, Path] = {}
+    detect_snippets = {name: None for name in snippet_profiles}
+    return review_snippets, detect_snippets, snippet_profiles
+
+
+def _load_snippets(config_path: Path) -> LoadedSnippets:
+    """Load snippet definitions from a ``__config__.toml`` file."""
     if not config_path.exists():
         sys.exit(f"Config not found: {config_path}\nCreate it with [[snippet]] entries.")
     if tomllib is None:
         sys.exit("TOML library unavailable — cannot load config.")
     with config_path.open("rb") as f:
         raw = tomllib.load(f)
-    config = PipelineConfigModel.model_validate(raw)
-    return {s.name: Path(s.seed_path) for s in config.snippets}
+    try:
+        config = PipelineConfigModel.model_validate(raw)
+    except Exception as exc:  # noqa: BLE001
+        sys.exit(f"Invalid config {config_path}: {exc}")
+
+    profile_map: dict[str, Any] = {}
+    for snippet in config.snippets:
+        profile_map[snippet.name] = decode_matrix(
+            snippet.profile.data,
+            snippet.profile.n_frames,
+            snippet.profile.band_count,
+        )
+    return LoadedSnippets(profiles=profile_map)
+
+
+def _build_config_init_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "config-init",
+        help="Create a profile-only __config__.toml by snapshotting seed audio once.",
+    )
+    _add_remote_dir_arg(p)
+    p.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="CONFIG_TOML",
+        help="Output config path (default: REMOTE_DIR/__config__.toml)",
+    )
+    p.add_argument("--open-seed", type=Path, required=True, help="Seed file for open snippet")
+    p.add_argument("--close-seed", type=Path, required=True, help="Seed file for close snippet")
+    p.add_argument("--intro-seed", type=Path, default=None, help="Optional seed file for intro")
+    p.add_argument("--outro-seed", type=Path, default=None, help="Optional seed file for outro")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Overwrite existing config file",
+    )
+
+
+def _cmd_config_init(args: argparse.Namespace) -> None:
+    config_path: Path = args.config or (args.remote_dir / "__config__.toml")
+    if config_path.exists() and not args.force:
+        sys.exit(f"Config already exists: {config_path} (use --force to overwrite)")
+
+    seed_map: dict[str, Path] = {
+        "open": args.open_seed,
+        "close": args.close_seed,
+    }
+    if args.intro_seed is not None:
+        seed_map["intro"] = args.intro_seed
+    if args.outro_seed is not None:
+        seed_map["outro"] = args.outro_seed
+
+    for name, seed_path in seed_map.items():
+        if not seed_path.exists() or not seed_path.is_file():
+            sys.exit(f"Seed file for '{name}' not found: {seed_path}")
+
+    snippets: list[dict[str, Any]] = []
+    for name, seed_path in seed_map.items():
+        _emit(f"  [snapshot] {name}: {seed_path}")
+        profile = snapshot_snippet_profile(seed_path)
+        snippets.append(
+            {
+                "name": name,
+                "profile": profile.model_dump(),
+            }
+        )
+
+    cut_rules: list[dict[str, Any]] = [
+        {
+            "type": "pair",
+            "open_snippet": "open",
+            "close_snippet": "close",
+            "inclusive": True,
+            "min_gap": -15.0,
+            "max_gap": 300.0,
+        }
+    ]
+    if "intro" in seed_map:
+        cut_rules.append(
+            {
+                "type": "trim_before",
+                "snippet": "intro",
+                "exclusive": True,
+            }
+        )
+    if "outro" in seed_map:
+        cut_rules.append(
+            {
+                "type": "trim_after",
+                "snippet": "outro",
+                "exclusive": True,
+            }
+        )
+
+    payload = {
+        "snippets": snippets,
+        "cut_rules": cut_rules,
+    }
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        "# Profile-only snippet config generated by remote config-init\n"
+        "# Seed files were snapshotted at init time and are not required at runtime.\n\n"
+        + tomli_w.dumps(payload),
+        encoding="utf-8",
+    )
+    print(f"Wrote profile-only config: {config_path}")
 
 
 def _full_episodes(remote_dir: Path) -> list[Path]:
@@ -161,7 +293,8 @@ def _collect_loop_candidates(
     workers: int,
     max_matches: int,
     state_path: Path,
-    snippets: dict[str, Path],
+    snippets: dict[str, Path | None],
+    snippet_profiles: dict[str, Any],
     profile_cache_dir: Path | None = None,
     exclude_decided: set[tuple[str, str, int]] | None = None,
 ) -> tuple[list[ReviewItem], int]:
@@ -187,6 +320,7 @@ def _collect_loop_candidates(
             [ep_path],
             state,
             snippets,
+            snippet_profiles=snippet_profiles,
             step_seconds=step_seconds,
             workers=workers,
             max_matches=max_matches,
@@ -248,6 +382,8 @@ def _run_loop_once(
     remote_dir: Path,
     output_dir: Path,
     snippets: dict[str, Path],
+    detect_snippets: dict[str, Path | None],
+    snippet_profiles: dict[str, Any],
     quiz_size: int,
     overwrite: bool,
     step_seconds: float,
@@ -273,7 +409,8 @@ def _run_loop_once(
         workers=workers,
         max_matches=max_matches,
         state_path=state_path,
-        snippets=snippets,
+        snippets=detect_snippets,
+        snippet_profiles=snippet_profiles,
         profile_cache_dir=get_profile_cache_dir(remote_dir),
     )
     if quiz_items:
@@ -318,6 +455,8 @@ def _run_loop_until_clean(
     remote_dir: Path,
     output_dir: Path,
     snippets: dict[str, Path],
+    detect_snippets: dict[str, Path | None],
+    snippet_profiles: dict[str, Any],
     quiz_size: int,
     overwrite: bool,
     step_seconds: float,
@@ -347,7 +486,8 @@ def _run_loop_until_clean(
             workers=workers,
             max_matches=max_matches,
             state_path=state_path,
-            snippets=snippets,
+            snippets=detect_snippets,
+            snippet_profiles=snippet_profiles,
             profile_cache_dir=get_profile_cache_dir(remote_dir),
             exclude_decided=session_skipped,
         )
@@ -418,17 +558,12 @@ def _cmd_review(args: argparse.Namespace) -> None:
     state.save(state_path)
 
     config_path: Path = args.config or (remote_dir / "__config__.toml")
-    snippets = _load_snippets(config_path)
-
-    for key in ("open", "close"):
-        if key not in snippets:
-            sys.exit(f"Missing required snippet '{key}' in {config_path}")
-        if not snippets[key].exists():
-            sys.exit(f"{key} sample not found: {snippets[key]}")
+    review_snippets, detect_snippets, snippet_profiles = _prepare_runtime_snippets(
+        loaded=_load_snippets(config_path),
+        config_path=config_path,
+    )
     if not remote_dir.exists():
         sys.exit(f"Remote dir not found: {remote_dir}")
-
-    _ensure_snippet_profiles(list(snippets.values()))
 
     all_full = _full_episodes(remote_dir)
     if not all_full:
@@ -445,7 +580,8 @@ def _cmd_review(args: argparse.Namespace) -> None:
         _detect_batch(
             to_detect,
             state,
-            snippets,
+            detect_snippets,
+            snippet_profiles=snippet_profiles,
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
@@ -466,7 +602,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
 
     _run_review_loop(
         state,
-        snippets=snippets,
+        snippets=review_snippets,
         state_path=state_path,
     )
 
@@ -528,17 +664,12 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     output_dir: Path = args.output_dir
 
     config_path: Path = args.config or (remote_dir / "__config__.toml")
-    snippets = _load_snippets(config_path)
-
-    for key in ("open", "close"):
-        if key not in snippets:
-            sys.exit(f"Missing required snippet '{key}' in {config_path}")
-        if not snippets[key].exists():
-            sys.exit(f"{key} sample not found: {snippets[key]}")
+    review_snippets, detect_snippets, snippet_profiles = _prepare_runtime_snippets(
+        loaded=_load_snippets(config_path),
+        config_path=config_path,
+    )
     if not remote_dir.exists():
         sys.exit(f"Remote dir not found: {remote_dir}")
-
-    _ensure_snippet_profiles(list(snippets.values()))
 
     all_full = _full_episodes(remote_dir)
     if not all_full:
@@ -549,7 +680,9 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             all_full=all_full,
             remote_dir=remote_dir,
             output_dir=output_dir,
-            snippets=snippets,
+            snippets=review_snippets,
+            detect_snippets=detect_snippets,
+            snippet_profiles=snippet_profiles,
             quiz_size=args.quiz_size,
             overwrite=args.overwrite,
             step_seconds=args.step_seconds,
@@ -572,7 +705,9 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         all_full=all_full,
         remote_dir=remote_dir,
         output_dir=output_dir,
-        snippets=snippets,
+        snippets=review_snippets,
+        detect_snippets=detect_snippets,
+        snippet_profiles=snippet_profiles,
         quiz_size=args.quiz_size,
         overwrite=args.overwrite,
         step_seconds=args.step_seconds,
@@ -929,6 +1064,7 @@ def _cmd_precache_status(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Remote episode review and ad-cut pipeline.")
     sub = parser.add_subparsers(dest="subcommand", required=True)
+    _build_config_init_parser(sub)
     _build_review_parser(sub)
     _build_cut_parser(sub)
     _build_loop_parser(sub)
@@ -943,6 +1079,8 @@ def main() -> None:
 
     if args.subcommand == "review":
         _cmd_review(args)
+    elif args.subcommand == "config-init":
+        _cmd_config_init(args)
     elif args.subcommand == "cut":
         _cmd_cut(args)
     elif args.subcommand == "precache":

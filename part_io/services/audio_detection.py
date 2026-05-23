@@ -85,7 +85,7 @@ class DetectionBatchJob:
 
     stem: str
     source_path: Path
-    sample_path: Path
+    sample_path: Path | None
     kind: DetectionKind
 
 
@@ -95,7 +95,7 @@ class DetectionBatchResult:
 
     stem: str
     source_path: Path
-    sample_path: Path
+    sample_path: Path | None
     kind: DetectionKind
     matches: Sequence[MatchLike]
     error: str | None = None
@@ -106,7 +106,7 @@ class DetectionBatchRequest:
     """Inputs needed to build and run a detection batch for episodes."""
 
     episodes: list[Path]
-    snippets: dict[str, Path]  # kind → path; required keys: "open", "close"
+    snippets: dict[str, Path | None]  # kind → path; None means profile-only snippet
 
 
 def filter_matches_by_position(
@@ -150,7 +150,7 @@ def detect_top_matches(
     *,
     detector: Callable[..., Sequence[MatchLike]],
     source_path: Path,
-    sample_path: Path,
+    sample_path: Path | None,
     score_threshold: float,
     step_seconds: float,
     max_matches: int,
@@ -240,7 +240,7 @@ def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[Detection
     """Build detection jobs for each snippet kind in the request."""
     jobs: list[DetectionBatchJob] = []
     for kind, sample_path in request.snippets.items():
-        if not sample_path.exists():
+        if sample_path is not None and not sample_path.exists():
             continue
         jobs.extend(
             DetectionBatchJob(
@@ -302,8 +302,9 @@ def apply_batch_result_to_episode(
     score_str = f"{result.matches[0].score:.4f}" if result.matches else "none"
     error_msg = None
     if result.error:
+        sample_name = result.sample_path.name if result.sample_path else result.kind
         error_msg = (
             "  WARNING: detection failed for "
-            f"{result.source_path.name} ({result.sample_path.name}): {result.error}"
+            f"{result.source_path.name} ({sample_name}): {result.error}"
         )
     return score_str, error_msg

@@ -55,6 +55,7 @@ def _print_help() -> None:
     print("  remote-review       Generate open/close review bundles from downloads/remote/")
     print("  remote-cut          Cut ad segments from labeled remote episodes")
     print("  remote-loop         Generate → review → cut one episode at a time (streamlined)")
+    print("  remote-config-init  Build profile-only __config__.toml from seed snippets")
     print("  remote-precache     Pre-warm spectral profile cache for all episodes overnight")
     print("  remote-promote      Safely replace remote files with staged cleaned versions")
     print("  compile         Generate Pydantic model schemas into part_io/models/schemas")
@@ -165,6 +166,7 @@ _PASSTHROUGH_CMDS = {
     "remote-review",
     "remote-cut",
     "remote-loop",
+    "remote-config-init",
     "remote-precache",
     "remote-precache-start",
     "remote-precache-stop",
