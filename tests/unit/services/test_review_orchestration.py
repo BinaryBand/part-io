@@ -17,11 +17,12 @@ from part_io.services.review_orchestration import (
 )
 
 
-@dataclass(frozen=True)
+@dataclass
 class _FakeMatch:
     score: float
     start: float
     end: float
+    label: str | None = None
 
 
 @dataclass
@@ -37,7 +38,15 @@ class _FakeEpisode:
         return self.candidates[kind]
 
     def class_for(self, kind: str) -> str:
-        return self.classes[kind]
+        candidates = self.candidates[kind]
+        if not candidates:
+            return self.classes[kind]
+        labels = [c.label for c in candidates]
+        if any(label == "positive" for label in labels):
+            return "positive"
+        if all(label == "negative" for label in labels):
+            return "negative"
+        return "uncertain"
 
     def set_class(self, kind: str, value: str) -> None:
         self.classes[kind] = value
@@ -72,23 +81,27 @@ class TestEpisodeBridge:
         )
 
         data = episode_to_review_dict(episode, include_bounds=True)
-        assert data["open_candidates"] == [{"score": 0.9, "start": 1.0, "end": 2.0}]
+        assert data["open_candidates"] == [{"score": 0.9, "start": 1.0, "end": 2.0, "label": None}]
         assert data["open_class"] == "uncertain"
 
-    def test_apply_review_dict_classes_writes_back_classes(self) -> None:
-        episode = _FakeEpisode()
+    def test_apply_review_dict_classes_writes_back_candidate_labels(self) -> None:
+        episode = _FakeEpisode(
+            candidates={
+                "open": [_FakeMatch(score=0.9, start=1.0, end=2.0)],
+                "close": [_FakeMatch(score=0.5, start=3.0, end=4.0)],
+                "intro": [],
+                "outro": [],
+            }
+        )
         apply_review_dict_classes(
             episode,
             {
-                "open_class": "positive",
-                "close_class": "negative",
-                "intro_class": "uncertain",
-                "outro_class": "undetected",
+                "open_candidates": [{"score": 0.9, "start": 1.0, "end": 2.0, "label": "positive"}],
+                "close_candidates": [{"score": 0.5, "start": 3.0, "end": 4.0, "label": "negative"}],
             },
         )
-        assert episode.class_for("open") == "positive"
-        assert episode.class_for("close") == "negative"
-        # bridge wrote back classes correctly
+        assert episode.candidates_for("open")[0].label == "positive"
+        assert episode.candidates_for("close")[0].label == "negative"
 
     def test_positives_set_theta_plus(self) -> None:
         tp, _ = compute_classification_thresholds([0.9, 0.85], [])
@@ -316,10 +329,10 @@ class TestReclassifyAllEpisodes:
             close_target_negatives=[{"score": 0.2}] * 31,
         )
 
-        assert episodes["ep1"]["open_class"] == "positive"
-        assert episodes["ep1"]["close_class"] == "negative"
-        assert episodes["ep1"]["intro_class"] == "uncertain"
-        assert episodes["ep1"]["outro_class"] == "uncertain"
+        assert episodes["ep1"]["open_candidates"][0]["label"] == "positive"
+        assert episodes["ep1"]["close_candidates"][0]["label"] == "negative"
+        assert episodes["ep1"]["intro_candidates"][0].get("label") is None
+        assert episodes["ep1"]["outro_candidates"][0].get("label") is None
 
 
 class TestNextUncertainEpisodeKind:
@@ -377,7 +390,7 @@ class TestNextUncertainEpisodeKind:
 
 
 class TestApplyAndUndoReviewDecision:
-    def test_apply_approve_open_adds_positive_and_sets_class(self) -> None:
+    def test_apply_approve_open_adds_positive_and_labels_candidate(self) -> None:
         episode = {
             "open_class": "uncertain",
             "open_candidates": [{"score": 0.9, "start": 10.0, "end": 15.0}],
@@ -400,12 +413,12 @@ class TestApplyAndUndoReviewDecision:
         )
 
         assert decision.action == "approved"
-        assert episode["open_class"] == "positive"
+        assert episode["open_candidates"][0]["label"] == "positive"
         assert len(open_pos) == 1
         assert undo.kind == "open"
         assert undo.target_list_was_positive is True
 
-    def test_apply_reject_intro_sets_negative_without_target_append(self) -> None:
+    def test_apply_reject_intro_labels_negative_without_target_append(self) -> None:
         episode = {
             "intro_class": "uncertain",
             "intro_candidates": [{"score": 0.7, "start": 3.0, "end": 6.0}],
@@ -424,7 +437,7 @@ class TestApplyAndUndoReviewDecision:
         )
 
         assert decision.action == "rejected"
-        assert episode["intro_class"] == "negative"
+        assert episode["intro_candidates"][0]["label"] == "negative"
         assert undo.target_list_was_positive is False
 
     def test_undo_removes_segment_and_restores_class(self) -> None:
@@ -446,8 +459,10 @@ class TestApplyAndUndoReviewDecision:
                 segment_start=20.0,
                 segment_end=24.0,
                 segment_score=0.4,
+                candidate_idx=0,
                 target_list_was_positive=True,
                 prev_class="uncertain",
+                prev_label=None,
             ),
             open_target_positives=[],
             open_target_negatives=[],
@@ -455,5 +470,5 @@ class TestApplyAndUndoReviewDecision:
             close_target_negatives=[],
         )
 
-        assert episode["close_class"] == "uncertain"
+        assert episode["close_candidates"][0].get("label") is None
         assert close_pos == []

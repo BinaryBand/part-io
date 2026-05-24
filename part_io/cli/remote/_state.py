@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import shutil
@@ -26,9 +25,6 @@ else:
     _tomllib_runtime = _tomllib_std
 
 tomllib: Any = _tomllib_runtime
-
-_LOG = logging.getLogger(__name__)
-
 
 # Classification labels
 _POS = "positive"
@@ -56,11 +52,12 @@ class TargetState:
     negatives: list[Segment] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Match:
     score: float
     start: float
     end: float
+    label: str | None = None
 
 
 @dataclass
@@ -69,76 +66,33 @@ class EpisodeState:
     candidates: dict[str, list[_Match]] = field(
         default_factory=lambda: {kind: [] for kind in _AUDIO_KINDS}
     )
-    classes: dict[str, str] = field(default_factory=lambda: {kind: _UND for kind in _AUDIO_KINDS})
     cut: bool = False
-
-    def __init__(
-        self,
-        source: str = "",
-        source_hash: str | None = None,
-        candidates: dict[str, list[_Match]] | None = None,
-        classes: dict[str, str] | None = None,
-        cut: bool = False,
-        *,
-        open_candidates: list[_Match] | None = None,
-        close_candidates: list[_Match] | None = None,
-        intro_candidates: list[_Match] | None = None,
-        outro_candidates: list[_Match] | None = None,
-        open_class: str = _UND,
-        close_class: str = _UND,
-        intro_class: str = _UND,
-        outro_class: str = _UND,
-    ) -> None:
-        self.source_hash = source_hash
-        self.cut = cut
-        self.candidates = {kind: [] for kind in _AUDIO_KINDS}
-        self.classes = {kind: _UND for kind in _AUDIO_KINDS}
-
-        if candidates is not None:
-            for kind in _AUDIO_KINDS:
-                self.candidates[kind] = list(candidates.get(kind, []))
-        if classes is not None:
-            for kind in _AUDIO_KINDS:
-                self.classes[kind] = str(classes.get(kind, _UND))
-
-        if open_candidates is not None:
-            self.open_candidates = list(open_candidates)
-        if close_candidates is not None:
-            self.close_candidates = list(close_candidates)
-        if intro_candidates is not None:
-            self.intro_candidates = list(intro_candidates)
-        if outro_candidates is not None:
-            self.outro_candidates = list(outro_candidates)
-
-        self.open_class = open_class
-        self.close_class = close_class
-        self.intro_class = intro_class
-        self.outro_class = outro_class
 
     def candidates_for(self, kind: str) -> list[_Match]:
         return self.candidates.setdefault(kind, [])
 
+    @staticmethod
+    def _normalized_label(value: str | None) -> str | None:
+        if value in (_POS, _NEG):
+            return value
+        return None
+
     def class_for(self, kind: str) -> str:
-        return self.classes.get(kind, _UND)
-
-    def set_class(self, kind: str, value: str) -> None:
-        self.classes[kind] = value
-
-    def first_candidate_for(self, kind: str) -> _Match | None:
         candidates = self.candidates_for(kind)
-        return candidates[0] if candidates else None
+        if not candidates:
+            return _UND
+        labels = [self._normalized_label(match.label) for match in candidates]
+        if any(label == _POS for label in labels):
+            return _POS
+        if all(label == _NEG for label in labels):
+            return _NEG
+        return _UNC
 
-    def score_for(self, kind: str) -> float:
-        first = self.first_candidate_for(kind)
-        return first.score if first is not None else 0.0
-
-    def start_for(self, kind: str) -> float:
-        first = self.first_candidate_for(kind)
-        return first.start if first is not None else 0.0
-
-    def end_for(self, kind: str) -> float:
-        first = self.first_candidate_for(kind)
-        return first.end if first is not None else 0.0
+    def first_positive_candidate_for(self, kind: str) -> _Match | None:
+        for candidate in self.candidates_for(kind):
+            if self._normalized_label(candidate.label) == _POS:
+                return candidate
+        return None
 
     def source_hash_valid(self, path: Path) -> bool:
         """Return True if *path* matches the stored hash, False if stale or unverified."""
@@ -149,8 +103,6 @@ class EpisodeState:
         except OSError:
             return False
 
-    # Compatibility properties: keep old attribute-style accesses while
-    # storing data in dict-backed fields.
     @property
     def open_candidates(self) -> list[_Match]:
         return self.candidates_for("open")
@@ -182,75 +134,6 @@ class EpisodeState:
     @outro_candidates.setter
     def outro_candidates(self, value: list[_Match]) -> None:
         self.candidates["outro"] = value
-
-    @property
-    def open_class(self) -> str:
-        return self.class_for("open")
-
-    @open_class.setter
-    def open_class(self, value: str) -> None:
-        self.set_class("open", value)
-
-    @property
-    def close_class(self) -> str:
-        return self.class_for("close")
-
-    @close_class.setter
-    def close_class(self, value: str) -> None:
-        self.set_class("close", value)
-
-    @property
-    def intro_class(self) -> str:
-        return self.class_for("intro")
-
-    @intro_class.setter
-    def intro_class(self, value: str) -> None:
-        self.set_class("intro", value)
-
-    @property
-    def outro_class(self) -> str:
-        return self.class_for("outro")
-
-    @outro_class.setter
-    def outro_class(self, value: str) -> None:
-        self.set_class("outro", value)
-
-    # Read-only convenience properties so all existing callers of open_score etc. still work.
-    @property
-    def open_score(self) -> float:
-        return self.score_for("open")
-
-    @property
-    def open_start(self) -> float:
-        return self.start_for("open")
-
-    @property
-    def open_end(self) -> float:
-        return self.end_for("open")
-
-    @property
-    def close_score(self) -> float:
-        return self.score_for("close")
-
-    @property
-    def close_start(self) -> float:
-        return self.start_for("close")
-
-    @property
-    def close_end(self) -> float:
-        return self.end_for("close")
-
-    @property
-    def intro_score(self) -> float:
-        return self.score_for("intro")
-
-    @property
-    def intro_start(self) -> float:
-        return self.start_for("intro")
-
-    @property
-    def intro_end(self) -> float:
-        return self.end_for("intro")
 
     def is_detected(self) -> bool:
         return any(self.class_for(kind) != _UND for kind in _AUDIO_KINDS)
@@ -287,11 +170,21 @@ def _fmt_seg(s: Segment) -> str:
 
 
 def _fmt_match(m: _Match) -> str:
-    return f"{{score = {m.score:.6f}, start = {m.start:.3f}, end = {m.end:.3f}}}"
+    base = f"score = {m.score:.6f}, start = {m.start:.3f}, end = {m.end:.3f}"
+    if m.label in (_POS, _NEG):
+        return f"{{{base}, label = {json.dumps(m.label)}}}"
+    return f"{{{base}}}"
 
 
 def _load_match(raw: dict) -> _Match:
-    return _Match(score=float(raw["score"]), start=float(raw["start"]), end=float(raw["end"]))
+    label_raw = raw.get("label")
+    label = str(label_raw) if label_raw in (_POS, _NEG) else None
+    return _Match(
+        score=float(raw["score"]),
+        start=float(raw["start"]),
+        end=float(raw["end"]),
+        label=label,
+    )
 
 
 def _load_target(raw: dict) -> TargetState:
@@ -324,26 +217,9 @@ def _load_episode(raw: dict) -> EpisodeState:
         cut=bool(raw.get("cut", False)),
     )
     for kind in _AUDIO_KINDS:
-        ep.set_class(kind, str(raw.get(f"{kind}_class", _UND)))
-
         candidates_key = f"{kind}_candidates"
         if candidates_key in raw:
             ep.candidates[kind] = [_load_match(m) for m in raw[candidates_key]]
-
-    # Migrate old scalar format (open_score/open_start/open_end, close_*)
-    for kind in ("open", "close"):
-        score_key = f"{kind}_score"
-        if ep.candidates_for(kind):
-            continue
-        if float(raw.get(score_key, 0.0)) <= 0:
-            continue
-        ep.candidates[kind] = [
-            _Match(
-                score=float(raw[score_key]),
-                start=float(raw.get(f"{kind}_start", 0.0)),
-                end=float(raw.get(f"{kind}_end", 0.0)),
-            )
-        ]
     return ep
 
 
@@ -401,56 +277,6 @@ def _migrate_episode_keys(path: Path) -> None:
     _atomic_write_text(path, "".join(fixed_lines))
 
 
-def _migrate_old_episode(
-    ep_raw: dict,
-    source: str,
-    open_target: TargetState,
-    close_target: TargetState,
-) -> EpisodeState:
-    """Convert one old-format episode (match lists + approved/rejected) to new format."""
-    ep = EpisodeState(cut=bool(ep_raw.get("cut", False)))
-    for kind, matches_key, approved_key, rejected_key, target in [
-        ("open", "open_matches", "open_approved", "open_rejected", open_target),
-        ("close", "close_matches", "close_approved", "close_rejected", close_target),
-    ]:
-        raw_matches = ep_raw.get(matches_key, [])
-        approved = list(ep_raw.get(approved_key, []))
-        rejected = list(ep_raw.get(rejected_key, []))
-        approved_set = frozenset(approved)
-        best_raw = None
-        if approved:
-            best_raw = next((m for m in raw_matches if m["index"] in approved_set), None)
-        if best_raw is None and raw_matches:
-            best_raw = raw_matches[0]
-        if best_raw is None:
-            ep.set_class(kind, _UND)
-            continue
-        score = float(best_raw["score"])
-        start = float(best_raw["start"])
-        end = float(best_raw["end"])
-        ep.candidates[kind] = [_Match(score=score, start=start, end=end)]
-        if approved:
-            ep.set_class(kind, _POS)
-            target.positives.append(Segment(source=source, start=start, end=end, score=score))
-        elif rejected:
-            ep.set_class(kind, _NEG)
-            target.negatives.append(Segment(source=source, start=start, end=end, score=score))
-        else:
-            ep.set_class(kind, _UNC)
-    return ep
-
-
-def _migrate_old_state(data: dict) -> "PipelineState":
-    _LOG.info("Migrating state.toml to new format (one-time conversion)...")
-    state = PipelineState()
-    for stem, ep_raw in data.get("episodes", {}).items():
-        source = str(ep_raw.get("source", ""))
-        state.episodes[stem] = _migrate_old_episode(
-            ep_raw, source, state.open_target, state.close_target
-        )
-    return state
-
-
 @dataclass
 class PipelineState:
     open_target: TargetState = field(default_factory=TargetState)
@@ -468,20 +294,16 @@ class PipelineState:
         if not path.exists():
             return cls()
         if tomllib is None:
-            _LOG.warning("TOML unavailable. Starting with empty state.")
             return cls()
         _migrate_episode_keys(path)
         with path.open("rb") as f:
             data = tomllib.load(f)
-        episodes_raw = data.get("episodes", {})
-        if any("open_matches" in ep for ep in episodes_raw.values()):
-            return _migrate_old_state(data)
         state = cls(
             open_target=_load_target(data.get("targets", {}).get("open", {})),
             close_target=_load_target(data.get("targets", {}).get("close", {})),
             settings=_load_settings(data.get("settings", {})),
         )
-        for stem, ep_raw in episodes_raw.items():
+        for stem, ep_raw in data.get("episodes", {}).items():
             state.episodes[stem] = _load_episode(ep_raw)
         return state
 
@@ -544,14 +366,10 @@ class PipelineState:
                 lines.append(f"source_hash      = {json.dumps(ep.source_hash)}\n")
             for kind in _AUDIO_KINDS:
                 candidates = ep.candidates_for(kind)
-                cls = ep.class_for(kind)
                 if candidates:
                     key_pad = f"{kind}_candidates".ljust(16)
                     formatted = ", ".join(_fmt_match(m) for m in candidates)
                     lines.append(f"{key_pad} = [{formatted}]\n")
-                if cls != _UND:
-                    class_pad = f"{kind}_class".ljust(16)
-                    lines.append(f'{class_pad} = "{cls}"\n')
             if ep.cut:
                 lines.append("cut = true\n")
         _atomic_write_text(path, "".join(lines))

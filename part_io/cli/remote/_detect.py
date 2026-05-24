@@ -73,8 +73,6 @@ def _process_detection_results(
                 start=float(match.start_seconds),
                 end=float(match.end_seconds),
             ),
-            uncertain_label="uncertain",
-            undetected_label="undetected",
         )
         if error_msg:
             _emit(error_msg)

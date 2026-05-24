@@ -25,8 +25,6 @@ class EpisodeStateLike(Protocol):
 
     def class_for(self, kind: str) -> str: ...
 
-    def set_class(self, kind: str, value: str) -> None: ...
-
 
 @dataclass(frozen=True)
 class ReviewItem:
@@ -60,8 +58,29 @@ class UndoEntry:
     segment_start: float
     segment_end: float
     segment_score: float
+    candidate_idx: int
     target_list_was_positive: bool  # True if appended to positives, False if negatives
     prev_class: str  # previous classification before decision
+    prev_label: str | None  # previous candidate label before decision
+
+
+def _candidate_label(cand: dict[str, Any]) -> str | None:
+    label = cand.get("label")
+    if label in ("positive", "negative"):
+        return str(label)
+    return None
+
+
+def _episode_class_for_kind(ep: dict[str, Any], kind: str) -> Classification:
+    candidates = ep.get(f"{kind}_candidates", [])
+    if not candidates:
+        return "undetected"
+    labels = [_candidate_label(cand) for cand in candidates]
+    if any(label == "positive" for label in labels):
+        return "positive"
+    if all(label == "negative" for label in labels):
+        return "negative"
+    return "uncertain"
 
 
 def episode_to_review_dict(
@@ -74,21 +93,32 @@ def episode_to_review_dict(
     for kind in REVIEW_KINDS:
         if include_bounds:
             data[f"{kind}_candidates"] = [
-                {"score": float(match.score), "start": float(match.start), "end": float(match.end)}
+                {
+                    "score": float(match.score),
+                    "start": float(match.start),
+                    "end": float(match.end),
+                    "label": getattr(match, "label", None),
+                }
                 for match in episode.candidates_for(kind)
             ]
         else:
             data[f"{kind}_candidates"] = [
-                {"score": float(match.score)} for match in episode.candidates_for(kind)
+                {"score": float(match.score), "label": getattr(match, "label", None)}
+                for match in episode.candidates_for(kind)
             ]
         data[f"{kind}_class"] = episode.class_for(kind)
     return data
 
 
 def apply_review_dict_classes(episode: EpisodeStateLike, episode_dict: dict[str, Any]) -> None:
-    """Copy service-produced class values back into an episode state object."""
+    """Copy service-produced candidate labels back into an episode state object."""
     for kind in REVIEW_KINDS:
-        episode.set_class(kind, str(episode_dict.get(f"{kind}_class", episode.class_for(kind))))
+        candidates = episode.candidates_for(kind)
+        raw_candidates = episode_dict.get(f"{kind}_candidates", [])
+        for idx, candidate in enumerate(candidates):
+            if idx >= len(raw_candidates):
+                break
+            candidate.label = _candidate_label(raw_candidates[idx])
 
 
 def apply_review_decision(
@@ -119,14 +149,15 @@ def apply_review_decision(
         "end": float(cand.get("end", 0.0)),
         "score": float(cand.get("score", 0.0)),
     }
-    prev_class = str(episode.get(f"{kind}_class", "uncertain"))
+    prev_class = _episode_class_for_kind(episode, kind)
+    prev_label = _candidate_label(cand)
 
     if action == "a":
         if kind == "open":
             open_target_positives.append(segment)
         elif kind == "close":
             close_target_positives.append(segment)
-        episode[f"{kind}_class"] = "positive"
+        cand["label"] = "positive"
         decision_action: Literal["approved", "rejected"] = "approved"
         target_list_was_positive = True
     else:
@@ -134,8 +165,7 @@ def apply_review_decision(
             open_target_negatives.append(segment)
         elif kind == "close":
             close_target_negatives.append(segment)
-        elif kind in ("intro", "outro"):
-            episode[f"{kind}_class"] = "negative"
+        cand["label"] = "negative"
         decision_action = "rejected"
         target_list_was_positive = False
 
@@ -154,8 +184,10 @@ def apply_review_decision(
         segment_start=decision.segment_start,
         segment_end=decision.segment_end,
         segment_score=decision.segment_score,
+        candidate_idx=candidate_idx,
         target_list_was_positive=target_list_was_positive,
         prev_class=prev_class,
+        prev_label=prev_label,
     )
     return decision, undo
 
@@ -191,7 +223,9 @@ def undo_review_decision(
             close_target_positives if undo.target_list_was_positive else close_target_negatives
         )
 
-    episode[f"{undo.kind}_class"] = undo.prev_class
+    candidates = episode.get(f"{undo.kind}_candidates", [])
+    if 0 <= undo.candidate_idx < len(candidates):
+        candidates[undo.candidate_idx]["label"] = undo.prev_label
 
 
 @lru_cache(maxsize=1)
@@ -284,30 +318,32 @@ def collect_uncertain_candidates(
     items: list[ReviewItem] = []
     for stem, ep in episodes.items():
         # Open candidates
-        if ep.get("open_class") == "uncertain":
+        if _episode_class_for_kind(ep, "open") == "uncertain":
             for i, cand in enumerate(ep.get("open_candidates", [])):
                 score = float(cand.get("score", 0.0))
-                if tm_o < score < tp_o:
+                if _candidate_label(cand) is None and tm_o < score < tp_o:
                     items.append(ReviewItem(stem=stem, kind="open", candidate_idx=i, score=score))
 
         # Close candidates
-        if ep.get("close_class") == "uncertain":
+        if _episode_class_for_kind(ep, "close") == "uncertain":
             for i, cand in enumerate(ep.get("close_candidates", [])):
                 score = float(cand.get("score", 0.0))
-                if tm_c < score < tp_c:
+                if _candidate_label(cand) is None and tm_c < score < tp_c:
                     items.append(ReviewItem(stem=stem, kind="close", candidate_idx=i, score=score))
 
         # Intro candidates (no global target; all uncertain are reviewable)
-        if ep.get("intro_class") == "uncertain":
+        if _episode_class_for_kind(ep, "intro") == "uncertain":
             for i, cand in enumerate(ep.get("intro_candidates", [])):
                 score = float(cand.get("score", 0.0))
-                items.append(ReviewItem(stem=stem, kind="intro", candidate_idx=i, score=score))
+                if _candidate_label(cand) is None:
+                    items.append(ReviewItem(stem=stem, kind="intro", candidate_idx=i, score=score))
 
         # Outro candidates (no global target; all uncertain are reviewable)
-        if ep.get("outro_class") == "uncertain":
+        if _episode_class_for_kind(ep, "outro") == "uncertain":
             for i, cand in enumerate(ep.get("outro_candidates", [])):
                 score = float(cand.get("score", 0.0))
-                items.append(ReviewItem(stem=stem, kind="outro", candidate_idx=i, score=score))
+                if _candidate_label(cand) is None:
+                    items.append(ReviewItem(stem=stem, kind="outro", candidate_idx=i, score=score))
 
     items.sort(key=lambda x: (x.candidate_idx, -x.score))
     return items
@@ -329,12 +365,15 @@ def next_uncertain_episode_kind(
         for kind in ("open", "close", "intro", "outro"):
             if exclude is not None and (kind, stem) in exclude:
                 continue
-            if ep.get(f"{kind}_class") != "uncertain":
-                continue
             kind_candidates = ep.get(f"{kind}_candidates", [])
             if not kind_candidates:
                 continue
-            score = float(kind_candidates[0].get("score", 0.0))
+            if _episode_class_for_kind(ep, kind) != "uncertain":
+                continue
+            pending = [cand for cand in kind_candidates if _candidate_label(cand) is None]
+            if not pending:
+                continue
+            score = float(pending[0].get("score", 0.0))
             if score <= 0:
                 continue
             candidates.append((score, stem, kind))
@@ -369,11 +408,19 @@ def reclassify_all_episodes(
 
     for ep in episodes.values():
         # Open
-        if ep.get("open_class") == "uncertain" and ep.get("open_candidates"):
-            score = float(ep["open_candidates"][0]["score"])
-            ep["open_class"] = classify_score_with_thresholds(score, tp_o, tm_o)
+        for cand in ep.get("open_candidates", []):
+            if _candidate_label(cand) is not None:
+                continue
+            score = float(cand.get("score", 0.0))
+            classified = classify_score_with_thresholds(score, tp_o, tm_o)
+            if classified in ("positive", "negative"):
+                cand["label"] = classified
 
         # Close
-        if ep.get("close_class") == "uncertain" and ep.get("close_candidates"):
-            score = float(ep["close_candidates"][0]["score"])
-            ep["close_class"] = classify_score_with_thresholds(score, tp_c, tm_c)
+        for cand in ep.get("close_candidates", []):
+            if _candidate_label(cand) is not None:
+                continue
+            score = float(cand.get("score", 0.0))
+            classified = classify_score_with_thresholds(score, tp_c, tm_c)
+            if classified in ("positive", "negative"):
+                cand["label"] = classified

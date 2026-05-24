@@ -25,13 +25,9 @@ class EpisodeStateLike(Protocol):
     """Structural episode state shape needed for detection mutations."""
 
     open_candidates: list[Any]
-    open_class: str
     close_candidates: list[Any]
-    close_class: str
     intro_candidates: list[Any]
-    intro_class: str
     outro_candidates: list[Any]
-    outro_class: str
 
 
 DetectionKind = Literal["open", "close", "intro", "outro"]
@@ -278,24 +274,18 @@ def apply_batch_result_to_episode(
     episode_state: EpisodeStateLike,
     *,
     match_factory: Callable[[MatchLike], Any],
-    uncertain_label: str,
-    undetected_label: str,
 ) -> tuple[str, str | None]:
     """Apply one detection result to episode state and return (score_str, error_msg)."""
     matches = [match_factory(match) for match in result.matches]
 
     if result.kind == "open":
         episode_state.open_candidates = matches
-        episode_state.open_class = uncertain_label if matches else undetected_label
     elif result.kind == "close":
         episode_state.close_candidates = matches
-        episode_state.close_class = uncertain_label if matches else undetected_label
     elif result.kind == "intro":
         episode_state.intro_candidates = matches
-        episode_state.intro_class = uncertain_label if matches else undetected_label
     else:  # outro
         episode_state.outro_candidates = matches
-        episode_state.outro_class = uncertain_label if matches else undetected_label
 
     score_str = f"{result.matches[0].score:.4f}" if result.matches else "none"
     error_msg = None

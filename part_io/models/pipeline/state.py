@@ -11,8 +11,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Classification = Literal["positive", "negative", "uncertain", "undetected"]
-
 
 class SegmentModel(BaseModel):
     """A confirmed positive or negative snippet hit stored in the target list."""
@@ -33,6 +31,7 @@ class MatchModel(BaseModel):
     score: float
     start: float
     end: float
+    label: Literal["positive", "negative"] | None = None
 
 
 class TargetStateModel(BaseModel):
@@ -80,29 +79,15 @@ class RunSettingsModel(BaseModel):
 
 
 class EpisodeStateModel(BaseModel):
-    """Detection state for one episode.
-
-    Supports both layouts:
-    - legacy per-kind keys written by the current runtime
-      (``open_candidates``, ``open_class``, etc.)
-    - dict-backed shape used by the refactored in-memory model
-      (``candidates`` and ``classes``)
-    """
+    """Detection state for one episode."""
 
     model_config = ConfigDict(extra="forbid")
 
-    source: str = ""
     source_hash: str | None = None  # SHA-256 of first 64 KB; None = unverified
     open_candidates: list[MatchModel] = Field(default_factory=list)
     close_candidates: list[MatchModel] = Field(default_factory=list)
     intro_candidates: list[MatchModel] = Field(default_factory=list)
     outro_candidates: list[MatchModel] = Field(default_factory=list)
-    open_class: Classification = "undetected"
-    close_class: Classification = "undetected"
-    intro_class: Classification = "undetected"
-    outro_class: Classification = "undetected"
-    candidates: dict[str, list[MatchModel]] = Field(default_factory=dict)
-    classes: dict[str, Classification] = Field(default_factory=dict)
     cut: bool = False
 
 

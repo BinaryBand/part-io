@@ -15,10 +15,9 @@ from part_io.cli.remote._state import PipelineState, Segment, _Match
 def test_count_uncertain_counts_all_audio_kinds() -> None:
     state = PipelineState()
     ep = state.episode("ep001")
-    ep.set_class("open", "uncertain")
-    ep.set_class("close", "uncertain")
-    ep.set_class("intro", "positive")
-    ep.set_class("outro", "undetected")
+    ep.open_candidates = [_Match(score=0.8, start=1.0, end=2.0)]
+    ep.close_candidates = [_Match(score=0.7, start=3.0, end=4.0)]
+    ep.intro_candidates = [_Match(score=0.9, start=5.0, end=6.0, label="positive")]
 
     assert _count_uncertain(state) == 2
 
@@ -28,14 +27,12 @@ def test_collect_uncertain_candidates_returns_sorted_candidates() -> None:
 
     ep1 = state.episode("ep1")
     ep1.open_candidates = [_Match(score=0.81, start=1.0, end=2.0)]
-    ep1.open_class = "uncertain"
 
     ep2 = state.episode("ep2")
     ep2.open_candidates = [
         _Match(score=0.95, start=1.0, end=2.0),
         _Match(score=0.88, start=3.0, end=4.0),
     ]
-    ep2.open_class = "uncertain"
 
     items = _collect_uncertain_candidates(state)
 
@@ -58,18 +55,16 @@ def test_reclassify_all_promotes_uncertain_when_score_clears_threshold() -> None
 
     ep = state.episode("ep")
     ep.open_candidates = [_Match(score=0.98, start=2.0, end=3.0)]
-    ep.open_class = "uncertain"
 
     _reclassify_all(state)
 
-    assert state.episode("ep").open_class == "positive"
+    assert state.episode("ep").class_for("open") == "positive"
 
 
 def test_run_quiz_approve_counts_and_saves(tmp_path: Path, monkeypatch) -> None:
     state = PipelineState()
     ep = state.episode("ep001")
     ep.open_candidates = [_Match(score=0.9, start=5.0, end=6.0)]
-    ep.open_class = "uncertain"
 
     items = [ReviewItem(stem="ep001", kind="open", candidate_idx=0, score=0.9)]
 
@@ -110,7 +105,6 @@ def test_run_quiz_keyboard_interrupt_returns_interrupted(tmp_path: Path, monkeyp
     state = PipelineState()
     ep = state.episode("ep001")
     ep.open_candidates = [_Match(score=0.9, start=5.0, end=6.0)]
-    ep.open_class = "uncertain"
 
     items = [ReviewItem(stem="ep001", kind="open", candidate_idx=0, score=0.9)]
 
@@ -143,7 +137,6 @@ def test_run_quiz_rejected_uncertain_candidate_marked_skipped(tmp_path: Path, mo
     state = PipelineState()
     ep = state.episode("ep001")
     ep.open_candidates = [_Match(score=0.9, start=5.0, end=6.0)]
-    ep.open_class = "uncertain"
 
     item = ReviewItem(stem="ep001", kind="open", candidate_idx=0, score=0.9)
 

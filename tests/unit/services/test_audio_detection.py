@@ -13,13 +13,9 @@ from part_io.services import audio_detection
 class _FakeEpisodeState:
     source: str = ""
     open_candidates: list[tuple[float, float, float]] = field(default_factory=list)
-    open_class: str = "undetected"
     close_candidates: list[tuple[float, float, float]] = field(default_factory=list)
-    close_class: str = "undetected"
     intro_candidates: list[tuple[float, float, float]] = field(default_factory=list)
-    intro_class: str = "undetected"
     outro_candidates: list[tuple[float, float, float]] = field(default_factory=list)
-    outro_class: str = "undetected"
 
 
 def test_detect_top_matches_sorts_and_limits(monkeypatch, tmp_path: Path) -> None:
@@ -213,13 +209,10 @@ def test_apply_batch_result_to_episode_sets_open_fields(tmp_path: Path) -> None:
         result,
         episode,
         match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
-        uncertain_label="uncertain",
-        undetected_label="undetected",
     )
 
     assert error_msg is None
     assert score_str == "0.9000"
-    assert episode.open_class == "uncertain"
     assert episode.open_candidates == [(0.9, 1.0, 2.0)]
 
 
@@ -242,13 +235,10 @@ def test_apply_batch_result_to_episode_handles_close_no_matches_with_error(tmp_p
         result,
         episode,
         match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
-        uncertain_label="uncertain",
-        undetected_label="undetected",
     )
 
     assert score_str == "none"
     assert "WARNING: detection failed" in (error_msg or "")
-    assert episode.close_class == "undetected"
     assert episode.close_candidates == []
 
 
@@ -270,12 +260,9 @@ def test_apply_batch_result_to_episode_sets_intro_fields(tmp_path: Path) -> None
         result,
         episode,
         match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
-        uncertain_label="uncertain",
-        undetected_label="undetected",
     )
 
     assert score_str == "1.1000"
-    assert episode.intro_class == "uncertain"
     assert episode.intro_candidates == [(1.1, 4.0, 5.0)]
 
 
@@ -297,12 +284,9 @@ def test_apply_batch_result_to_episode_sets_outro_fields(tmp_path: Path) -> None
         result,
         episode,
         match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
-        uncertain_label="uncertain",
-        undetected_label="undetected",
     )
 
     assert score_str == "1.2000"
-    assert episode.outro_class == "uncertain"
     assert episode.outro_candidates == [(1.2, 94.0, 95.0)]
 
 

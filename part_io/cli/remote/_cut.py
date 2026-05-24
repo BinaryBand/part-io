@@ -48,10 +48,16 @@ def _to_audio_matches(candidates: list[Any]) -> list[AudioMatch]:
 
 def _find_best_pair(ep_state: EpisodeState, *, min_gap: float, max_gap: float) -> list[Any] | None:
     """Pass all open/close candidates to pair_ad_segments; return all valid pairs or None."""
-    if not ep_state.candidates_for("open") or not ep_state.candidates_for("close"):
+    open_candidates = [
+        candidate for candidate in ep_state.candidates_for("open") if candidate.label == _POS
+    ]
+    close_candidates = [
+        candidate for candidate in ep_state.candidates_for("close") if candidate.label == _POS
+    ]
+    if not open_candidates or not close_candidates:
         return None
-    opens = _to_audio_matches(ep_state.candidates_for("open"))
-    closes = _to_audio_matches(ep_state.candidates_for("close"))
+    opens = _to_audio_matches(open_candidates)
+    closes = _to_audio_matches(close_candidates)
     try:
         segs, _, _ = pair_ad_segments(opens, closes, min_gap=min_gap, max_gap=max_gap)
     except (ValueError, KeyError):
@@ -170,11 +176,9 @@ def _pair_and_cut(
     else:
         cuts = [(seg.open_end, seg.close_start) for seg in segments]
     intro_trim = None
-    intro_candidates = ep_state.candidates_for("intro")
-    if ep_state.class_for("intro") == _POS and intro_candidates:
-        intro_trim = (
-            intro_candidates[0].start if settings.intro_exclusive else intro_candidates[0].end
-        )
+    intro_candidate = ep_state.first_positive_candidate_for("intro")
+    if intro_candidate is not None:
+        intro_trim = intro_candidate.start if settings.intro_exclusive else intro_candidate.end
     plan = build_cut_plan(cuts, intro_trim=intro_trim)
 
     if settings.debug:

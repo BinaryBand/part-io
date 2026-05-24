@@ -249,8 +249,10 @@ def _review_candidate(
                     segment_start=undo.segment_start,
                     segment_end=undo.segment_end,
                     segment_score=undo.segment_score,
+                    candidate_idx=undo.candidate_idx,
                     target_list_was_positive=undo.target_list_was_positive,
                     prev_class=undo.prev_class,
+                    prev_label=undo.prev_label,
                 )
             )
             _reclassify_all(state)

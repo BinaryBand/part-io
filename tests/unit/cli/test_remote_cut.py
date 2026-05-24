@@ -3,12 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from part_io.cli.remote._cut import CutSettings, _cut_cuttable
-from part_io.cli.remote._state import EpisodeState, PipelineState
+from part_io.cli.remote._state import EpisodeState, PipelineState, _Match
 
 
 def test_cut_cuttable_skips_when_source_missing(tmp_path: Path) -> None:
     state = PipelineState()
-    state.episodes["ep001"] = EpisodeState(open_class="positive", close_class="positive")
+    state.episodes["ep001"] = EpisodeState(
+        candidates={
+            "open": [_Match(score=0.9, start=10.0, end=20.0, label="positive")],
+            "close": [_Match(score=0.9, start=40.0, end=50.0, label="positive")],
+            "intro": [],
+            "outro": [],
+        }
+    )
 
     n_cut, n_skipped, n_failed = _cut_cuttable(
         state,
@@ -27,7 +34,14 @@ def test_cut_cuttable_marks_episode_cut_and_saves(tmp_path: Path, monkeypatch) -
     (remote_dir / "ep002.mp3").write_bytes(b"x")
 
     state = PipelineState()
-    state.episodes["ep002"] = EpisodeState(open_class="positive", close_class="positive")
+    state.episodes["ep002"] = EpisodeState(
+        candidates={
+            "open": [_Match(score=0.9, start=10.0, end=20.0, label="positive")],
+            "close": [_Match(score=0.9, start=40.0, end=50.0, label="positive")],
+            "intro": [],
+            "outro": [],
+        }
+    )
 
     save_calls: dict[str, int] = {"count": 0}
 
