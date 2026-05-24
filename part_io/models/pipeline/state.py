@@ -17,7 +17,7 @@ class SegmentModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source: str
+    stem: str
     start: float
     end: float
     score: float
@@ -108,6 +108,7 @@ class PipelineStateModel(BaseModel):
     targets: TargetsByKindModel = Field(default_factory=TargetsByKindModel)
     settings: RunSettingsModel = Field(default_factory=RunSettingsModel)
     episodes: dict[str, EpisodeStateModel] = Field(default_factory=dict)
+    profiles: dict[str, str] = Field(default_factory=dict)
 
 
 class GenericStateModel(BaseModel):

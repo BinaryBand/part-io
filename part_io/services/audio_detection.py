@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Protocol, cast
+from typing import Callable, Literal, Protocol, cast
 
 
 class MatchLike(Protocol):
@@ -21,13 +21,22 @@ class MatchLike(Protocol):
     score: float
 
 
+class CandidateLike(Protocol):
+    """Structural candidate type stored on episode state."""
+
+    score: float
+    start: float
+    end: float
+    label: str | None
+
+
 class EpisodeStateLike(Protocol):
     """Structural episode state shape needed for detection mutations."""
 
-    open_candidates: list[Any]
-    close_candidates: list[Any]
-    intro_candidates: list[Any]
-    outro_candidates: list[Any]
+    open_candidates: list[CandidateLike]
+    close_candidates: list[CandidateLike]
+    intro_candidates: list[CandidateLike]
+    outro_candidates: list[CandidateLike]
 
 
 DetectionKind = Literal["open", "close", "intro", "outro"]
@@ -239,7 +248,7 @@ def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[Detection
     jobs: list[DetectionBatchJob] = []
     for kind, sample_path in request.snippets.items():
         if sample_path is not None and not sample_path.exists():
-            continue
+            raise FileNotFoundError(f"Snippet file for kind '{kind}' not found: {sample_path}")
         jobs.extend(
             DetectionBatchJob(
                 stem=episode.stem,
@@ -274,21 +283,13 @@ def run_detection_batch(
 
 def apply_batch_result_to_episode(
     result: DetectionBatchResult,
-    episode_state: EpisodeStateLike,
+    episode_state: object,
     *,
-    match_factory: Callable[[MatchLike], Any],
+    match_factory: Callable[[MatchLike], CandidateLike],
 ) -> tuple[str, str | None]:
     """Apply one detection result to episode state and return (score_str, error_msg)."""
     matches = [match_factory(match) for match in result.matches]
-
-    if result.kind == "open":
-        episode_state.open_candidates = matches
-    elif result.kind == "close":
-        episode_state.close_candidates = matches
-    elif result.kind == "intro":
-        episode_state.intro_candidates = matches
-    else:  # outro
-        episode_state.outro_candidates = matches
+    setattr(episode_state, f"{result.kind}_candidates", matches)
 
     score_str = f"{result.matches[0].score:.4f}" if result.matches else "none"
     error_msg = None

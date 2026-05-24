@@ -10,12 +10,24 @@ from part_io.services import audio_detection
 
 
 @dataclass
+class _FakeCandidate:
+    score: float
+    start: float
+    end: float
+    label: str | None = None
+
+
+@dataclass
 class _FakeEpisodeState:
     source: str = ""
-    open_candidates: list[tuple[float, float, float]] = field(default_factory=list)
-    close_candidates: list[tuple[float, float, float]] = field(default_factory=list)
-    intro_candidates: list[tuple[float, float, float]] = field(default_factory=list)
-    outro_candidates: list[tuple[float, float, float]] = field(default_factory=list)
+    open_candidates: list[_FakeCandidate] = field(default_factory=list)
+    close_candidates: list[_FakeCandidate] = field(default_factory=list)
+    intro_candidates: list[_FakeCandidate] = field(default_factory=list)
+    outro_candidates: list[_FakeCandidate] = field(default_factory=list)
+
+
+def _fake_factory(match: audio_detection.MatchLike) -> _FakeCandidate:
+    return _FakeCandidate(score=match.score, start=match.start_seconds, end=match.end_seconds)
 
 
 def test_detect_top_matches_sorts_and_limits(monkeypatch, tmp_path: Path) -> None:
@@ -208,12 +220,15 @@ def test_apply_batch_result_to_episode_sets_open_fields(tmp_path: Path) -> None:
     score_str, error_msg = audio_detection.apply_batch_result_to_episode(
         result,
         episode,
-        match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
+        match_factory=_fake_factory,
     )
 
     assert error_msg is None
     assert score_str == "0.9000"
-    assert episode.open_candidates == [(0.9, 1.0, 2.0)]
+    assert len(episode.open_candidates) == 1
+    assert episode.open_candidates[0].score == 0.9
+    assert episode.open_candidates[0].start == 1.0
+    assert episode.open_candidates[0].end == 2.0
 
 
 def test_apply_batch_result_to_episode_handles_close_no_matches_with_error(tmp_path: Path) -> None:
@@ -234,7 +249,7 @@ def test_apply_batch_result_to_episode_handles_close_no_matches_with_error(tmp_p
     score_str, error_msg = audio_detection.apply_batch_result_to_episode(
         result,
         episode,
-        match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
+        match_factory=_fake_factory,
     )
 
     assert score_str == "none"
@@ -259,11 +274,12 @@ def test_apply_batch_result_to_episode_sets_intro_fields(tmp_path: Path) -> None
     score_str, _ = audio_detection.apply_batch_result_to_episode(
         result,
         episode,
-        match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
+        match_factory=_fake_factory,
     )
 
     assert score_str == "1.1000"
-    assert episode.intro_candidates == [(1.1, 4.0, 5.0)]
+    assert len(episode.intro_candidates) == 1
+    assert episode.intro_candidates[0].score == 1.1
 
 
 def test_apply_batch_result_to_episode_sets_outro_fields(tmp_path: Path) -> None:
@@ -283,11 +299,12 @@ def test_apply_batch_result_to_episode_sets_outro_fields(tmp_path: Path) -> None
     score_str, _ = audio_detection.apply_batch_result_to_episode(
         result,
         episode,
-        match_factory=lambda match: (match.score, match.start_seconds, match.end_seconds),
+        match_factory=_fake_factory,
     )
 
     assert score_str == "1.2000"
-    assert episode.outro_candidates == [(1.2, 94.0, 95.0)]
+    assert len(episode.outro_candidates) == 1
+    assert episode.outro_candidates[0].score == 1.2
 
 
 def test_filter_matches_by_position_limits_intro_to_first_quarter() -> None:

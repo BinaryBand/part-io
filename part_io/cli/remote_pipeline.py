@@ -16,10 +16,12 @@ import argparse
 import logging
 import os
 import sys
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TypedDict, TypeVar
 
+import numpy as np
 import tomli_w
 
 from part_io.adapters.audio.matcher import warm_source_profile
@@ -37,10 +39,7 @@ from part_io.cli.remote._review import (
     _run_quiz,
     _run_review_loop,
 )
-from part_io.cli.remote._state import (
-    PipelineState,
-    tomllib,
-)
+from part_io.cli.remote._state import PipelineState
 from part_io.models.pipeline.config import PipelineConfigModel
 from part_io.utils.config import get_profile_cache_dir
 
@@ -59,40 +58,56 @@ _LOG = logging.getLogger(__name__)
 _AUDIO_EXTENSIONS = frozenset({".mp3", ".opus"})
 
 
+class _SnippetEntry(TypedDict):
+    name: str
+    profile: dict[str, object]
+
+
+class _PairCutRule(TypedDict):
+    type: str
+    open_snippet: str
+    close_snippet: str
+    inclusive: bool
+    min_gap: float
+    max_gap: float
+
+
+class _TrimCutRule(TypedDict):
+    type: str
+    snippet: str
+    exclusive: bool
+
+
 @dataclass(frozen=True)
 class LoadedSnippets:
-    profiles: dict[str, Any]
+    profiles: dict[str, np.ndarray]
 
 
 def _prepare_runtime_snippets(
     *,
     loaded: LoadedSnippets,
     config_path: Path,
-) -> tuple[dict[str, Path], dict[str, Path | None], dict[str, Any]]:
+) -> tuple[dict[str, Path], dict[str, Path | None]]:
     """Resolve config snippets for review and detection runtime.
 
     Returns:
     - ``review_snippets``: only existing files (safe for A/B compare playback)
     - ``detect_snippets``: path when file exists else ``None`` (profile-only mode)
-    - ``snippet_profiles``: inline spectral profiles keyed by snippet name
     """
-    snippet_profiles = loaded.profiles
     for key in ("open", "close"):
-        if key not in snippet_profiles:
+        if key not in loaded.profiles:
             sys.exit(f"Missing required snippet '{key}' embedded profile in {config_path}")
     # Profile-only mode: detection runs against embedded references.
     # Review compare playback is optional and disabled by default.
     review_snippets: dict[str, Path] = {}
-    detect_snippets = {name: None for name in snippet_profiles}
-    return review_snippets, detect_snippets, snippet_profiles
+    detect_snippets: dict[str, Path | None] = {name: None for name in loaded.profiles}
+    return review_snippets, detect_snippets
 
 
 def _load_snippets(config_path: Path) -> LoadedSnippets:
     """Load snippet definitions from a ``__config__.toml`` file."""
     if not config_path.exists():
         sys.exit(f"Config not found: {config_path}\nCreate it with [[snippet]] entries.")
-    if tomllib is None:
-        sys.exit("TOML library unavailable — cannot load config.")
     with config_path.open("rb") as f:
         raw = tomllib.load(f)
     try:
@@ -100,7 +115,7 @@ def _load_snippets(config_path: Path) -> LoadedSnippets:
     except Exception as exc:  # noqa: BLE001
         sys.exit(f"Invalid config {config_path}: {exc}")
 
-    profile_map: dict[str, Any] = {}
+    profile_map: dict[str, np.ndarray] = {}
     for snippet in config.snippets:
         profile_map[snippet.name] = decode_matrix(
             snippet.profile.data,
@@ -153,43 +168,26 @@ def _cmd_config_init(args: argparse.Namespace) -> None:
         if not seed_path.exists() or not seed_path.is_file():
             sys.exit(f"Seed file for '{name}' not found: {seed_path}")
 
-    snippets: list[dict[str, Any]] = []
+    snippets: list[_SnippetEntry] = []
     for name, seed_path in seed_map.items():
         _emit(f"  [snapshot] {name}: {seed_path}")
         profile = snapshot_snippet_profile(seed_path)
-        snippets.append(
-            {
-                "name": name,
-                "profile": profile.model_dump(),
-            }
-        )
+        snippets.append(_SnippetEntry(name=name, profile=profile.model_dump()))
 
-    cut_rules: list[dict[str, Any]] = [
-        {
-            "type": "pair",
-            "open_snippet": "open",
-            "close_snippet": "close",
-            "inclusive": True,
-            "min_gap": -15.0,
-            "max_gap": 300.0,
-        }
+    cut_rules: list[_PairCutRule | _TrimCutRule] = [
+        _PairCutRule(
+            type="pair",
+            open_snippet="open",
+            close_snippet="close",
+            inclusive=True,
+            min_gap=-15.0,
+            max_gap=300.0,
+        )
     ]
     if "intro" in seed_map:
-        cut_rules.append(
-            {
-                "type": "trim_before",
-                "snippet": "intro",
-                "exclusive": True,
-            }
-        )
+        cut_rules.append(_TrimCutRule(type="trim_before", snippet="intro", exclusive=True))
     if "outro" in seed_map:
-        cut_rules.append(
-            {
-                "type": "trim_after",
-                "snippet": "outro",
-                "exclusive": True,
-            }
-        )
+        cut_rules.append(_TrimCutRule(type="trim_after", snippet="outro", exclusive=True))
 
     payload = {
         "snippets": snippets,
@@ -225,7 +223,10 @@ def _emit(message: str) -> None:
     sys.stderr.flush()
 
 
-def _resolve_opt(cli_value: Any, state_value: Any) -> Any:
+_T = TypeVar("_T")
+
+
+def _resolve_opt(cli_value: _T | None, state_value: _T) -> _T:
     return state_value if cli_value is None else cli_value
 
 
@@ -557,11 +558,11 @@ def _cmd_review(args: argparse.Namespace) -> None:
     state.save(state_path)
 
     config_path: Path = args.config or (remote_dir / "__config__.toml")
-    review_snippets, detect_snippets, snippet_profiles = _prepare_runtime_snippets(
-        loaded=_load_snippets(config_path),
-        config_path=config_path,
+    loaded = _load_snippets(config_path)
+    review_snippets, detect_snippets = _prepare_runtime_snippets(
+        loaded=loaded, config_path=config_path
     )
-    for kind, profile in snippet_profiles.items():
+    for kind, profile in loaded.profiles.items():
         if kind not in state.profiles:
             state.profiles[kind] = profile
     if not remote_dir.exists():
@@ -667,11 +668,11 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     output_dir: Path = args.output_dir
 
     config_path: Path = args.config or (remote_dir / "__config__.toml")
-    review_snippets, detect_snippets, snippet_profiles = _prepare_runtime_snippets(
-        loaded=_load_snippets(config_path),
-        config_path=config_path,
+    loaded = _load_snippets(config_path)
+    review_snippets, detect_snippets = _prepare_runtime_snippets(
+        loaded=loaded, config_path=config_path
     )
-    for kind, profile in snippet_profiles.items():
+    for kind, profile in loaded.profiles.items():
         if kind not in state.profiles:
             state.profiles[kind] = profile
     if not remote_dir.exists():

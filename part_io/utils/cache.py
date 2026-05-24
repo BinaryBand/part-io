@@ -1,20 +1,16 @@
-"""Utility helpers for on-disk numpy-backed caches.
-
-Placed in `utils` so it complies with the project's adapters shape rules.
-"""
+"""Utility helpers for on-disk numpy-backed caches."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
 from part_io.utils.hash import partial_file_hash
 
 
-def load_npz_profile(source_path: Path, cache_dir: Path) -> Any | None:
+def load_npz_profile(source_path: Path, cache_dir: Path) -> np.ndarray | None:
     """Load a numpy `.npz` profile for *source_path* from *cache_dir*.
 
     The cache key is a hash of the first 64 KB of *source_path*, so entries
@@ -31,11 +27,11 @@ def load_npz_profile(source_path: Path, cache_dir: Path) -> Any | None:
     return None
 
 
-def save_npz_profile(source_path: Path, profile: Any, cache_dir: Path) -> None:
+def save_npz_profile(source_path: Path, profile: np.ndarray, cache_dir: Path) -> None:
     """Persist *profile* to *cache_dir* keyed by a hash of *source_path*.
 
-    Failures are debug-logged and otherwise ignored to keep detection fast-fail
-    tolerant in environments like network mounts.
+    Failures are debug-logged and otherwise ignored to keep the cache from
+    blocking detection on network mounts or read-only filesystems.
     """
     cache_path = cache_dir / f"{partial_file_hash(source_path)}.npz"
     try:

@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import tempfile
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -14,21 +15,6 @@ from typing import Any
 import numpy as np
 
 from part_io.utils.hash import partial_file_hash
-
-_tomllib_runtime: Any = None
-try:  # pragma: no cover - runtime optional deps
-    import tomllib as _tomllib_std
-except ModuleNotFoundError:
-    try:
-        import tomli as _tomli_pkg
-    except ModuleNotFoundError:
-        _tomllib_runtime = None
-    else:
-        _tomllib_runtime = _tomli_pkg
-else:
-    _tomllib_runtime = _tomllib_std
-
-tomllib: Any = _tomllib_runtime
 
 # Classification labels
 _POS = "positive"
@@ -315,8 +301,6 @@ class PipelineState:
     @classmethod
     def load(cls, path: Path) -> "PipelineState":
         if not path.exists():
-            return cls()
-        if tomllib is None:
             return cls()
         _migrate_episode_keys(path)
         with path.open("rb") as f:

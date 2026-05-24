@@ -1,9 +1,6 @@
 # PartIO
 
-PartIO is a command-line toolkit for detecting and safely removing short ad jingles
-and other markers in podcast audio. It combines spectral-template detection, a
-small conservative classifier, and an interactive review workflow so you can
-verify candidates before performing destructive cuts.
+PartIO is a command-line toolkit for detecting and safely removing short ad jingles and other markers in podcast audio. It combines spectral-template detection, a small conservative classifier, and an interactive review workflow so you can verify candidates before performing destructive cuts.
 
 ## Features
 
@@ -59,10 +56,8 @@ poetry run part-io-tasks remote-precache-stop <REMOTE_DIR>
 
 Notes:
 
-- A `__state__.toml` file is created under the target directory to persist
- detection and review state across runs. Deleting it resets state.
-- Never set `--output-dir` to the same directory as the input; ffmpeg cannot
- atomically read-and-write the same file.
+- A `__state__.toml` file is created under the target directory to persist detection and review state across runs. Deleting it resets state.
+- Never set `--output-dir` to the same directory as the input; ffmpeg cannot atomically read-and-write the same file.
 
 ## Development
 
@@ -89,8 +84,7 @@ poetry run python -m part_io.cli.remote_pipeline review <REMOTE_DIR> \
 
 ## Contributing
 
-Contributions are welcome. Open an issue or PR with a clear description and
-tests for behaviour changes.
+Contributions are welcome. Open an issue or PR with a clear description and tests for behaviour changes.
 
 ## License
 

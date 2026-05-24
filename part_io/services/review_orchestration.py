@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -16,12 +17,14 @@ from typing import Any, Literal, Protocol
 
 from scipy.stats import t as _t_dist
 
+from part_io.services.audio_detection import KINDS, CandidateLike
+
 Classification = Literal["positive", "negative", "uncertain", "undetected"]
 REVIEW_KINDS = ("open", "close", "intro", "outro")
 
 
 class EpisodeStateLike(Protocol):
-    def candidates_for(self, kind: str) -> list[Any]: ...
+    def candidates_for(self, kind: str) -> Sequence[CandidateLike]: ...
 
     def class_for(self, kind: str) -> str: ...
 
@@ -123,7 +126,7 @@ def apply_review_dict_classes(episode: EpisodeStateLike, episode_dict: dict[str,
 
 def apply_review_decision(
     *,
-    episode: dict,
+    episode: dict[str, Any],
     kind: str,
     candidate_idx: int,
     action: Literal["a", "r"],
@@ -194,7 +197,7 @@ def apply_review_decision(
 
 def undo_review_decision(
     *,
-    episode: dict,
+    episode: dict[str, Any],
     undo: UndoEntry,
     open_target_positives: list[dict],
     open_target_negatives: list[dict],
@@ -294,7 +297,7 @@ def classify_score_with_thresholds(
 
 
 def collect_uncertain_candidates(
-    episodes: dict[str, dict],
+    episodes: dict[str, dict[str, Any]],
     open_target_positives: list[dict],
     open_target_negatives: list[dict],
     close_target_positives: list[dict],
@@ -306,51 +309,36 @@ def collect_uncertain_candidates(
     Sorted by (candidate_idx, -score): all top candidates across every uncertain
     (stem, kind) pair come first, then all second candidates, etc.
     """
-    tp_o, tm_o = compute_classification_thresholds(
-        [float(s["score"]) for s in open_target_positives],
-        [float(s["score"]) for s in open_target_negatives],
-    )
-    tp_c, tm_c = compute_classification_thresholds(
-        [float(s["score"]) for s in close_target_positives],
-        [float(s["score"]) for s in close_target_negatives],
-    )
+    target_positives = {"open": open_target_positives, "close": close_target_positives}
+    target_negatives = {"open": open_target_negatives, "close": close_target_negatives}
+
+    # Kinds with a global target use MOE thresholds; others pass all unlabeled candidates.
+    thresholds: dict[str, tuple[float, float]] = {}
+    for kind, cfg in KINDS.items():
+        if cfg.has_global_target:
+            pos = [float(s["score"]) for s in target_positives[kind]]
+            neg = [float(s["score"]) for s in target_negatives[kind]]
+            thresholds[kind] = compute_classification_thresholds(pos, neg)
+        else:
+            thresholds[kind] = (float("inf"), float("-inf"))
 
     items: list[ReviewItem] = []
     for stem, ep in episodes.items():
-        # Open candidates
-        if _episode_class_for_kind(ep, "open") == "uncertain":
-            for i, cand in enumerate(ep.get("open_candidates", [])):
+        for kind in KINDS:
+            if _episode_class_for_kind(ep, kind) != "uncertain":
+                continue
+            tp, tm = thresholds[kind]
+            for i, cand in enumerate(ep.get(f"{kind}_candidates", [])):
                 score = float(cand.get("score", 0.0))
-                if _candidate_label(cand) is None and tm_o < score < tp_o:
-                    items.append(ReviewItem(stem=stem, kind="open", candidate_idx=i, score=score))
-
-        # Close candidates
-        if _episode_class_for_kind(ep, "close") == "uncertain":
-            for i, cand in enumerate(ep.get("close_candidates", [])):
-                score = float(cand.get("score", 0.0))
-                if _candidate_label(cand) is None and tm_c < score < tp_c:
-                    items.append(ReviewItem(stem=stem, kind="close", candidate_idx=i, score=score))
-
-        # Intro candidates (no global target; all uncertain are reviewable)
-        if _episode_class_for_kind(ep, "intro") == "uncertain":
-            for i, cand in enumerate(ep.get("intro_candidates", [])):
-                score = float(cand.get("score", 0.0))
-                if _candidate_label(cand) is None:
-                    items.append(ReviewItem(stem=stem, kind="intro", candidate_idx=i, score=score))
-
-        # Outro candidates (no global target; all uncertain are reviewable)
-        if _episode_class_for_kind(ep, "outro") == "uncertain":
-            for i, cand in enumerate(ep.get("outro_candidates", [])):
-                score = float(cand.get("score", 0.0))
-                if _candidate_label(cand) is None:
-                    items.append(ReviewItem(stem=stem, kind="outro", candidate_idx=i, score=score))
+                if _candidate_label(cand) is None and tm < score < tp:
+                    items.append(ReviewItem(stem=stem, kind=kind, candidate_idx=i, score=score))
 
     items.sort(key=lambda x: (x.candidate_idx, -x.score))
     return items
 
 
 def next_uncertain_episode_kind(
-    episodes: dict[str, dict],
+    episodes: dict[str, dict[str, Any]],
     *,
     exclude: set[tuple[str, str]] | None = None,
 ) -> tuple[str, str] | None:
@@ -362,7 +350,7 @@ def next_uncertain_episode_kind(
     """
     candidates: list[tuple[float, str, str]] = []
     for stem, ep in episodes.items():
-        for kind in ("open", "close", "intro", "outro"):
+        for kind in KINDS:
             if exclude is not None and (kind, stem) in exclude:
                 continue
             kind_candidates = ep.get(f"{kind}_candidates", [])
@@ -386,7 +374,7 @@ def next_uncertain_episode_kind(
 
 
 def reclassify_all_episodes(
-    episodes: dict[str, dict],
+    episodes: dict[str, dict[str, Any]],
     open_target_positives: list[dict],
     open_target_negatives: list[dict],
     close_target_positives: list[dict],

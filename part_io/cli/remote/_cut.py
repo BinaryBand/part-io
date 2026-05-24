@@ -5,14 +5,13 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from part_io.adapters.audio.ad_segments import pair_ad_segments
+from part_io.adapters.audio.ad_segments import AdSegment, pair_ad_segments
 from part_io.adapters.audio.matcher import AudioMatch
 from part_io.adapters.process.runner import run_resolved
 from part_io.cli.audio_ad_remove import _build_filter_complex, _run_ffmpeg
 from part_io.cli.remote._review import _emit, _getch
-from part_io.cli.remote._state import _POS, EpisodeState, PipelineState
+from part_io.cli.remote._state import _POS, EpisodeState, PipelineState, _Match
 from part_io.services.cut_planning import build_cut_plan
 
 
@@ -34,7 +33,7 @@ def _write_prompt(text: str) -> None:
     sys.stderr.flush()
 
 
-def _to_audio_matches(candidates: list[Any]) -> list[AudioMatch]:
+def _to_audio_matches(candidates: list[_Match]) -> list[AudioMatch]:
     return [
         AudioMatch(
             start_seconds=m.start,
@@ -46,7 +45,9 @@ def _to_audio_matches(candidates: list[Any]) -> list[AudioMatch]:
     ]
 
 
-def _find_best_pair(ep_state: EpisodeState, *, min_gap: float, max_gap: float) -> list[Any] | None:
+def _find_best_pair(
+    ep_state: EpisodeState, *, min_gap: float, max_gap: float
+) -> list[AdSegment] | None:
     """Pass all open/close candidates to pair_ad_segments; return all valid pairs or None."""
     open_candidates = [
         candidate for candidate in ep_state.candidates_for("open") if candidate.label == _POS
@@ -58,10 +59,7 @@ def _find_best_pair(ep_state: EpisodeState, *, min_gap: float, max_gap: float) -
         return None
     opens = _to_audio_matches(open_candidates)
     closes = _to_audio_matches(close_candidates)
-    try:
-        segs, _, _ = pair_ad_segments(opens, closes, min_gap=min_gap, max_gap=max_gap)
-    except (ValueError, KeyError):
-        return None
+    segs, _, _ = pair_ad_segments(opens, closes, min_gap=min_gap, max_gap=max_gap)
     return segs if segs else None
 
 
@@ -108,26 +106,21 @@ def _execute_ffmpeg_cut(source: Path, filter_complex: str, output_path: Path) ->
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
         temp_path = Path(temp_file.name)
 
-    try:
-        exit_code = _run_ffmpeg(source, filter_complex, temp_path)
-        if exit_code != 0:
-            temp_path.unlink(missing_ok=True)
-            _emit(f"  FAILED: ffmpeg exited {exit_code}")
-            return False
-
-        try:
-            temp_path.replace(output_path)
-        except OSError:
-            # Cross-device (e.g. rclone mount): copy then remove local temp.
-            shutil.copy2(temp_path, output_path)
-            temp_path.unlink(missing_ok=True)
-
-        _emit(f"  Written: {output_path}")
-        return True
-    except Exception as exc:
+    exit_code = _run_ffmpeg(source, filter_complex, temp_path)
+    if exit_code != 0:
         temp_path.unlink(missing_ok=True)
-        _emit(f"  FAILED: {exc}")
+        _emit(f"  FAILED: ffmpeg exited {exit_code}")
         return False
+
+    try:
+        temp_path.replace(output_path)
+    except OSError:
+        # Cross-device (e.g. rclone mount): copy then remove local temp.
+        shutil.copy2(temp_path, output_path)
+        temp_path.unlink(missing_ok=True)
+
+    _emit(f"  Written: {output_path}")
+    return True
 
 
 def _pair_and_cut(

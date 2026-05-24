@@ -4,6 +4,39 @@
       "additionalProperties": false,
       "description": "Detection state for one episode.",
       "properties": {
+        "close_candidates": {
+          "items": {
+            "$ref": "#/$defs/MatchModel"
+          },
+          "title": "Close Candidates",
+          "type": "array"
+        },
+        "cut": {
+          "default": false,
+          "title": "Cut",
+          "type": "boolean"
+        },
+        "intro_candidates": {
+          "items": {
+            "$ref": "#/$defs/MatchModel"
+          },
+          "title": "Intro Candidates",
+          "type": "array"
+        },
+        "open_candidates": {
+          "items": {
+            "$ref": "#/$defs/MatchModel"
+          },
+          "title": "Open Candidates",
+          "type": "array"
+        },
+        "outro_candidates": {
+          "items": {
+            "$ref": "#/$defs/MatchModel"
+          },
+          "title": "Outro Candidates",
+          "type": "array"
+        },
         "source_hash": {
           "anyOf": [
             {
@@ -15,39 +48,6 @@
           ],
           "default": null,
           "title": "Source Hash"
-        },
-        "open_candidates": {
-          "items": {
-            "$ref": "#/$defs/MatchModel"
-          },
-          "title": "Open Candidates",
-          "type": "array"
-        },
-        "close_candidates": {
-          "items": {
-            "$ref": "#/$defs/MatchModel"
-          },
-          "title": "Close Candidates",
-          "type": "array"
-        },
-        "intro_candidates": {
-          "items": {
-            "$ref": "#/$defs/MatchModel"
-          },
-          "title": "Intro Candidates",
-          "type": "array"
-        },
-        "outro_candidates": {
-          "items": {
-            "$ref": "#/$defs/MatchModel"
-          },
-          "title": "Outro Candidates",
-          "type": "array"
-        },
-        "cut": {
-          "default": false,
-          "title": "Cut",
-          "type": "boolean"
         }
       },
       "title": "EpisodeStateModel",
@@ -57,14 +57,6 @@
       "additionalProperties": false,
       "description": "A single detection candidate within one episode.",
       "properties": {
-        "score": {
-          "title": "Score",
-          "type": "number"
-        },
-        "start": {
-          "title": "Start",
-          "type": "number"
-        },
         "end": {
           "title": "End",
           "type": "number"
@@ -72,7 +64,10 @@
         "label": {
           "anyOf": [
             {
-              "enum": ["positive", "negative"],
+              "enum": [
+                "positive",
+                "negative"
+              ],
               "type": "string"
             },
             {
@@ -81,9 +76,21 @@
           ],
           "default": null,
           "title": "Label"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "start": {
+          "title": "Start",
+          "type": "number"
         }
       },
-      "required": ["score", "start", "end"],
+      "required": [
+        "score",
+        "start",
+        "end"
+      ],
       "title": "MatchModel",
       "type": "object"
     },
@@ -91,44 +98,14 @@
       "additionalProperties": false,
       "description": "Operational settings persisted in ``[settings]``.\n\nFields marked *-> config* will migrate to ``__config__.toml`` once the new\ndeclarative config is wired in; they remain here for backward compatibility.",
       "properties": {
-        "step_seconds": {
-          "default": 0.1,
-          "title": "Step Seconds",
-          "type": "number"
-        },
-        "workers": {
-          "default": 2,
-          "title": "Workers",
-          "type": "integer"
-        },
-        "max_matches": {
-          "default": 3,
-          "title": "Max Matches",
-          "type": "integer"
-        },
-        "fade": {
-          "default": 0.5,
-          "title": "Fade",
-          "type": "number"
-        },
-        "quiz_size": {
-          "default": 10,
-          "title": "Quiz Size",
-          "type": "integer"
-        },
-        "no_interactive": {
-          "default": false,
-          "title": "No Interactive",
+        "ad_inclusive": {
+          "default": true,
+          "title": "Ad Inclusive",
           "type": "boolean"
         },
-        "overwrite": {
-          "default": false,
-          "title": "Overwrite",
-          "type": "boolean"
-        },
-        "output_dir": {
-          "default": "downloads/remove",
-          "title": "Output Dir",
+        "close_sample": {
+          "default": "close.mp3",
+          "title": "Close Sample",
           "type": "string"
         },
         "debug": {
@@ -136,24 +113,49 @@
           "title": "Debug",
           "type": "boolean"
         },
-        "snippets_dir": {
-          "default": "downloads/snippets",
-          "title": "Snippets Dir",
+        "fade": {
+          "default": 0.5,
+          "title": "Fade",
+          "type": "number"
+        },
+        "intro_exclusive": {
+          "default": true,
+          "title": "Intro Exclusive",
+          "type": "boolean"
+        },
+        "intro_sample": {
+          "default": "intro.mp3",
+          "title": "Intro Sample",
           "type": "string"
+        },
+        "max_gap": {
+          "default": 300.0,
+          "title": "Max Gap",
+          "type": "number"
+        },
+        "max_matches": {
+          "default": 3,
+          "title": "Max Matches",
+          "type": "integer"
+        },
+        "min_gap": {
+          "default": -15.0,
+          "title": "Min Gap",
+          "type": "number"
+        },
+        "no_interactive": {
+          "default": false,
+          "title": "No Interactive",
+          "type": "boolean"
         },
         "open_sample": {
           "default": "open.mp3",
           "title": "Open Sample",
           "type": "string"
         },
-        "close_sample": {
-          "default": "close.mp3",
-          "title": "Close Sample",
-          "type": "string"
-        },
-        "intro_sample": {
-          "default": "intro.mp3",
-          "title": "Intro Sample",
+        "output_dir": {
+          "default": "downloads/remove",
+          "title": "Output Dir",
           "type": "string"
         },
         "outro_sample": {
@@ -168,25 +170,30 @@
           "default": null,
           "title": "Outro Sample"
         },
-        "min_gap": {
-          "default": -15.0,
-          "title": "Min Gap",
-          "type": "number"
-        },
-        "max_gap": {
-          "default": 300.0,
-          "title": "Max Gap",
-          "type": "number"
-        },
-        "ad_inclusive": {
-          "default": true,
-          "title": "Ad Inclusive",
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
           "type": "boolean"
         },
-        "intro_exclusive": {
-          "default": true,
-          "title": "Intro Exclusive",
-          "type": "boolean"
+        "quiz_size": {
+          "default": 10,
+          "title": "Quiz Size",
+          "type": "integer"
+        },
+        "snippets_dir": {
+          "default": "downloads/snippets",
+          "title": "Snippets Dir",
+          "type": "string"
+        },
+        "step_seconds": {
+          "default": 0.1,
+          "title": "Step Seconds",
+          "type": "number"
+        },
+        "workers": {
+          "default": 2,
+          "title": "Workers",
+          "type": "integer"
         }
       },
       "title": "RunSettingsModel",
@@ -196,14 +203,6 @@
       "additionalProperties": false,
       "description": "A confirmed positive or negative snippet hit stored in the target list.",
       "properties": {
-        "source": {
-          "title": "Source",
-          "type": "string"
-        },
-        "start": {
-          "title": "Start",
-          "type": "number"
-        },
         "end": {
           "title": "End",
           "type": "number"
@@ -211,9 +210,22 @@
         "score": {
           "title": "Score",
           "type": "number"
+        },
+        "start": {
+          "title": "Start",
+          "type": "number"
+        },
+        "stem": {
+          "title": "Stem",
+          "type": "string"
         }
       },
-      "required": ["source", "start", "end", "score"],
+      "required": [
+        "stem",
+        "start",
+        "end",
+        "score"
+      ],
       "title": "SegmentModel",
       "type": "object"
     },
@@ -221,18 +233,18 @@
       "additionalProperties": false,
       "description": "Accumulated positive/negative examples for one snippet type.\n\nUsed both here (legacy ``[targets.*]`` in state) and in ``AudioSnippetModel``\n(new design, embedded per snippet in config).",
       "properties": {
-        "positives": {
-          "items": {
-            "$ref": "#/$defs/SegmentModel"
-          },
-          "title": "Positives",
-          "type": "array"
-        },
         "negatives": {
           "items": {
             "$ref": "#/$defs/SegmentModel"
           },
           "title": "Negatives",
+          "type": "array"
+        },
+        "positives": {
+          "items": {
+            "$ref": "#/$defs/SegmentModel"
+          },
+          "title": "Positives",
           "type": "array"
         }
       },
@@ -243,10 +255,10 @@
       "additionalProperties": false,
       "description": "Legacy top-level target banks persisted as ``[targets.open]`` / ``close``.",
       "properties": {
-        "open": {
+        "close": {
           "$ref": "#/$defs/TargetStateModel"
         },
-        "close": {
+        "open": {
           "$ref": "#/$defs/TargetStateModel"
         }
       },
@@ -257,18 +269,25 @@
   "additionalProperties": false,
   "description": "Root model for ``__state__.toml``.",
   "properties": {
-    "targets": {
-      "$ref": "#/$defs/TargetsByKindModel"
-    },
-    "settings": {
-      "$ref": "#/$defs/RunSettingsModel"
-    },
     "episodes": {
       "additionalProperties": {
         "$ref": "#/$defs/EpisodeStateModel"
       },
       "title": "Episodes",
       "type": "object"
+    },
+    "profiles": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Profiles",
+      "type": "object"
+    },
+    "settings": {
+      "$ref": "#/$defs/RunSettingsModel"
+    },
+    "targets": {
+      "$ref": "#/$defs/TargetsByKindModel"
     }
   },
   "title": "PipelineStateModel",
