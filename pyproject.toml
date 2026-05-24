@@ -13,6 +13,7 @@ dependencies = [
     "pytest (>=9.0.3,<10.0.0)",
     "tomli-w (>=1.0.0,<2.0.0)",
     "cryptography (>=3.4.0,<48)",
+    "scipy (>=1.13.0,<2.0.0)",
 ]
 keywords = ["python", "cli", "automation", "lint", "tasks"]
 classifiers = [
@@ -96,3 +97,8 @@ profile_cache_dir = "downloads/.profile_cache"
 [tool.part_io.weights]
 match_score = 1.0
 cross_correlation = 1.0
+
+[tool.part_io.moe]
+# Confidence level for the margin-of-error used in auto-classification thresholds.
+# Two-tailed: 0.98 means a 98% confidence interval around the confirmed sample mean.
+confidence_level = 0.98

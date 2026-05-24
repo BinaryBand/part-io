@@ -8,8 +8,13 @@ orchestration flows.
 from __future__ import annotations
 
 import math
+import tomllib
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal, Protocol
+
+from scipy.stats import t as _t_dist
 
 Classification = Literal["positive", "negative", "uncertain", "undetected"]
 REVIEW_KINDS = ("open", "close", "intro", "outro")
@@ -189,39 +194,29 @@ def undo_review_decision(
     episode[f"{undo.kind}_class"] = undo.prev_class
 
 
-# Thresholds for 98% t-critical values used in MOE computation.
-_T_CRIT: dict[int, float] = {
-    2: 31.821,
-    3: 6.965,
-    4: 4.541,
-    5: 3.747,
-    6: 3.365,
-    7: 3.143,
-    8: 2.998,
-    9: 2.896,
-    10: 2.821,
-    15: 2.624,
-    20: 2.539,
-    25: 2.492,
-    30: 2.462,
-}
-_T_CRIT_LARGE = 2.326
+@lru_cache(maxsize=1)
+def _confidence_level() -> float:
+    """Read MOE confidence level from pyproject.toml, defaulting to 0.98."""
+    for candidate in (Path("pyproject.toml"), Path(__file__).parents[3] / "pyproject.toml"):
+        if candidate.exists():
+            with candidate.open("rb") as f:
+                data = tomllib.load(f)
+            return float(
+                data.get("tool", {}).get("part_io", {}).get("moe", {}).get("confidence_level", 0.98)
+            )
+    return 0.98
 
 
 def _t_critical(n: int) -> float:
-    """98% two-tailed t-critical value for n samples (df = n-1)."""
+    """Two-tailed t-critical value for n samples (df = n-1) at the configured confidence level."""
     if n < 2:
         return math.inf
-    if n >= 31:
-        return _T_CRIT_LARGE
-    for threshold in sorted(_T_CRIT, reverse=True):
-        if n >= threshold:
-            return _T_CRIT[threshold]
-    return math.inf
+    alpha = (1.0 + _confidence_level()) / 2.0
+    return float(_t_dist.ppf(alpha, df=n - 1))
 
 
 def _moe(scores: list[float]) -> float:
-    """Margin of error using the t-distribution (98% CI on the sample mean).
+    """Margin of error at the configured confidence level (t-distribution, sample mean CI).
 
     Returns math.inf for n < 2 so that a single confirmed example never
     triggers auto-classification — the uncertain zone collapses only as
