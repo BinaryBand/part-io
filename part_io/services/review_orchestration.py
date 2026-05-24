@@ -41,7 +41,7 @@ class ReviewDecision:
     """Result of applying a review decision (approve/reject)."""
 
     action: Literal["approved", "rejected"]
-    segment_source: str
+    segment_stem: str
     segment_start: float
     segment_end: float
     segment_score: float
@@ -54,7 +54,7 @@ class UndoEntry:
     stem: str
     kind: str
     action: str  # "a" or "r"
-    segment_source: str
+    segment_stem: str
     segment_start: float
     segment_end: float
     segment_score: float
@@ -127,7 +127,7 @@ def apply_review_decision(
     kind: str,
     candidate_idx: int,
     action: Literal["a", "r"],
-    source: str,
+    stem: str,
     open_target_positives: list[dict],
     open_target_negatives: list[dict],
     close_target_positives: list[dict],
@@ -144,7 +144,7 @@ def apply_review_decision(
 
     cand = candidates[candidate_idx]
     segment = {
-        "source": source,
+        "stem": stem,
         "start": float(cand.get("start", 0.0)),
         "end": float(cand.get("end", 0.0)),
         "score": float(cand.get("score", 0.0)),
@@ -171,7 +171,7 @@ def apply_review_decision(
 
     decision = ReviewDecision(
         action=decision_action,
-        segment_source=segment["source"],
+        segment_stem=segment["stem"],
         segment_start=float(segment["start"]),
         segment_end=float(segment["end"]),
         segment_score=float(segment["score"]),
@@ -180,7 +180,7 @@ def apply_review_decision(
         stem="",
         kind=kind,
         action=action,
-        segment_source=decision.segment_source,
+        segment_stem=decision.segment_stem,
         segment_start=decision.segment_start,
         segment_end=decision.segment_end,
         segment_score=decision.segment_score,
@@ -206,7 +206,7 @@ def undo_review_decision(
     def _remove_segment(target_list: list[dict]) -> None:
         for i, seg in enumerate(target_list):
             if (
-                str(seg.get("source", "")) == undo.segment_source
+                str(seg.get("stem", "")) == undo.segment_stem
                 and float(seg.get("start", 0.0)) == float(undo.segment_start)
                 and float(seg.get("end", 0.0)) == float(undo.segment_end)
                 and float(seg.get("score", 0.0)) == float(undo.segment_score)

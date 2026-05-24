@@ -3,14 +3,17 @@ from __future__ import annotations
 import logging
 import math
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 
 from part_io.adapters.audio.matcher import (
+    _ANALYSIS_RATE,
     AudioMatch,
+    _build_spectral_profile,
+    _decode_pcm_mono_16k,
     build_consensus_profile,
-    find_audio_sample_matches,
     find_audio_sample_matches_from_profile,
     warm_source_profile,
 )
@@ -33,9 +36,78 @@ def _emit(message: str) -> None:
     sys.stderr.flush()
 
 
-def _build_consensus_from_segments(positives: list[Segment]) -> np.ndarray | None:
-    tuples = [(Path(seg.source), seg.start, seg.end) for seg in positives if seg.source]
+def _resolve_segment_path(stem: str, remote_dir: Path) -> Path:
+    for ext in (".mp3", ".opus"):
+        candidate = remote_dir / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    return remote_dir / f"{stem}.mp3"
+
+
+def _build_consensus_from_segments(
+    positives: list[Segment],
+    *,
+    remote_dir: Path,
+    episodes: dict,
+) -> np.ndarray | None:
+    tuples: list[tuple[Path, float, float]] = []
+    for seg in positives:
+        if not seg.stem:
+            continue
+        path = _resolve_segment_path(seg.stem, remote_dir)
+        ep = episodes.get(seg.stem)
+        if ep is not None and ep.source_hash and not ep.source_hash_valid(path):
+            continue  # file changed since segment was recorded — skip stale
+        tuples.append((path, seg.start, seg.end))
     return build_consensus_profile(tuples) if tuples else None
+
+
+def _init_profiles(
+    state: PipelineState,
+    snippets: dict[str, Path | None],
+    remote_dir: Path,
+    *,
+    emit: "Callable[[str], None]",
+) -> None:
+    """Compute/refresh profiles for all kinds and store on state.profiles.
+
+    Priority:
+      1. Fresh consensus from hash-valid positives (most accurate) → update checkpoint.
+      2. Existing checkpoint in state.profiles (transplant / no-audio-available).
+      3. Bootstrap from snippet file (first run) → save as checkpoint.
+      4. Hard fail — no profile, no snippet.
+    """
+    for kind in snippets:
+        target = state.open_target if kind == "open" else state.close_target
+        consensus = _build_consensus_from_segments(
+            target.positives, remote_dir=remote_dir, episodes=state.episodes
+        )
+        if consensus is not None:
+            state.profiles[kind] = consensus
+            emit(f"  [profile:{kind}] consensus from {len(target.positives)} positive(s)")
+            continue
+
+        if kind in state.profiles:
+            emit(f"  [profile:{kind}] loaded from checkpoint")
+            continue
+
+        snippet_path = snippets[kind]
+        if snippet_path is not None and snippet_path.exists():
+            samples = _decode_pcm_mono_16k(snippet_path)
+            if not samples:
+                raise RuntimeError(
+                    f"Cannot build profile for '{kind}':"
+                    f" snippet '{snippet_path}' produced no audio."
+                )
+            arr = np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
+            state.profiles[kind] = arr
+            emit(f"  [profile:{kind}] bootstrapped from snippet '{snippet_path.name}'")
+            continue
+
+        raise RuntimeError(
+            f"No profile available for kind '{kind}': "
+            "provide a snippet file or seed with at least 2 approved positives."
+        )
 
 
 def _process_detection_results(
@@ -89,7 +161,7 @@ def _detect_batch(
     state: PipelineState,
     snippets: dict[str, Path | None],
     *,
-    snippet_profiles: dict[str, np.ndarray] | None = None,
+    remote_dir: Path,
     step_seconds: float,
     workers: int,
     max_matches: int,
@@ -98,45 +170,27 @@ def _detect_batch(
     ep_by_stem = {ep.stem: ep for ep in episodes}
     duration_by_stem = {ep.stem: _probe_audio_duration_seconds(ep) for ep in episodes}
 
-    profile_map = dict(snippet_profiles or {})
-    open_consensus = _build_consensus_from_segments(state.open_target.positives)
-    if open_consensus is not None and "open" in snippets:
-        profile_map["open"] = open_consensus
-        _emit(f"  [consensus] open: averaged {len(state.open_target.positives)} positives")
-    close_consensus = _build_consensus_from_segments(state.close_target.positives)
-    if close_consensus is not None and "close" in snippets:
-        profile_map["close"] = close_consensus
-        _emit(f"  [consensus] close: averaged {len(state.close_target.positives)} positives")
+    _init_profiles(state, snippets, remote_dir, emit=_emit)
 
     def _detector(
         *,
         source_path: Path,
-        sample_path: Path | None,
+        sample_path: Path | None,  # noqa: ARG001 — profile-only; sample_path unused
         kind: str = "",
         score_threshold: float,
         step_seconds: float,
     ) -> list[AudioMatch]:
-        if kind in profile_map:
-            matches = find_audio_sample_matches_from_profile(
-                source_path=source_path,
-                reference=profile_map[kind],
-                score_threshold=score_threshold,
-                step_seconds=step_seconds,
-                profile_cache_dir=profile_cache_dir,
+        if kind not in state.profiles:
+            raise RuntimeError(
+                f"No profile for kind '{kind}'. This should have been caught by _init_profiles."
             )
-        else:
-            if sample_path is None:
-                msg = "missing sample path and no embedded profile"
-                raise ValueError(msg)
-            _LOG.info("  [detect] %s  %s", sample_path.stem, source_path.stem)
-            matches = find_audio_sample_matches(
-                source_path=source_path,
-                sample_path=sample_path,
-                score_threshold=score_threshold,
-                step_seconds=step_seconds,
-                profile_cache_dir=profile_cache_dir,
-            )
-        return matches
+        return find_audio_sample_matches_from_profile(
+            source_path=source_path,
+            reference=state.profiles[kind],
+            score_threshold=score_threshold,
+            step_seconds=step_seconds,
+            profile_cache_dir=profile_cache_dir,
+        )
 
     if profile_cache_dir is not None:
         for ep in episodes:

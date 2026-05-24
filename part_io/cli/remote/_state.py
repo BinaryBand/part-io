@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 import re
@@ -8,6 +10,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from part_io.utils.hash import partial_file_hash
 
@@ -38,10 +42,21 @@ _AUDIO_KINDS = ("open", "close", "intro", "outro")
 class Segment:
     """A confirmed example of an audio target at a specific position."""
 
-    source: str
+    stem: str
     start: float
     end: float
     score: float
+
+
+def _profile_to_b85(arr: np.ndarray) -> str:
+    buf = io.BytesIO()
+    np.save(buf, arr)
+    return base64.b85encode(buf.getvalue()).decode("ascii")
+
+
+def _b85_to_profile(s: str) -> np.ndarray:
+    buf = io.BytesIO(base64.b85decode(s))
+    return np.load(buf)
 
 
 @dataclass
@@ -164,7 +179,7 @@ class RunSettings:
 
 def _fmt_seg(s: Segment) -> str:
     return (
-        f"{{source = {json.dumps(s.source)}, "
+        f"{{stem = {json.dumps(s.stem)}, "
         f"start = {s.start:.3f}, end = {s.end:.3f}, score = {s.score:.6f}}}"
     )
 
@@ -187,12 +202,19 @@ def _load_match(raw: dict) -> _Match:
     )
 
 
+def _seg_stem(raw: dict) -> str:
+    if "stem" in raw:
+        return str(raw["stem"])
+    # migrate: old format stored the full path under "source"
+    return Path(str(raw.get("source", ""))).stem
+
+
 def _load_target(raw: dict) -> TargetState:
     t = TargetState()
     for seg in raw.get("positives", []):
         t.positives.append(
             Segment(
-                source=str(seg["source"]),
+                stem=_seg_stem(seg),
                 start=float(seg["start"]),
                 end=float(seg["end"]),
                 score=float(seg["score"]),
@@ -201,7 +223,7 @@ def _load_target(raw: dict) -> TargetState:
     for seg in raw.get("negatives", []):
         t.negatives.append(
             Segment(
-                source=str(seg["source"]),
+                stem=_seg_stem(seg),
                 start=float(seg["start"]),
                 end=float(seg["end"]),
                 score=float(seg["score"]),
@@ -283,6 +305,7 @@ class PipelineState:
     close_target: TargetState = field(default_factory=TargetState)
     settings: RunSettings = field(default_factory=RunSettings)
     episodes: dict[str, EpisodeState] = field(default_factory=dict)
+    profiles: dict[str, np.ndarray] = field(default_factory=dict)
 
     def episode(self, stem: str) -> EpisodeState:
         if stem not in self.episodes:
@@ -303,6 +326,11 @@ class PipelineState:
             close_target=_load_target(data.get("targets", {}).get("close", {})),
             settings=_load_settings(data.get("settings", {})),
         )
+        for kind, b85 in data.get("profiles", {}).items():
+            try:
+                state.profiles[kind] = _b85_to_profile(str(b85))
+            except Exception:  # noqa: BLE001, S110
+                pass  # corrupt checkpoint — will be recomputed on next run
         for stem, ep_raw in data.get("episodes", {}).items():
             state.episodes[stem] = _load_episode(ep_raw)
         return state
@@ -346,20 +374,25 @@ class PipelineState:
             seen: set[tuple[str, float, float]] = set()
             deduped_pos: list[Segment] = []
             for s in target.positives:
-                key = (s.source, s.start, s.end)
+                key = (s.stem, s.start, s.end)
                 if key not in seen:
                     seen.add(key)
                     deduped_pos.append(s)
             seen = set()
             deduped_neg: list[Segment] = []
             for s in target.negatives:
-                key = (s.source, s.start, s.end)
+                key = (s.stem, s.start, s.end)
                 if key not in seen:
                     seen.add(key)
                     deduped_neg.append(s)
             pos = ", ".join(_fmt_seg(s) for s in deduped_pos)
             neg = ", ".join(_fmt_seg(s) for s in deduped_neg)
             lines += [f"\n[targets.{kind}]\n", f"positives = [{pos}]\n", f"negatives = [{neg}]\n"]
+        if self.profiles:
+            lines.append("\n[profiles]\n")
+            for kind in sorted(self.profiles):
+                b85 = _profile_to_b85(self.profiles[kind])
+                lines.append(f"{kind} = {json.dumps(b85)}\n")
         for stem, ep in sorted(self.episodes.items()):
             lines.append(f'\n[episodes."{stem}"]\n')
             if ep.source_hash is not None:
@@ -377,11 +410,11 @@ class PipelineState:
 
 def _target_to_dict_lists(target: TargetState) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     positives = [
-        {"source": s.source, "start": float(s.start), "end": float(s.end), "score": float(s.score)}
+        {"stem": s.stem, "start": float(s.start), "end": float(s.end), "score": float(s.score)}
         for s in target.positives
     ]
     negatives = [
-        {"source": s.source, "start": float(s.start), "end": float(s.end), "score": float(s.score)}
+        {"stem": s.stem, "start": float(s.start), "end": float(s.end), "score": float(s.score)}
         for s in target.negatives
     ]
     return positives, negatives
@@ -395,7 +428,7 @@ def _replace_target_from_dict_lists(
 ) -> None:
     target.positives = [
         Segment(
-            source=str(s.get("source", "")),
+            stem=str(s.get("stem", "")),
             start=float(s.get("start", 0.0)),
             end=float(s.get("end", 0.0)),
             score=float(s.get("score", 0.0)),
@@ -404,7 +437,7 @@ def _replace_target_from_dict_lists(
     ]
     target.negatives = [
         Segment(
-            source=str(s.get("source", "")),
+            stem=str(s.get("stem", "")),
             start=float(s.get("start", 0.0)),
             end=float(s.get("end", 0.0)),
             score=float(s.get("score", 0.0)),
@@ -422,6 +455,8 @@ __all__ = [
     "PipelineState",
     "_fmt_seg",
     "_fmt_match",
+    "_profile_to_b85",
+    "_b85_to_profile",
     "_target_to_dict_lists",
     "_replace_target_from_dict_lists",
 ]

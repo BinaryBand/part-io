@@ -138,7 +138,6 @@ def _apply_review_decision(
     state: PipelineState,
     ep_state: EpisodeState,
     item: ReviewItem,
-    source: Path,
     key: Literal["a", "r"],
 ) -> tuple[str, UndoEntry]:
     ep_dict = episode_to_review_dict(ep_state, include_bounds=True)
@@ -150,7 +149,7 @@ def _apply_review_decision(
         kind=item.kind,
         candidate_idx=item.candidate_idx,
         action=key,
-        source=str(source),
+        stem=item.stem,
         open_target_positives=open_pos,
         open_target_negatives=open_neg,
         close_target_positives=close_pos,
@@ -236,7 +235,6 @@ def _review_candidate(
                 state=state,
                 ep_state=ep_state,
                 item=item,
-                source=source,
                 key=action_key,
             )
             undo.stem = item.stem
@@ -246,7 +244,7 @@ def _review_candidate(
                     stem=undo.stem,
                     kind=undo.kind,
                     action=undo.action,
-                    segment_source=undo.segment_source,
+                    segment_stem=undo.segment_stem,
                     segment_start=undo.segment_start,
                     segment_end=undo.segment_end,
                     segment_score=undo.segment_score,

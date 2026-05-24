@@ -294,7 +294,7 @@ def _collect_loop_candidates(
     max_matches: int,
     state_path: Path,
     snippets: dict[str, Path | None],
-    snippet_profiles: dict[str, Any],
+    remote_dir: Path,
     profile_cache_dir: Path | None = None,
     exclude_decided: set[tuple[str, str, int]] | None = None,
 ) -> tuple[list[ReviewItem], int]:
@@ -320,7 +320,7 @@ def _collect_loop_candidates(
             [ep_path],
             state,
             snippets,
-            snippet_profiles=snippet_profiles,
+            remote_dir=remote_dir,
             step_seconds=step_seconds,
             workers=workers,
             max_matches=max_matches,
@@ -383,7 +383,6 @@ def _run_loop_once(
     output_dir: Path,
     snippets: dict[str, Path],
     detect_snippets: dict[str, Path | None],
-    snippet_profiles: dict[str, Any],
     quiz_size: int,
     overwrite: bool,
     step_seconds: float,
@@ -410,7 +409,7 @@ def _run_loop_once(
         max_matches=max_matches,
         state_path=state_path,
         snippets=detect_snippets,
-        snippet_profiles=snippet_profiles,
+        remote_dir=remote_dir,
         profile_cache_dir=get_profile_cache_dir(remote_dir),
     )
     if quiz_items:
@@ -456,7 +455,6 @@ def _run_loop_until_clean(
     output_dir: Path,
     snippets: dict[str, Path],
     detect_snippets: dict[str, Path | None],
-    snippet_profiles: dict[str, Any],
     quiz_size: int,
     overwrite: bool,
     step_seconds: float,
@@ -487,7 +485,7 @@ def _run_loop_until_clean(
             max_matches=max_matches,
             state_path=state_path,
             snippets=detect_snippets,
-            snippet_profiles=snippet_profiles,
+            remote_dir=remote_dir,
             profile_cache_dir=get_profile_cache_dir(remote_dir),
             exclude_decided=session_skipped,
         )
@@ -563,6 +561,9 @@ def _cmd_review(args: argparse.Namespace) -> None:
         loaded=_load_snippets(config_path),
         config_path=config_path,
     )
+    for kind, profile in snippet_profiles.items():
+        if kind not in state.profiles:
+            state.profiles[kind] = profile
     if not remote_dir.exists():
         sys.exit(f"Remote dir not found: {remote_dir}")
 
@@ -582,7 +583,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
             to_detect,
             state,
             detect_snippets,
-            snippet_profiles=snippet_profiles,
+            remote_dir=remote_dir,
             step_seconds=args.step_seconds,
             workers=args.workers,
             max_matches=args.max_matches,
@@ -670,6 +671,9 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         loaded=_load_snippets(config_path),
         config_path=config_path,
     )
+    for kind, profile in snippet_profiles.items():
+        if kind not in state.profiles:
+            state.profiles[kind] = profile
     if not remote_dir.exists():
         sys.exit(f"Remote dir not found: {remote_dir}")
 
@@ -684,7 +688,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             output_dir=output_dir,
             snippets=review_snippets,
             detect_snippets=detect_snippets,
-            snippet_profiles=snippet_profiles,
             quiz_size=args.quiz_size,
             overwrite=args.overwrite,
             step_seconds=args.step_seconds,
@@ -709,7 +712,6 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         output_dir=output_dir,
         snippets=review_snippets,
         detect_snippets=detect_snippets,
-        snippet_profiles=snippet_profiles,
         quiz_size=args.quiz_size,
         overwrite=args.overwrite,
         step_seconds=args.step_seconds,

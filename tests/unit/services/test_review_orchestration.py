@@ -407,7 +407,7 @@ class TestApplyAndUndoReviewDecision:
             kind="open",
             candidate_idx=0,
             action="a",
-            source="downloads/ep1.mp3",
+            stem="ep1",
             open_target_positives=open_pos,
             open_target_negatives=open_neg,
             close_target_positives=close_pos,
@@ -431,7 +431,7 @@ class TestApplyAndUndoReviewDecision:
             kind="intro",
             candidate_idx=0,
             action="r",
-            source="downloads/ep1.mp3",
+            stem="ep1",
             open_target_positives=[],
             open_target_negatives=[],
             close_target_positives=[],
@@ -447,7 +447,7 @@ class TestApplyAndUndoReviewDecision:
             "close_class": "positive",
             "close_candidates": [{"score": 0.4, "start": 20.0, "end": 24.0}],
         }
-        close_pos = [{"source": "s.mp3", "start": 20.0, "end": 24.0, "score": 0.4}]
+        close_pos = [{"stem": "s", "start": 20.0, "end": 24.0, "score": 0.4}]
 
         from part_io.services.review_orchestration import UndoEntry
 
@@ -457,7 +457,7 @@ class TestApplyAndUndoReviewDecision:
                 stem="ep1",
                 kind="close",
                 action="a",
-                segment_source="s.mp3",
+                segment_stem="s",
                 segment_start=20.0,
                 segment_end=24.0,
                 segment_score=0.4,

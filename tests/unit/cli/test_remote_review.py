@@ -48,8 +48,8 @@ def test_reclassify_all_promotes_uncertain_when_score_clears_threshold() -> None
 
     state.open_target.positives.extend(
         [
-            Segment(source="a.mp3", start=0.0, end=1.0, score=0.9),
-            Segment(source="b.mp3", start=0.0, end=1.0, score=0.9),
+            Segment(stem="a", start=0.0, end=1.0, score=0.9),
+            Segment(stem="b", start=0.0, end=1.0, score=0.9),
         ]
     )
 
