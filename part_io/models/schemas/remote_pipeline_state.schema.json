@@ -72,10 +72,7 @@
         "label": {
           "anyOf": [
             {
-              "enum": [
-                "positive",
-                "negative"
-              ],
+              "enum": ["positive", "negative"],
               "type": "string"
             },
             {
@@ -86,11 +83,7 @@
           "title": "Label"
         }
       },
-      "required": [
-        "score",
-        "start",
-        "end"
-      ],
+      "required": ["score", "start", "end"],
       "title": "MatchModel",
       "type": "object"
     },
@@ -220,12 +213,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "source",
-        "start",
-        "end",
-        "score"
-      ],
+      "required": ["source", "start", "end", "score"],
       "title": "SegmentModel",
       "type": "object"
     },

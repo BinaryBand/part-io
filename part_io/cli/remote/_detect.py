@@ -108,15 +108,15 @@ def _detect_batch(
         profile_map["close"] = close_consensus
         _emit(f"  [consensus] close: averaged {len(state.close_target.positives)} positives")
 
-    path_to_kind = {
-        sample_path: kind for kind, sample_path in snippets.items() if sample_path is not None
-    }
-
     def _detector(
-        *, source_path: Path, sample_path: Path | None, score_threshold: float, step_seconds: float
+        *,
+        source_path: Path,
+        sample_path: Path | None,
+        kind: str = "",
+        score_threshold: float,
+        step_seconds: float,
     ) -> list[AudioMatch]:
-        kind = path_to_kind.get(sample_path, "") if sample_path is not None else ""
-        if kind and kind in profile_map:
+        if kind in profile_map:
             matches = find_audio_sample_matches_from_profile(
                 source_path=source_path,
                 reference=profile_map[kind],
