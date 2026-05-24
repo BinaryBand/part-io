@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
-from part_io.adapters.audio.matcher import AudioMatch, anchor_to_onset, cross_correlate_align
+from part_io.adapters.audio.matcher import AudioMatch, anchor_to_onset
 
 
 class _MatchLike(Protocol):
@@ -15,14 +15,13 @@ class _MatchLike(Protocol):
     score: float
 
 
-def refine_matches(
+def align_matches_to_onset(
     *,
     matches: Sequence[_MatchLike],
     source_path: Path,
-    sample_path: Path,
 ) -> list[AudioMatch]:
-    """Refine match positions using onset anchoring then waveform cross-correlation."""
-    refined: list[AudioMatch] = []
+    """Fine-align match positions to the first significant energy onset in the source."""
+    aligned: list[AudioMatch] = []
     for match in matches:
         start = float(match.start_seconds)
         end = float(match.end_seconds)
@@ -32,14 +31,8 @@ def refine_matches(
             duration_seconds=end - start,
             score=float(match.score),
         )
-        anchored = anchor_to_onset(match=as_audio_match, source_path=source_path)
-        aligned = cross_correlate_align(
-            match=anchored,
-            source_path=source_path,
-            sample_path=sample_path,
-        )
-        refined.append(aligned)
-    return refined
+        aligned.append(anchor_to_onset(match=as_audio_match, source_path=source_path))
+    return aligned
 
 
-__all__ = ["refine_matches"]
+__all__ = ["align_matches_to_onset"]

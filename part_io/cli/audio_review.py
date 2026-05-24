@@ -16,7 +16,6 @@ from part_io.adapters.audio.matcher import (
     AudioMatch,
     _suppress_overlapping,
     anchor_to_onset,
-    cross_correlate_align,
     find_audio_sample_matches,
 )
 from part_io.adapters.process.runner import run_resolved
@@ -162,9 +161,8 @@ def _find_and_postprocess_matches(
     step_seconds: float,
     dedupe_overlap: float,
     onset_anchor: bool = False,
-    precise: bool = False,
 ) -> list[AudioMatch]:
-    """Find matches and optionally apply alignment post-processing."""
+    """Find matches and optionally apply onset-anchoring alignment."""
     matches = find_audio_sample_matches(
         source_path=source_path,
         sample_path=sample_path,
@@ -174,16 +172,6 @@ def _find_and_postprocess_matches(
     )
     if onset_anchor:
         matches = [anchor_to_onset(match=match, source_path=source_path) for match in matches]
-        matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
-    if precise:
-        matches = [
-            cross_correlate_align(
-                match=match,
-                source_path=source_path,
-                sample_path=sample_path,
-            )
-            for match in matches
-        ]
         matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
     return matches
 
@@ -200,7 +188,6 @@ def _generate_bundle(
     bundle_name: str | None,
     overwrite: bool,
     onset_anchor: bool = False,
-    precise: bool = False,
 ) -> tuple[Path, Path, Path, int, int]:
     _validate_args(
         argparse.Namespace(
@@ -227,7 +214,6 @@ def _generate_bundle(
         step_seconds=step_seconds,
         dedupe_overlap=dedupe_overlap,
         onset_anchor=onset_anchor,
-        precise=precise,
     )
 
     ranked_matches = sorted(matches, key=lambda match: match.score, reverse=True)
@@ -264,7 +250,6 @@ def main() -> None:
             bundle_name=args.bundle_name,
             overwrite=args.overwrite,
             onset_anchor=args.onset_anchor,
-            precise=args.precise,
         )
     except (FileNotFoundError, ValueError) as exc:
         parser.exit(2, f"{exc}\n")

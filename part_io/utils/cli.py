@@ -45,10 +45,5 @@ def add_alignment_refinement_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--onset-anchor",
         action="store_true",
-        help="Shift match start to first significant energy onset (Phase 2)",
-    )
-    parser.add_argument(
-        "--precise",
-        action="store_true",
-        help="Refine alignment via waveform cross-correlation (Phase 3, slow)",
+        help="Shift match start to first significant energy onset",
     )

@@ -68,7 +68,6 @@ def _run_one(
     bundle_name: str,
     overwrite: bool,
     onset_anchor: bool = False,
-    precise: bool = False,
 ) -> int:
     command = [
         sys.executable,
@@ -91,8 +90,6 @@ def _run_one(
         command.append("--overwrite")
     if onset_anchor:
         command.append("--onset-anchor")
-    if precise:
-        command.append("--precise")
 
     result = run_resolved(command, capture_output=True)
     if result.returncode != 0 and result.stderr:
@@ -159,7 +156,6 @@ def _run_batch_jobs(
     output_root: Path,
     overwrite: bool,
     onset_anchor: bool,
-    precise: bool,
 ) -> None:
     total = len(jobs)
     _emit_progress(f"Processing {total} bundles across {workers} worker(s)...")
@@ -177,7 +173,6 @@ def _run_batch_jobs(
                 output_root=output_root,
                 overwrite=overwrite,
                 onset_anchor=onset_anchor,
-                precise=precise,
             ): bn
             for sf, sp, bn in jobs
         }
@@ -224,7 +219,6 @@ def main() -> None:
         output_root=args.output_root,
         overwrite=args.overwrite,
         onset_anchor=args.onset_anchor,
-        precise=args.precise,
     )
 
 

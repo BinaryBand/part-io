@@ -22,6 +22,7 @@ from part_io.services.review_orchestration import (
     episode_to_review_dict,
     next_uncertain_episode_kind,
     reclassify_all_episodes,
+    sort_by_expected_savings,
     undo_review_decision,
 )
 from part_io.utils.audio_process import AudioProcessManager
@@ -77,7 +78,7 @@ def _collect_uncertain_candidates(state: PipelineState) -> list[ReviewItem]:
     review_items = collect_uncertain_candidates(
         episodes_dict, open_pos, open_neg, close_pos, close_neg
     )
-    return list(review_items)
+    return sort_by_expected_savings(list(review_items), open_pos, open_neg, close_pos, close_neg)
 
 
 try:

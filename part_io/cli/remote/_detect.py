@@ -14,7 +14,7 @@ from part_io.adapters.audio.matcher import (
     find_audio_sample_matches_from_profile,
     warm_source_profile,
 )
-from part_io.adapters.audio.refine_impl import refine_matches as _refine_matches
+from part_io.adapters.audio.refine_impl import align_matches_to_onset as _align_to_onset
 from part_io.adapters.process.runner import run_resolved
 from part_io.cli.remote._state import PipelineState, Segment, _Match
 from part_io.services.audio_detection import (
@@ -160,14 +160,9 @@ def _detect_batch(
             source_path=result.source_path,
             sample_path=result.sample_path,
             kind=result.kind,
-            matches=(
-                _refine_matches(
-                    matches=list(result.matches),
-                    source_path=result.source_path,
-                    sample_path=result.sample_path,
-                )
-                if result.sample_path is not None and result.sample_path.exists()
-                else list(result.matches)
+            matches=_align_to_onset(
+                matches=list(result.matches),
+                source_path=result.source_path,
             ),
             error=result.error,
         )

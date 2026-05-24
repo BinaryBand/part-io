@@ -595,51 +595,6 @@ def anchor_to_onset(
     return _shift_match(match, match.start_seconds + offset_seconds)
 
 
-def cross_correlate_align(
-    *,
-    match: AudioMatch,
-    source_path: Path,
-    sample_path: Path,
-    padding_seconds: float = 2.0,
-) -> AudioMatch:
-    """Refine alignment via waveform cross-correlation (Phase 3 --precise).
-
-    Extracts raw PCM for the candidate region (with padding) and the
-    reference sample, computes the normalised cross-correlation, and shifts
-    ``start_seconds`` by the lag that maximises correlation.  Returns the
-    original match unchanged when PCM extraction fails or signals are silent.
-    """
-    window_start = max(0.0, match.start_seconds - padding_seconds)
-    window_end = match.end_seconds + padding_seconds
-    source_window = _decode_pcm_mono_16k_window(source_path, window_start, window_end)
-    sample_pcm = _decode_pcm_mono_16k(sample_path)
-
-    if not source_window or not sample_pcm:
-        return match
-
-    source_arr = np.asarray(source_window, dtype=np.float32)
-    sample_arr = np.asarray(sample_pcm, dtype=np.float32)
-
-    src_norm = float(np.linalg.norm(source_arr))
-    smp_norm = float(np.linalg.norm(sample_arr))
-    if src_norm == 0 or smp_norm == 0:
-        return match
-
-    source_arr = source_arr / src_norm
-    sample_arr = sample_arr / smp_norm
-
-    # O(N log N) cross-correlation via FFT
-    n = len(source_arr) + len(sample_arr) - 1
-    fft_size = 1 << (n - 1).bit_length()  # next power of two
-    src_fft = np.fft.rfft(source_arr, n=fft_size)
-    smp_fft = np.fft.rfft(sample_arr, n=fft_size)
-    corr = np.fft.irfft(src_fft * np.conj(smp_fft), n=fft_size)[:n]
-    peak_index = int(np.argmax(corr))
-    # xcorr(smp, src)[k] peaks at k = start offset of smp in source_window
-    lag_seconds = peak_index / _ANALYSIS_RATE
-    return _shift_match(match, max(0.0, window_start + lag_seconds))
-
-
 def build_consensus_profile(
     segments: list[tuple[Path, float, float]],
     *,
@@ -762,7 +717,6 @@ __all__ = [
     "find_audio_sample_matches_from_profile",
     "build_consensus_profile",
     "anchor_to_onset",
-    "cross_correlate_align",
     "band_center_frequencies",
     "compute_audio_file_profile",
     "_get_source_profile",

@@ -424,3 +424,77 @@ def reclassify_all_episodes(
             classified = classify_score_with_thresholds(score, tp_c, tm_c)
             if classified in ("positive", "negative"):
                 cand["label"] = classified
+
+
+def _count_newly_classified(
+    uncertain_scores: list[float],
+    theta_plus: float,
+    theta_minus: float,
+) -> int:
+    """Count how many scores would auto-classify under the given thresholds."""
+    return sum(1 for s in uncertain_scores if s >= theta_plus or s <= theta_minus)
+
+
+def _expected_savings(
+    candidate_score: float,
+    kind_uncertain_scores: list[float],
+    positives: list[float],
+    negatives: list[float],
+) -> float:
+    """Expected number of other uncertain candidates auto-classified if we answer this one.
+
+    Simulates both outcomes (approve / reject), weights by the score's position in
+    the uncertain zone as a proxy for P(approve), and returns the weighted sum.
+    """
+    theta_plus, theta_minus = compute_classification_thresholds(positives, negatives)
+    zone_width = theta_plus - theta_minus
+    p_approve = (
+        (candidate_score - theta_minus) / zone_width
+        if math.isfinite(zone_width) and zone_width > 0
+        else 0.5
+    )
+
+    new_pos = sorted(positives + [candidate_score])
+    tp_if_approve, tm_if_approve = compute_classification_thresholds(new_pos, negatives)
+    n_if_approve = _count_newly_classified(kind_uncertain_scores, tp_if_approve, tm_if_approve)
+
+    new_neg = sorted(negatives + [candidate_score])
+    tp_if_reject, tm_if_reject = compute_classification_thresholds(positives, new_neg)
+    n_if_reject = _count_newly_classified(kind_uncertain_scores, tp_if_reject, tm_if_reject)
+
+    return p_approve * n_if_approve + (1.0 - p_approve) * n_if_reject
+
+
+def sort_by_expected_savings(
+    items: list[ReviewItem],
+    open_target_positives: list[dict],
+    open_target_negatives: list[dict],
+    close_target_positives: list[dict],
+    close_target_negatives: list[dict],
+) -> list[ReviewItem]:
+    """Re-order *items* so highest expected cascade classification comes first.
+
+    Only open/close candidates are reordered — they share global targets whose
+    thresholds shift with each decision. intro/outro have no global target so
+    expected savings is always 0; they are appended after open/close in their
+    original relative order.
+    """
+    open_pos = [float(s["score"]) for s in open_target_positives]
+    open_neg = [float(s["score"]) for s in open_target_negatives]
+    close_pos = [float(s["score"]) for s in close_target_positives]
+    close_neg = [float(s["score"]) for s in close_target_negatives]
+
+    open_uncertain = [i.score for i in items if i.kind == "open"]
+    close_uncertain = [i.score for i in items if i.kind == "close"]
+
+    def _savings(item: ReviewItem) -> float:
+        if item.kind == "open":
+            return _expected_savings(item.score, open_uncertain, open_pos, open_neg)
+        if item.kind == "close":
+            return _expected_savings(item.score, close_uncertain, close_pos, close_neg)
+        return 0.0
+
+    global_items = [i for i in items if i.kind in ("open", "close")]
+    local_items = [i for i in items if i.kind not in ("open", "close")]
+    global_items.sort(key=_savings, reverse=True)
+    return global_items + local_items

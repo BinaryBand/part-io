@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from part_io.services.review_orchestration import (
+    ReviewItem,
     apply_review_decision,
     apply_review_dict_classes,
     classify_score_with_thresholds,
@@ -13,6 +14,7 @@ from part_io.services.review_orchestration import (
     episode_to_review_dict,
     next_uncertain_episode_kind,
     reclassify_all_episodes,
+    sort_by_expected_savings,
     undo_review_decision,
 )
 
@@ -472,3 +474,47 @@ class TestApplyAndUndoReviewDecision:
 
         assert episode["close_candidates"][0].get("label") is None
         assert close_pos == []
+
+
+class TestSortByExpectedSavings:
+    def test_mid_zone_candidate_ranked_first(self) -> None:
+        # Tight positive cluster at 0.92–0.96, tight negative cluster at 0.50–0.54.
+        # θ⁺≈0.947, θ⁻≈0.514. Three uncertain candidates: near θ⁺ (0.91), mid-zone (0.70),
+        # near θ⁻ (0.60). Approving the mid-zone candidate (0.70) collapses θ⁺ to ~0.836,
+        # auto-classifying the near-positive (0.91) as positive — highest expected savings.
+        positives = [{"score": s} for s in [0.92, 0.93, 0.94, 0.95, 0.96]]
+        negatives = [{"score": s} for s in [0.50, 0.51, 0.52, 0.53, 0.54]]
+
+        items = [
+            ReviewItem(stem="ep_high", kind="open", candidate_idx=0, score=0.91),
+            ReviewItem(stem="ep_mid", kind="open", candidate_idx=0, score=0.70),
+            ReviewItem(stem="ep_low", kind="open", candidate_idx=0, score=0.60),
+        ]
+        sorted_items = sort_by_expected_savings(items, positives, negatives, [], [])
+        assert sorted_items[0].stem == "ep_mid"  # highest cascade savings
+        assert sorted_items[2].stem == "ep_high"  # lowest — approval barely moves θ⁺
+
+    def test_intro_outro_appended_after_open_close(self) -> None:
+        items = [
+            ReviewItem(stem="ep_intro", kind="intro", candidate_idx=0, score=0.9),
+            ReviewItem(stem="ep_open", kind="open", candidate_idx=0, score=0.85),
+            ReviewItem(stem="ep_outro", kind="outro", candidate_idx=0, score=0.7),
+            ReviewItem(stem="ep_close", kind="close", candidate_idx=0, score=0.80),
+        ]
+        positives = [{"score": 0.95}, {"score": 0.90}]
+        sorted_items = sort_by_expected_savings(items, positives, [], positives, [])
+        kinds = [i.kind for i in sorted_items]
+        # All open/close precede all intro/outro
+        last_global = max(i for i, k in enumerate(kinds) if k in ("open", "close"))
+        first_local = min(i for i, k in enumerate(kinds) if k in ("intro", "outro"))
+        assert last_global < first_local
+
+    def test_no_confirmed_samples_falls_back_gracefully(self) -> None:
+        # With no positives/negatives, zone is infinite; p_approve defaults to 0.5,
+        # all savings are 0 — function should not raise and preserve relative order.
+        items = [
+            ReviewItem(stem="ep_a", kind="open", candidate_idx=0, score=0.9),
+            ReviewItem(stem="ep_b", kind="open", candidate_idx=0, score=0.7),
+        ]
+        result = sort_by_expected_savings(items, [], [], [], [])
+        assert len(result) == 2
