@@ -151,7 +151,6 @@ def detect_top_matches(
     detector: Callable[..., Sequence[MatchLike]],
     source_path: Path,
     sample_path: Path | None,
-    kind: str = "",
     score_threshold: float,
     step_seconds: float,
     max_matches: int,
@@ -163,7 +162,6 @@ def detect_top_matches(
     matches = detector(
         source_path=source_path,
         sample_path=sample_path,
-        kind=kind,
         score_threshold=score_threshold,
         step_seconds=step_seconds,
     )
@@ -204,7 +202,6 @@ def run_detection_batch_jobs(
                 detector=detector,
                 source_path=job.source_path,
                 sample_path=job.sample_path,
-                kind=job.kind,
                 score_threshold=0.0,
                 step_seconds=step_seconds,
                 max_matches=max_matches,

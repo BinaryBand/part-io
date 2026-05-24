@@ -116,19 +116,13 @@ def _detect_batch(
     }
 
     def _detector(
-        *,
-        source_path: Path,
-        sample_path: Path | None,
-        kind: str = "",
-        score_threshold: float,
-        step_seconds: float,
+        *, source_path: Path, sample_path: Path | None, score_threshold: float, step_seconds: float
     ) -> list[AudioMatch]:
-        path_kind = path_to_kind.get(sample_path, "") if sample_path is not None else ""
-        resolved_kind = kind or path_kind
-        if resolved_kind and resolved_kind in profile_map:
+        kind = path_to_kind.get(sample_path, "") if sample_path is not None else ""
+        if kind and kind in profile_map:
             matches = find_audio_sample_matches_from_profile(
                 source_path=source_path,
-                reference=profile_map[resolved_kind],
+                reference=profile_map[kind],
                 score_threshold=score_threshold,
                 step_seconds=step_seconds,
                 profile_cache_dir=profile_cache_dir,
