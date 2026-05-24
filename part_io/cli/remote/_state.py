@@ -65,7 +65,6 @@ class _Match:
 
 @dataclass
 class EpisodeState:
-    source: str = ""
     source_hash: str | None = None  # SHA-256 of first 64 KB of source; None means unverified
     candidates: dict[str, list[_Match]] = field(
         default_factory=lambda: {kind: [] for kind in _AUDIO_KINDS}
@@ -90,7 +89,6 @@ class EpisodeState:
         intro_class: str = _UND,
         outro_class: str = _UND,
     ) -> None:
-        self.source = source
         self.source_hash = source_hash
         self.cut = cut
         self.candidates = {kind: [] for kind in _AUDIO_KINDS}
@@ -322,7 +320,6 @@ def _load_target(raw: dict) -> TargetState:
 def _load_episode(raw: dict) -> EpisodeState:
     raw_hash = raw.get("source_hash")
     ep = EpisodeState(
-        source=str(raw.get("source", "")),
         source_hash=str(raw_hash) if raw_hash is not None else None,
         cut=bool(raw.get("cut", False)),
     )
@@ -411,7 +408,7 @@ def _migrate_old_episode(
     close_target: TargetState,
 ) -> EpisodeState:
     """Convert one old-format episode (match lists + approved/rejected) to new format."""
-    ep = EpisodeState(source=source, cut=bool(ep_raw.get("cut", False)))
+    ep = EpisodeState(cut=bool(ep_raw.get("cut", False)))
     for kind, matches_key, approved_key, rejected_key, target in [
         ("open", "open_matches", "open_approved", "open_rejected", open_target),
         ("close", "close_matches", "close_approved", "close_rejected", close_target),
@@ -543,7 +540,6 @@ class PipelineState:
             lines += [f"\n[targets.{kind}]\n", f"positives = [{pos}]\n", f"negatives = [{neg}]\n"]
         for stem, ep in sorted(self.episodes.items()):
             lines.append(f'\n[episodes."{stem}"]\n')
-            lines.append(f"source           = {json.dumps(ep.source)}\n")
             if ep.source_hash is not None:
                 lines.append(f"source_hash      = {json.dumps(ep.source_hash)}\n")
             for kind in _AUDIO_KINDS:

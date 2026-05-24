@@ -24,7 +24,6 @@ class MatchLike(Protocol):
 class EpisodeStateLike(Protocol):
     """Structural episode state shape needed for detection mutations."""
 
-    source: str
     open_candidates: list[Any]
     open_class: str
     close_candidates: list[Any]
@@ -283,7 +282,6 @@ def apply_batch_result_to_episode(
     undetected_label: str,
 ) -> tuple[str, str | None]:
     """Apply one detection result to episode state and return (score_str, error_msg)."""
-    episode_state.source = str(result.source_path)
     matches = [match_factory(match) for match in result.matches]
 
     if result.kind == "open":

@@ -79,7 +79,6 @@ def _process_detection_results(
         if error_msg:
             _emit(error_msg)
         source_path = ep_by_stem[stem]
-        ep_state.source = str(source_path)
         try:
             ep_state.source_hash = partial_file_hash(source_path)
         except OSError:

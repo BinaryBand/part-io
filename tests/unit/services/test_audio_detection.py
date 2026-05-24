@@ -219,7 +219,6 @@ def test_apply_batch_result_to_episode_sets_open_fields(tmp_path: Path) -> None:
 
     assert error_msg is None
     assert score_str == "0.9000"
-    assert episode.source == str(source)
     assert episode.open_class == "uncertain"
     assert episode.open_candidates == [(0.9, 1.0, 2.0)]
 

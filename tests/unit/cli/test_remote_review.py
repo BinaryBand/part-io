@@ -68,7 +68,6 @@ def test_reclassify_all_promotes_uncertain_when_score_clears_threshold() -> None
 def test_run_quiz_approve_counts_and_saves(tmp_path: Path, monkeypatch) -> None:
     state = PipelineState()
     ep = state.episode("ep001")
-    ep.source = str(tmp_path / "ep001.mp3")
     ep.open_candidates = [_Match(score=0.9, start=5.0, end=6.0)]
     ep.open_class = "uncertain"
 
@@ -98,6 +97,7 @@ def test_run_quiz_approve_counts_and_saves(tmp_path: Path, monkeypatch) -> None:
             "outro": tmp_path / "outro.mp3",
         },
         state_path=tmp_path / "state.toml",
+        remote_dir=tmp_path,
     )
 
     assert decisions == 1
@@ -109,7 +109,6 @@ def test_run_quiz_approve_counts_and_saves(tmp_path: Path, monkeypatch) -> None:
 def test_run_quiz_keyboard_interrupt_returns_interrupted(tmp_path: Path, monkeypatch) -> None:
     state = PipelineState()
     ep = state.episode("ep001")
-    ep.source = str(tmp_path / "ep001.mp3")
     ep.open_candidates = [_Match(score=0.9, start=5.0, end=6.0)]
     ep.open_class = "uncertain"
 
@@ -132,6 +131,7 @@ def test_run_quiz_keyboard_interrupt_returns_interrupted(tmp_path: Path, monkeyp
             "outro": tmp_path / "outro.mp3",
         },
         state_path=tmp_path / "state.toml",
+        remote_dir=tmp_path,
     )
 
     assert decisions == 0
@@ -142,7 +142,6 @@ def test_run_quiz_keyboard_interrupt_returns_interrupted(tmp_path: Path, monkeyp
 def test_run_quiz_rejected_uncertain_candidate_marked_skipped(tmp_path: Path, monkeypatch) -> None:
     state = PipelineState()
     ep = state.episode("ep001")
-    ep.source = str(tmp_path / "ep001.mp3")
     ep.open_candidates = [_Match(score=0.9, start=5.0, end=6.0)]
     ep.open_class = "uncertain"
 
@@ -168,6 +167,7 @@ def test_run_quiz_rejected_uncertain_candidate_marked_skipped(tmp_path: Path, mo
             "outro": tmp_path / "outro.mp3",
         },
         state_path=tmp_path / "state.toml",
+        remote_dir=tmp_path,
     )
 
     assert decisions == 1

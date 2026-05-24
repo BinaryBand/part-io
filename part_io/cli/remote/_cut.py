@@ -205,17 +205,14 @@ def _cut_cuttable(
     ]
     n_cut = n_skipped = n_failed = 0
     for stem, ep_state in sorted(cuttable):
-        if ep_state.source:
-            source = Path(ep_state.source)
-        else:
-            source = next(
-                (
-                    remote_dir / f"{stem}{ext}"
-                    for ext in audio_extensions
-                    if (remote_dir / f"{stem}{ext}").exists()
-                ),
-                remote_dir / f"{stem}.mp3",
-            )
+        source = next(
+            (
+                remote_dir / f"{stem}{ext}"
+                for ext in audio_extensions
+                if (remote_dir / f"{stem}{ext}").exists()
+            ),
+            remote_dir / f"{stem}.mp3",
+        )
         if not source.exists():
             _emit(f"SKIP {stem}: source not found at {source}")
             n_skipped += 1

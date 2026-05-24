@@ -185,15 +185,24 @@ def _undo_last_review(state: PipelineState, history: list[UndoEntry]) -> None:
     _emit(f"\nundone ({entry.action} {entry.kind} for {entry.stem[:16]})")
 
 
+def _resolve_episode_source(stem: str, remote_dir: Path) -> Path:
+    for ext in (".mp3", ".opus"):
+        candidate = remote_dir / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    return remote_dir / f"{stem}.mp3"
+
+
 def _review_candidate(
     state: PipelineState,
     item: ReviewItem,
     *,
     snippets: dict[str, Path],
     history: list[UndoEntry],
+    remote_dir: Path,
 ) -> str:
     ep_state = state.episodes[item.stem]
-    source = Path(ep_state.source)
+    source = _resolve_episode_source(item.stem, remote_dir)
     snippet = snippets.get(item.kind)
     all_candidates = ep_state.candidates_for(item.kind)
     prev_class = ep_state.class_for(item.kind)
@@ -265,6 +274,7 @@ def _review_one_target(
     *,
     snippets: dict[str, Path],
     history: list[UndoEntry],
+    remote_dir: Path,
 ) -> str:
     ep_state = state.episodes[stem]
     all_candidates = ep_state.candidates_for(kind)
@@ -276,6 +286,7 @@ def _review_one_target(
         item,
         snippets=snippets,
         history=history,
+        remote_dir=remote_dir,
     )
     return "classified" if result in ("approved", "rejected") else result
 
@@ -285,6 +296,7 @@ def _run_review_loop(
     *,
     snippets: dict[str, Path],
     state_path: Path,
+    remote_dir: Path,
     max_decisions: int | None = None,
 ) -> None:
     history: list[UndoEntry] = []
@@ -312,6 +324,7 @@ def _run_review_loop(
             kind,
             snippets=snippets,
             history=history,
+            remote_dir=remote_dir,
         )
         if result == "classified":
             decisions += 1
@@ -342,6 +355,7 @@ def _run_quiz(
     *,
     snippets: dict[str, Path],
     state_path: Path,
+    remote_dir: Path,
     pre_skipped: set[tuple[str, str, int]] | None = None,
 ) -> tuple[int, bool, set[tuple[str, str, int]]]:
     history: list[UndoEntry] = []
@@ -375,6 +389,7 @@ def _run_quiz(
                 active,
                 snippets=snippets,
                 history=history,
+                remote_dir=remote_dir,
             )
         except KeyboardInterrupt:
             _emit("\nInterrupted. Progress saved.")

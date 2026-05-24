@@ -503,6 +503,7 @@ def _run_loop_until_clean(
                 quiz_items,
                 snippets=snippets,
                 state_path=state_path,
+                remote_dir=remote_dir,
                 pre_skipped=session_skipped,
             )
             session_skipped |= new_skipped
@@ -604,6 +605,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
         state,
         snippets=review_snippets,
         state_path=state_path,
+        remote_dir=remote_dir,
     )
 
 
