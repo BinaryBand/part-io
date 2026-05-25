@@ -20,23 +20,36 @@ Install dependencies:
 poetry install
 ```
 
-Detect and review (interactive):
+Stage 1: pre-cache profiles (background by default):
 
 ```bash
-poetry run part-io-tasks remote-loop <REMOTE_DIR> \
- --snippets-dir snippets --open-sample open.mp3 --close-sample close.mp3
+poetry run part-io-tasks remote-precache <REMOTE_DIR>
 ```
 
-Detect-only (non-interactive):
+Run in the foreground when desired:
 
 ```bash
-poetry run part-io-tasks remote-loop <REMOTE_DIR> --no-interactive
+poetry run part-io-tasks remote-precache <REMOTE_DIR> --no-background
 ```
 
-Run a cut pass (write to a staging directory):
+Stage 2: prepare quiz candidates (`precache` side effect included):
 
 ```bash
-poetry run part-io-tasks remote-loop <REMOTE_DIR> --output-dir staging --yes
+poetry run part-io-tasks remote-prep-quiz <REMOTE_DIR> \
+ --open-seed downloads/snippets/open.mp3 \
+ --close-seed downloads/snippets/close.mp3
+```
+
+Stage 3: run interactive quiz and save labels:
+
+```bash
+poetry run part-io-tasks remote-prep-cut <REMOTE_DIR>
+```
+
+Stage 4: execute cut pass (background by default):
+
+```bash
+poetry run part-io-tasks remote-execute-cut <REMOTE_DIR> --output-dir staging --yes
 ```
 
 Preview and promote staged replacements:
@@ -46,17 +59,11 @@ poetry run part-io-tasks remote-promote staging <REMOTE_DIR> --dry-run
 poetry run part-io-tasks remote-promote staging <REMOTE_DIR>
 ```
 
-Start a background pre-cache worker (builds spectral profiles):
-
-```bash
-poetry run part-io-tasks remote-precache-start <REMOTE_DIR> --sleep 10
-poetry run part-io-tasks remote-precache-status <REMOTE_DIR>
-poetry run part-io-tasks remote-precache-stop <REMOTE_DIR>
-```
+Disable background mode for prep/cut stages with `--no-background`.
 
 Notes:
 
-- A `__state__.toml` file is created under the target directory to persist detection and review state across runs. Deleting it resets state.
+- A `__state__.toml` file is created under the target directory to persist detection and quiz state across runs. Deleting it resets state.
 - Never set `--output-dir` to the same directory as the input; ffmpeg cannot atomically read-and-write the same file.
 
 ## Development
@@ -78,8 +85,9 @@ poetry run python -m part_io.cli.lint.semgrep
 Run a single command directly via the module (alternate to `part-io-tasks`):
 
 ```bash
-poetry run python -m part_io.cli.remote_pipeline review <REMOTE_DIR> \
- --snippets-dir snippets --open-sample open.mp3 --close-sample close.mp3
+poetry run python -m part_io.cli.remote_pipeline prep-quiz <REMOTE_DIR> \
+ --open-seed downloads/snippets/open.mp3 \
+ --close-seed downloads/snippets/close.mp3
 ```
 
 ## Contributing
