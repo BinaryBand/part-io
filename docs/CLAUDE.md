@@ -54,7 +54,7 @@ Enforced by `tests/architecture/test_architecture_guardrails.py` (AST scan).
 
 Current registered entrypoints:
 
-- `cli/tasks.py`, `cli/generate/tasks.py`
+- `cli/tasks.py`
 - `cli/audio_search.py`, `cli/audio_review.py`, `cli/audio_review_batch.py`
 - `cli/audio_detect_ads.py`, `cli/audio_detect_ads_batch.py`
 - `cli/audio_ad_detect.py`, `cli/audio_ad_remove.py`

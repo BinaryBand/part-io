@@ -9,6 +9,8 @@ import pytest
 
 from part_io.adapters.audio.snippet_profile import decode_matrix, encode_matrix
 from part_io.cli.remote._state import (
+    CutConfig,
+    DetectSettings,
     EpisodeState,
     PipelineState,
     RunSettings,
@@ -244,12 +246,8 @@ class TestPipelineStateRoundTrip:
     def _make_state(self) -> PipelineState:
         state = PipelineState()
         state.settings = RunSettings(
-            step_seconds=0.05,
-            workers=4,
-            max_matches=5,
-            min_gap=-10.0,
-            max_gap=250.0,
-            fade=0.3,
+            detect=DetectSettings(step_seconds=0.05, workers=4, max_matches=5),
+            cut=CutConfig(min_gap=-10.0, max_gap=250.0, fade=0.3),
             quiz_size=8,
         )
         state.open_target = TargetState(
@@ -283,12 +281,12 @@ class TestPipelineStateRoundTrip:
         state = self._make_state()
         state.save(path)
         r = PipelineState.load(path)
-        assert r.settings.step_seconds == pytest.approx(0.05)
-        assert r.settings.workers == 4
-        assert r.settings.max_matches == 5
-        assert r.settings.min_gap == pytest.approx(-10.0)
-        assert r.settings.max_gap == pytest.approx(250.0)
-        assert r.settings.fade == pytest.approx(0.3)
+        assert r.settings.detect.step_seconds == pytest.approx(0.05)
+        assert r.settings.detect.workers == 4
+        assert r.settings.detect.max_matches == 5
+        assert r.settings.cut.min_gap == pytest.approx(-10.0)
+        assert r.settings.cut.max_gap == pytest.approx(250.0)
+        assert r.settings.cut.fade == pytest.approx(0.3)
         assert r.settings.quiz_size == 8
 
     def test_open_target_positives_preserved(self, tmp_path: Path) -> None:

@@ -149,23 +149,29 @@ class EpisodeState:
 
 
 @dataclass
-class RunSettings:
+class DetectSettings:
     step_seconds: float = 0.1
     workers: int = 2
     max_matches: int = 3
+    overwrite: bool = False
+
+
+@dataclass
+class CutConfig:
     min_gap: float = -15.0
     max_gap: float = 300.0
-    ad_inclusive: bool = (
-        True  # include jingle audio in ad cut (open_start→close_end vs open_end→close_start)
-    )
-    intro_exclusive: bool = (
-        True  # trim to intro_start, keeping the intro jingle (False = trim to intro_end)
-    )
+    ad_inclusive: bool = True  # open_start→close_end; False = open_end→close_start
+    intro_exclusive: bool = True  # trim to intro_start; False = trim to intro_end
     fade: float = 0.5
-    quiz_size: int = 10
-    overwrite: bool = False
     output_dir: str = "downloads/remove"
     debug: bool = False
+
+
+@dataclass
+class RunSettings:
+    detect: DetectSettings = field(default_factory=DetectSettings)
+    cut: CutConfig = field(default_factory=CutConfig)
+    quiz_size: int = 10
 
 
 def _fmt_seg(s: Segment) -> str:
@@ -237,19 +243,25 @@ def _load_episode(raw: dict) -> EpisodeState:
 
 
 def _load_settings(raw: dict) -> RunSettings:
+    d = raw.get("detect", raw)  # fall back to flat raw for migration
+    c = raw.get("cut", raw)
     return RunSettings(
-        step_seconds=float(raw.get("step_seconds", 0.1)),
-        workers=int(raw.get("workers", 2)),
-        max_matches=int(raw.get("max_matches", 3)),
-        min_gap=float(raw.get("min_gap", -15.0)),
-        max_gap=float(raw.get("max_gap", 300.0)),
-        ad_inclusive=bool(raw.get("ad_inclusive", True)),
-        intro_exclusive=bool(raw.get("intro_exclusive", True)),
-        fade=float(raw.get("fade", 0.5)),
+        detect=DetectSettings(
+            step_seconds=float(d.get("step_seconds", 0.1)),
+            workers=int(d.get("workers", 2)),
+            max_matches=int(d.get("max_matches", 3)),
+            overwrite=bool(d.get("overwrite", False)),
+        ),
+        cut=CutConfig(
+            min_gap=float(c.get("min_gap", -15.0)),
+            max_gap=float(c.get("max_gap", 300.0)),
+            ad_inclusive=bool(c.get("ad_inclusive", True)),
+            intro_exclusive=bool(c.get("intro_exclusive", True)),
+            fade=float(c.get("fade", 0.5)),
+            output_dir=str(c.get("output_dir", "downloads/remove")),
+            debug=bool(c.get("debug", False)),
+        ),
         quiz_size=int(raw.get("quiz_size", 10)),
-        overwrite=bool(raw.get("overwrite", False)),
-        output_dir=str(raw.get("output_dir", "downloads/remove")),
-        debug=bool(raw.get("debug", False)),
     )
 
 
@@ -369,23 +381,26 @@ class PipelineState:
             "# Remote episode pipeline state.\n",
             "# Edit freely — delete this file to start fresh.\n",
         ]
-        settings = self.settings
-        setting_lines = ["\n[settings]\n"]
-        setting_lines += [
-            f"step_seconds = {settings.step_seconds:.6g}\n",
-            f"workers = {settings.workers}\n",
-            f"max_matches = {settings.max_matches}\n",
-            f"min_gap = {settings.min_gap:.6g}\n",
-            f"max_gap = {settings.max_gap:.6g}\n",
-            f"ad_inclusive = {str(settings.ad_inclusive).lower()}\n",
-            f"intro_exclusive = {str(settings.intro_exclusive).lower()}\n",
-            f"fade = {settings.fade:.6g}\n",
-            f"quiz_size = {settings.quiz_size}\n",
-            f"overwrite = {str(settings.overwrite).lower()}\n",
-            f"output_dir = {json.dumps(settings.output_dir)}\n",
-            f"debug = {str(settings.debug).lower()}\n",
+        s = self.settings
+        d = s.detect
+        c = s.cut
+        lines += [
+            "\n[settings]\n",
+            f"quiz_size = {s.quiz_size}\n",
+            "\n[settings.detect]\n",
+            f"step_seconds = {d.step_seconds:.6g}\n",
+            f"workers      = {d.workers}\n",
+            f"max_matches  = {d.max_matches}\n",
+            f"overwrite    = {str(d.overwrite).lower()}\n",
+            "\n[settings.cut]\n",
+            f"min_gap         = {c.min_gap:.6g}\n",
+            f"max_gap         = {c.max_gap:.6g}\n",
+            f"ad_inclusive    = {str(c.ad_inclusive).lower()}\n",
+            f"intro_exclusive = {str(c.intro_exclusive).lower()}\n",
+            f"fade            = {c.fade:.6g}\n",
+            f"output_dir      = {json.dumps(c.output_dir)}\n",
+            f"debug           = {str(c.debug).lower()}\n",
         ]
-        lines += setting_lines
         for kind, target in [("open", self.open_target), ("close", self.close_target)]:
             seen: set[tuple[str, float, float]] = set()
             deduped_pos: list[Segment] = []
@@ -474,6 +489,8 @@ __all__ = [
     "TargetState",
     "_Match",
     "EpisodeState",
+    "DetectSettings",
+    "CutConfig",
     "RunSettings",
     "PipelineState",
     "_fmt_seg",

@@ -145,46 +145,47 @@ def _resolve_opt(cli_value: _T | None, state_value: _T) -> _T:
 
 
 def _apply_sticky_review_args(args: argparse.Namespace, state: PipelineState) -> None:
-    s = state.settings
-    args.step_seconds = float(_resolve_opt(args.step_seconds, s.step_seconds))
-    args.workers = int(_resolve_opt(args.workers, s.workers))
-    args.max_matches = int(_resolve_opt(args.max_matches, s.max_matches))
+    d = state.settings.detect
+    args.step_seconds = float(_resolve_opt(args.step_seconds, d.step_seconds))
+    args.workers = int(_resolve_opt(args.workers, d.workers))
+    args.max_matches = int(_resolve_opt(args.max_matches, d.max_matches))
     # no_interactive is a session flag — never sticky; always use CLI value (default False)
     args.no_interactive = bool(args.no_interactive)
-    args.overwrite = bool(_resolve_opt(args.overwrite, s.overwrite))
+    args.overwrite = bool(_resolve_opt(args.overwrite, d.overwrite))
 
-    s.step_seconds = args.step_seconds
-    s.workers = args.workers
-    s.max_matches = args.max_matches
-    s.overwrite = args.overwrite
+    d.step_seconds = args.step_seconds
+    d.workers = args.workers
+    d.max_matches = args.max_matches
+    d.overwrite = args.overwrite
 
 
 def _apply_sticky_cut_args(args: argparse.Namespace, state: PipelineState) -> None:
-    s = state.settings
-    args.output_dir = Path(_resolve_opt(args.output_dir, s.output_dir))
-    args.min_gap = float(_resolve_opt(args.min_gap, s.min_gap))
-    args.max_gap = float(_resolve_opt(args.max_gap, s.max_gap))
+    c = state.settings.cut
+    args.output_dir = Path(_resolve_opt(args.output_dir, c.output_dir))
+    args.min_gap = float(_resolve_opt(args.min_gap, c.min_gap))
+    args.max_gap = float(_resolve_opt(args.max_gap, c.max_gap))
     # yes/dry_run are session flags — never sticky; always use CLI value (default False)
     args.yes = bool(args.yes)
     args.dry_run = bool(args.dry_run)
-    args.inclusive = bool(_resolve_opt(args.inclusive, s.ad_inclusive))
-    args.fade = float(_resolve_opt(args.fade, s.fade))
+    args.inclusive = bool(_resolve_opt(args.inclusive, c.ad_inclusive))
+    args.fade = float(_resolve_opt(args.fade, c.fade))
 
-    s.output_dir = str(args.output_dir)
-    s.min_gap = args.min_gap
-    s.max_gap = args.max_gap
-    s.ad_inclusive = args.inclusive
-    s.fade = args.fade
+    c.output_dir = str(args.output_dir)
+    c.min_gap = args.min_gap
+    c.max_gap = args.max_gap
+    c.ad_inclusive = args.inclusive
+    c.fade = args.fade
 
 
 def _apply_sticky_loop_args(args: argparse.Namespace, state: PipelineState) -> None:
     _apply_sticky_review_args(args, state)
     _apply_sticky_cut_args(args, state)
     s = state.settings
+    c = s.cut
     args.quiz_size = int(_resolve_opt(args.quiz_size, s.quiz_size))
-    args.debug = bool(_resolve_opt(args.debug, s.debug))
+    args.debug = bool(_resolve_opt(args.debug, c.debug))
     s.quiz_size = args.quiz_size
-    s.debug = args.debug
+    c.debug = args.debug
 
 
 # Cut helpers moved to part_io.cli.remote._cut
@@ -399,7 +400,7 @@ def _run_loop_until_clean(
             exclude_decided=session_skipped,
         )
         n_remain_undet, n_remain_unc, n_remain_cut = _loop_work_counts(state, all_full)
-        if not n_remain_undet and not n_remain_unc and (not n_remain_cut or dry_run):
+        if not n_remain_undet and not n_remain_unc and not n_remain_cut:
             _emit("\nDirectory is clean.")
             return
 
@@ -447,7 +448,10 @@ def _run_loop_until_clean(
             print(f"Cut: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
         if n_failed:
             sys.exit(1)
-        if not n_remain_undet and not n_remain_unc and (not n_remain_cut or dry_run):
+        if dry_run and not n_remain_undet and not n_remain_unc:
+            _emit("Dry-run pass complete.")
+            return
+        if not n_remain_undet and not n_remain_unc and not n_remain_cut:
             _emit("Directory is clean.")
             return
 
@@ -549,7 +553,7 @@ def _cmd_cut(args: argparse.Namespace) -> None:
         yes=args.yes,
         dry_run=args.dry_run,
         ad_inclusive=args.inclusive,
-        intro_exclusive=state.settings.intro_exclusive,
+        intro_exclusive=state.settings.cut.intro_exclusive,
         fade_dur=args.fade,
     )
     n_cut, n_skipped, n_failed = _cut_cuttable(
@@ -618,7 +622,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             yes=args.yes,
             dry_run=args.dry_run,
             ad_inclusive=args.inclusive,
-            intro_exclusive=state.settings.intro_exclusive,
+            intro_exclusive=state.settings.cut.intro_exclusive,
             fade_dur=args.fade,
             debug=args.debug,
         )
@@ -641,7 +645,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         yes=args.yes,
         dry_run=args.dry_run,
         ad_inclusive=args.inclusive,
-        intro_exclusive=state.settings.intro_exclusive,
+        intro_exclusive=state.settings.cut.intro_exclusive,
         fade_dur=args.fade,
         debug=args.debug,
     )

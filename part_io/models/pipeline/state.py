@@ -43,23 +43,39 @@ class TargetStateModel(BaseModel):
     negatives: list[SegmentModel] = Field(default_factory=list)
 
 
-class RunSettingsModel(BaseModel):
-    """Operational settings persisted in ``[settings]``."""
+class DetectSettingsModel(BaseModel):
+    """Detection settings persisted in ``[settings.detect]``."""
 
     model_config = ConfigDict(extra="forbid")
 
     step_seconds: float = 0.1
     workers: int = 2
     max_matches: int = 3
+    overwrite: bool = False
+
+
+class CutConfigModel(BaseModel):
+    """Cut parameters persisted in ``[settings.cut]``."""
+
+    model_config = ConfigDict(extra="forbid")
+
     min_gap: float = -15.0
     max_gap: float = 300.0
     ad_inclusive: bool = True
     intro_exclusive: bool = True
     fade: float = 0.5
-    quiz_size: int = 10
-    overwrite: bool = False
     output_dir: str = "downloads/remove"
     debug: bool = False
+
+
+class RunSettingsModel(BaseModel):
+    """Operational settings persisted in ``[settings]``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    quiz_size: int = 10
+    detect: DetectSettingsModel = Field(default_factory=DetectSettingsModel)
+    cut: CutConfigModel = Field(default_factory=CutConfigModel)
 
 
 class EpisodeStateModel(BaseModel):

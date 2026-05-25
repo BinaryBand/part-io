@@ -1,5 +1,76 @@
 {
   "$defs": {
+    "CutConfigModel": {
+      "additionalProperties": false,
+      "description": "Cut parameters persisted in ``[settings.cut]``.",
+      "properties": {
+        "ad_inclusive": {
+          "default": true,
+          "title": "Ad Inclusive",
+          "type": "boolean"
+        },
+        "debug": {
+          "default": false,
+          "title": "Debug",
+          "type": "boolean"
+        },
+        "fade": {
+          "default": 0.5,
+          "title": "Fade",
+          "type": "number"
+        },
+        "intro_exclusive": {
+          "default": true,
+          "title": "Intro Exclusive",
+          "type": "boolean"
+        },
+        "max_gap": {
+          "default": 300.0,
+          "title": "Max Gap",
+          "type": "number"
+        },
+        "min_gap": {
+          "default": -15.0,
+          "title": "Min Gap",
+          "type": "number"
+        },
+        "output_dir": {
+          "default": "downloads/remove",
+          "title": "Output Dir",
+          "type": "string"
+        }
+      },
+      "title": "CutConfigModel",
+      "type": "object"
+    },
+    "DetectSettingsModel": {
+      "additionalProperties": false,
+      "description": "Detection settings persisted in ``[settings.detect]``.",
+      "properties": {
+        "max_matches": {
+          "default": 3,
+          "title": "Max Matches",
+          "type": "integer"
+        },
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
+          "type": "boolean"
+        },
+        "step_seconds": {
+          "default": 0.1,
+          "title": "Step Seconds",
+          "type": "number"
+        },
+        "workers": {
+          "default": 2,
+          "title": "Workers",
+          "type": "integer"
+        }
+      },
+      "title": "DetectSettingsModel",
+      "type": "object"
+    },
     "EpisodeStateModel": {
       "additionalProperties": false,
       "description": "Detection state for one episode.",
@@ -98,64 +169,15 @@
       "additionalProperties": false,
       "description": "Operational settings persisted in ``[settings]``.",
       "properties": {
-        "ad_inclusive": {
-          "default": true,
-          "title": "Ad Inclusive",
-          "type": "boolean"
+        "cut": {
+          "$ref": "#/$defs/CutConfigModel"
         },
-        "debug": {
-          "default": false,
-          "title": "Debug",
-          "type": "boolean"
-        },
-        "fade": {
-          "default": 0.5,
-          "title": "Fade",
-          "type": "number"
-        },
-        "intro_exclusive": {
-          "default": true,
-          "title": "Intro Exclusive",
-          "type": "boolean"
-        },
-        "max_gap": {
-          "default": 300.0,
-          "title": "Max Gap",
-          "type": "number"
-        },
-        "max_matches": {
-          "default": 3,
-          "title": "Max Matches",
-          "type": "integer"
-        },
-        "min_gap": {
-          "default": -15.0,
-          "title": "Min Gap",
-          "type": "number"
-        },
-        "output_dir": {
-          "default": "downloads/remove",
-          "title": "Output Dir",
-          "type": "string"
-        },
-        "overwrite": {
-          "default": false,
-          "title": "Overwrite",
-          "type": "boolean"
+        "detect": {
+          "$ref": "#/$defs/DetectSettingsModel"
         },
         "quiz_size": {
           "default": 10,
           "title": "Quiz Size",
-          "type": "integer"
-        },
-        "step_seconds": {
-          "default": 0.1,
-          "title": "Step Seconds",
-          "type": "number"
-        },
-        "workers": {
-          "default": 2,
-          "title": "Workers",
           "type": "integer"
         }
       },

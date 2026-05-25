@@ -35,13 +35,6 @@ def _run_module(module: str) -> int:
     return _run_cmd([sys.executable, "-m", module])
 
 
-def _add_profile_arg(cmd: list[str], profile: str | None) -> list[str]:
-    """Return *cmd* with optional profile argument appended."""
-    if profile:
-        return [*cmd, "--profile", profile]
-    return cmd
-
-
 def _print_help() -> None:
     """Print available commands and declared lint tasks."""
     print("Available commands:")
@@ -59,8 +52,6 @@ def _print_help() -> None:
     print("  remote-precache     Pre-warm spectral profile cache for all episodes overnight")
     print("  remote-promote      Safely replace remote files with staged cleaned versions")
     print("  compile         Generate Pydantic model schemas into part_io/models/schemas")
-    print("  generate-tasks  Regenerate config/generated.mk")
-    print("  check-tasks     Verify config/generated.mk is current")
     print("  lint            Run declared lint tasks")
     print("  clean           Remove caches and build artifacts")
 
@@ -115,14 +106,6 @@ def _run_lint(
     )
 
     return exit_code
-
-
-def _run_generate_tasks(profile: str | None, *, check: bool = False) -> int:
-    """Run task-target generation command with optional profile."""
-    cmd = _add_profile_arg([sys.executable, "-m", "part_io.cli.generate.tasks"], profile)
-    if check:
-        cmd.append("--check")
-    return _run_cmd(cmd)
 
 
 def _remove_tree(path: Path) -> None:
@@ -183,10 +166,6 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("test")
     for cmd in sorted(_PASSTHROUGH_CMDS):
         sub.add_parser(cmd, add_help=False)
-    generate = sub.add_parser("generate-tasks")
-    generate.add_argument("--profile", help="Registry profile to generate task targets for")
-    check = sub.add_parser("check-tasks")
-    check.add_argument("--profile", help="Registry profile to check generated task targets for")
     lint = sub.add_parser("lint")
     lint.add_argument("--profile", help="Registry profile to run when targets are not specified")
     lint.add_argument("--report-json", type=Path, help="Write lint execution report to JSON file")
@@ -226,11 +205,7 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace, extra: 
     if args.command == "remote-promote":
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_promote", *extra]))
     if args.command == "compile":
-        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.compile", *extra]))
-    if args.command == "generate-tasks":
-        sys.exit(_run_generate_tasks(args.profile))
-    if args.command == "check-tasks":
-        sys.exit(_run_generate_tasks(args.profile, check=True))
+        sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.generate.compile", *extra]))
     if args.command == "lint":
         sys.exit(_run_lint(args.targets, profile=args.profile, report_json=args.report_json))
     if args.command == "clean":

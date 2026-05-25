@@ -11,7 +11,7 @@ from part_io.adapters.audio.matcher import AudioMatch
 from part_io.adapters.process.runner import run_resolved
 from part_io.cli.audio_ad_remove import _build_filter_complex, _run_ffmpeg
 from part_io.cli.remote._review import _emit, _getch
-from part_io.cli.remote._state import _POS, EpisodeState, PipelineState, _Match
+from part_io.cli.remote._state import _NEG, EpisodeState, PipelineState, _Match
 from part_io.services.cut_planning import build_cut_plan
 
 
@@ -50,10 +50,10 @@ def _find_best_pair(
 ) -> list[AdSegment] | None:
     """Pass all open/close candidates to pair_ad_segments; return all valid pairs or None."""
     open_candidates = [
-        candidate for candidate in ep_state.candidates_for("open") if candidate.label == _POS
+        candidate for candidate in ep_state.candidates_for("open") if candidate.label != _NEG
     ]
     close_candidates = [
-        candidate for candidate in ep_state.candidates_for("close") if candidate.label == _POS
+        candidate for candidate in ep_state.candidates_for("close") if candidate.label != _NEG
     ]
     if not open_candidates or not close_candidates:
         return None

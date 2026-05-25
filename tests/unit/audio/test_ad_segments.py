@@ -219,16 +219,18 @@ def test_pair_ad_segments_close_too_far_is_skipped() -> None:
 
 
 def test_pair_ad_segments_each_close_used_at_most_once() -> None:
-    # Two opens both in range of the same close — first open wins
+    # Two opens both in range of the same close.
+    # The optimal algorithm chooses the one that minimizes the gap (the closest one).
     opens = [_match(100.0), _match(120.0)]
     closes = [_match(200.0)]
 
     segments, unpaired_opens, unpaired_closes = pair_ad_segments(opens, closes)
 
     assert len(segments) == 1
-    assert segments[0].open_start == 100.0
+    # Under gap minimization, open_start = 120 (gap = 70) beats open_start = 100 (gap = 90)
+    assert segments[0].open_start == 120.0
     assert len(unpaired_opens) == 1
-    assert unpaired_opens[0].start_seconds == 120.0
+    assert unpaired_opens[0].start_seconds == 100.0
 
 
 def test_pair_ad_segments_returns_gap_seconds() -> None:

@@ -506,7 +506,7 @@ def find_audio_sample_matches(
 
     sample_rate = _ANALYSIS_RATE
     frame_hop_seconds = _HOP_SIZE / sample_rate
-    hop = max(1, int(step_seconds / frame_hop_seconds))
+    hop = max(1, round(step_seconds / frame_hop_seconds))
     n_steps = max(0, (source_profile.shape[0] - reference.shape[0] + 1 + hop - 1) // hop)
     _LOG.info(
         "  [search] %s  source=%s  sample=%.1fs  steps=%d",
@@ -671,7 +671,7 @@ def find_audio_sample_matches_from_profile(
         source_profile = full_profile
         frame_offset_seconds = 0.0
 
-    hop = max(1, int(step_seconds / frame_hop_seconds))
+    hop = max(1, round(step_seconds / frame_hop_seconds))
     n_steps = max(0, (source_profile.shape[0] - reference.shape[0] + 1 + hop - 1) // hop)
     _LOG.info(
         "  [search] consensus  source=%s  sample=%.1fs  steps=%d",

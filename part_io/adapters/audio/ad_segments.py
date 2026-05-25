@@ -90,49 +90,71 @@ def pair_ad_segments(
     min_gap: float = 10.0,
     max_gap: float = 600.0,
 ) -> tuple[list[AdSegment], list[AudioMatch], list[AudioMatch]]:
-    """Greedily pair each open with the nearest following eligible close.
+    """Optimally pair opens and closes to maximize the total number of valid segments.
 
-    Returns ``(segments, unpaired_opens, unpaired_closes)``.  An open is
-    skipped (added to *unpaired_opens*) when no close falls within
-    ``[min_gap, max_gap]`` seconds after the open's end.  Consumed closes are
-    removed from further consideration so each close matches at most one open.
+    Returns ``(segments, unpaired_opens, unpaired_closes)``. When multiple pairings
+    yield the same maximum number of valid ad breaks, the configuration that minimizes
+    the total gap durations is chosen. This prevents an orphaned open from "stealing"
+    a close that better completes a subsequent ad break.
     """
     sorted_opens = sorted(opens, key=lambda m: m.start_seconds)
-    available_closes = sorted(closes, key=lambda m: m.start_seconds)
+    sorted_closes = sorted(closes, key=lambda m: m.start_seconds)
 
-    segments: list[AdSegment] = []
-    unpaired_opens: list[AudioMatch] = []
+    n_o = len(sorted_opens)
+    n_c = len(sorted_closes)
 
-    for open_match in sorted_opens:
-        best: AudioMatch | None = None
-        for close_match in available_closes:
-            if close_match.start_seconds <= open_match.start_seconds:
-                continue  # close must begin after the open begins
-            gap = close_match.start_seconds - open_match.end_seconds
-            if gap < min_gap:
-                continue
-            if gap > max_gap:
-                break
-            best = close_match
-            break
+    # dp[i][j] = (max_pairs, min_total_gap, list_of_index_pairs)
+    dp: list[list[tuple[int, float, list[tuple[int, int]]]]] = [
+        [(0, 0.0, []) for _ in range(n_c + 1)] for _ in range(n_o + 1)
+    ]
 
-        if best is None:
-            unpaired_opens.append(open_match)
-            continue
+    for i in range(n_o - 1, -1, -1):
+        for j in range(n_c - 1, -1, -1):
+            open_match = sorted_opens[i]
+            close_match = sorted_closes[j]
 
-        available_closes.remove(best)
+            # Option 1: skip open_match
+            best = dp[i + 1][j]
+
+            # Option 2: skip close_match
+            opt2 = dp[i][j + 1]
+            if opt2[0] > best[0] or (opt2[0] == best[0] and opt2[1] < best[1]):
+                best = opt2
+
+            # Option 3: pair them if valid
+            if close_match.start_seconds > open_match.start_seconds:
+                gap = close_match.start_seconds - open_match.end_seconds
+                if min_gap <= gap <= max_gap:
+                    sub_pairs, sub_cost, sub_choices = dp[i + 1][j + 1]
+                    opt3 = (sub_pairs + 1, sub_cost + gap, [(i, j)] + sub_choices)
+                    if opt3[0] > best[0] or (opt3[0] == best[0] and opt3[1] < best[1]):
+                        best = opt3
+
+            dp[i][j] = best
+
+    _, _, paired_indices = dp[0][0]
+    paired_o = {idx_o for idx_o, _ in paired_indices}
+    paired_c = {idx_c for _, idx_c in paired_indices}
+
+    segments = []
+    for idx_o, idx_c in paired_indices:
+        o_match = sorted_opens[idx_o]
+        c_match = sorted_closes[idx_c]
         segments.append(
             AdSegment(
-                open_start=open_match.start_seconds,
-                open_end=open_match.end_seconds,
-                close_start=best.start_seconds,
-                close_end=best.end_seconds,
-                open_score=open_match.score,
-                close_score=best.score,
+                open_start=o_match.start_seconds,
+                open_end=o_match.end_seconds,
+                close_start=c_match.start_seconds,
+                close_end=c_match.end_seconds,
+                open_score=o_match.score,
+                close_score=c_match.score,
             )
         )
 
-    return segments, unpaired_opens, list(available_closes)
+    unpaired_opens = [m for i, m in enumerate(sorted_opens) if i not in paired_o]
+    unpaired_closes = [m for i, m in enumerate(sorted_closes) if i not in paired_c]
+
+    return segments, unpaired_opens, unpaired_closes
 
 
 __all__ = ["AdSegment", "load_manifest_matches", "pair_ad_segments"]
