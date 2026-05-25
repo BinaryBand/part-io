@@ -365,10 +365,7 @@ class PipelineState:
 
     def save(self, path: Path) -> None:
         schema_path = (
-            Path(__file__).resolve().parents[2]
-            / "models"
-            / "schemas"
-            / "remote_pipeline_state.schema.json"
+            Path(__file__).resolve().parents[2] / "models" / "schemas" / "generic_state.schema.json"
         )
         try:
             schema_ref = os.path.relpath(schema_path, path.parent)
@@ -424,12 +421,16 @@ class PipelineState:
             band_count = width // 2
             lines.append("\n[[snippets]]\n")
             lines.append(f"name = {json.dumps(s.name)}\n")
-            lines.append("\n[snippets.profile]\n")
-            lines.append(f"n_frames      = {n_frames}\n")
-            lines.append(f"analysis_rate = {_ANALYSIS_RATE}\n")
-            lines.append(f"hop_size      = {_HOP_SIZE}\n")
-            lines.append(f"band_count    = {band_count}\n")
-            lines.append(f"data          = {json.dumps(encode_matrix(s.profile))}\n")
+            # Use inline table for profile to avoid validator ambiguity with repeated
+            # [snippets.profile] tables under [[snippets]] array entries.
+            lines.append(
+                "profile = "
+                f"{{n_frames = {n_frames}, "
+                f"analysis_rate = {_ANALYSIS_RATE}, "
+                f"hop_size = {_HOP_SIZE}, "
+                f"band_count = {band_count}, "
+                f"data = {json.dumps(encode_matrix(s.profile))}}}\n"
+            )
         for stem, ep in sorted(self.episodes.items()):
             lines.append(f'\n[episodes."{stem}"]\n')
             if ep.source_hash is not None:

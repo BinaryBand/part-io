@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import numpy as np
@@ -87,7 +87,7 @@ def _init_profiles(
 
 
 def _process_detection_results(
-    results,
+    results: Iterable,
     jobs,
     state: PipelineState,
     ep_by_stem: dict[str, Path],
@@ -175,7 +175,7 @@ def _detect_batch(
             warm_source_profile(ep, profile_cache_dir)
 
     detector = _detector
-    jobs, results = run_detection_batch(
+    jobs, results_iter = run_detection_batch(
         DetectionBatchRequest(
             episodes=episodes,
             snippets=snippet_paths,
@@ -186,7 +186,7 @@ def _detect_batch(
         workers=workers,
     )
 
-    results = [
+    aligned_results = (
         type(result)(
             stem=result.stem,
             source_path=result.source_path,
@@ -198,10 +198,10 @@ def _detect_batch(
             ),
             error=result.error,
         )
-        for result in results
-    ]
+        for result in results_iter
+    )
 
-    _process_detection_results(results, jobs, state, ep_by_stem, duration_by_stem)
+    _process_detection_results(aligned_results, jobs, state, ep_by_stem, duration_by_stem)
 
 
 def _probe_audio_duration_seconds(source_path: Path) -> float | None:

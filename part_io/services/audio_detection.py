@@ -6,7 +6,7 @@ flows so match sorting, limiting, and output shaping stay consistent.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,9 +198,8 @@ def run_detection_batch_jobs(
     step_seconds: float,
     max_matches: int,
     workers: int,
-) -> list[DetectionBatchResult]:
-    """Execute detection jobs concurrently and return completion-ordered results."""
-    results: list[DetectionBatchResult] = []
+) -> Iterator[DetectionBatchResult]:
+    """Execute detection jobs concurrently and yield completion-ordered results."""
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
@@ -220,27 +219,22 @@ def run_detection_batch_jobs(
             job = futures[future]
             try:
                 matches = list(future.result())
-                results.append(
-                    DetectionBatchResult(
-                        stem=job.stem,
-                        source_path=job.source_path,
-                        sample_path=job.sample_path,
-                        kind=job.kind,
-                        matches=matches,
-                    )
+                yield DetectionBatchResult(
+                    stem=job.stem,
+                    source_path=job.source_path,
+                    sample_path=job.sample_path,
+                    kind=job.kind,
+                    matches=matches,
                 )
             except (FileNotFoundError, ValueError) as exc:
-                results.append(
-                    DetectionBatchResult(
-                        stem=job.stem,
-                        source_path=job.source_path,
-                        sample_path=job.sample_path,
-                        kind=job.kind,
-                        matches=[],
-                        error=str(exc),
-                    )
+                yield DetectionBatchResult(
+                    stem=job.stem,
+                    source_path=job.source_path,
+                    sample_path=job.sample_path,
+                    kind=job.kind,
+                    matches=[],
+                    error=str(exc),
                 )
-    return results
 
 
 def build_detection_batch_jobs(request: DetectionBatchRequest) -> list[DetectionBatchJob]:
@@ -268,17 +262,17 @@ def run_detection_batch(
     step_seconds: float,
     max_matches: int,
     workers: int,
-) -> tuple[list[DetectionBatchJob], list[DetectionBatchResult]]:
+) -> tuple[list[DetectionBatchJob], Iterator[DetectionBatchResult]]:
     """Build and execute a full detection batch for episodes."""
     jobs = build_detection_batch_jobs(request)
-    results = run_detection_batch_jobs(
+    results_iter = run_detection_batch_jobs(
         jobs,
         detector=detector,
         step_seconds=step_seconds,
         max_matches=max_matches,
         workers=workers,
     )
-    return jobs, results
+    return jobs, results_iter
 
 
 def apply_batch_result_to_episode(
