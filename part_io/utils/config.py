@@ -67,4 +67,33 @@ def get_profile_cache_dir(remote_dir: Path | None = None) -> Path:
     return _repo_root() / "downloads" / ".profile_cache"
 
 
-__all__ = ["load_config", "get_profile_cache_dir"]
+def get_codec_args_for_extension(ext: str) -> list[str] | None:
+    """Return ffmpeg codec argument list for a given extension (with or without dot).
+
+    Returns None when no configured codec is found.
+    """
+    if not ext:
+        return None
+    if ext.startswith("."):
+        ext = ext[1:]
+    cfg = load_config()
+    defaults = cfg.get("defaults") if isinstance(cfg, dict) else None
+    codecs = None
+    if isinstance(defaults, dict):
+        codecs = cast(dict[str, object], defaults).get("codecs")
+    if not isinstance(codecs, dict):
+        return None
+    entry = cast(dict[str, object], codecs).get(ext)
+    if not isinstance(entry, dict):
+        return None
+    codec = cast(dict[str, object], entry).get("codec")
+    bitrate = cast(dict[str, object], entry).get("bitrate")
+    if not codec:
+        return None
+    args: list[str] = ["-c:a", str(codec)]
+    if bitrate:
+        args += ["-b:a", str(bitrate)]
+    return args
+
+
+__all__ = ["load_config", "get_profile_cache_dir", "get_codec_args_for_extension"]

@@ -75,7 +75,7 @@ def _write_debug_clips(
     clip_dir.mkdir(parents=True, exist_ok=True)
     wrote = 0
     for idx, (cut_start, cut_end) in enumerate(cuts, start=1):
-        clip_path = clip_dir / f"{stem}__ad_{idx:02d}.mp3"
+        clip_path = clip_dir / f"{stem}__ad_{idx:02d}{source.suffix}"
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -103,7 +103,10 @@ def _write_debug_clips(
 
 def _execute_ffmpeg_cut(source: Path, filter_complex: str, output_path: Path) -> bool:
     """Execute ffmpeg cut and handle file placement. Returns True on success."""
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(
+        suffix=output_path.suffix or ".mp3",
+        delete=False,
+    ) as temp_file:
         temp_path = Path(temp_file.name)
 
     exit_code = _run_ffmpeg(source, filter_complex, temp_path)
@@ -163,7 +166,7 @@ def _pair_and_cut(
             return "skipped"
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{stem}.mp3"
+    output_path = output_dir / f"{stem}{source.suffix}"
     if settings.ad_inclusive:
         cuts = [(seg.cut_start, seg.cut_end) for seg in segments]
     else:

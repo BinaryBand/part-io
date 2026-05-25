@@ -36,8 +36,9 @@ Stage 2: prepare quiz candidates (`precache` side effect included):
 
 ```bash
 poetry run part-io-tasks remote-prep-quiz <REMOTE_DIR> \
- --open-seed downloads/snippets/open.mp3 \
- --close-seed downloads/snippets/close.mp3
+  --intro-seed downloads/snippets/intro.mp3 \
+  --open-seed downloads/snippets/open.mp3 \
+  --close-seed downloads/snippets/close.mp3
 ```
 
 Stage 3: run interactive quiz and save labels:
@@ -65,6 +66,26 @@ Notes:
 
 - A `__state__.toml` file is created under the target directory to persist detection and quiz state across runs. Deleting it resets state.
 - Never set `--output-dir` to the same directory as the input; ffmpeg cannot atomically read-and-write the same file.
+
+Configuration
+
+You can control per-extension encoding defaults used when writing cut output by adding
+`[tool.part_io.defaults.codecs]` to your `pyproject.toml`. Keys are file extensions
+without the leading dot; each entry should provide a `codec` and optionally a `bitrate`.
+For example:
+
+```toml
+[tool.part_io.defaults.codecs]
+mp3 = { codec = "libmp3lame", bitrate = "128k" }
+opus = { codec = "libopus", bitrate = "64k" }
+aac = { codec = "aac", bitrate = "128k" }
+wav = { codec = "pcm_s16le" }
+```
+
+When present, these settings determine the ffmpeg codec and bitrate used for the final
+encoded output. The pipeline also preserves the source file extension for cut outputs
+(`stem + source.suffix`), and debug clips use the same extension. If no configuration
+is provided for an extension, part-io falls back to sensible built-in defaults.
 
 ## Development
 
@@ -97,3 +118,5 @@ Contributions are welcome. Open an issue or PR with a clear description and test
 ## License
 
 See the `LICENSE` file for license terms.
+
+> kill PID

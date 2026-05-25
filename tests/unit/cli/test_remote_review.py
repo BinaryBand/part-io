@@ -7,9 +7,70 @@ from part_io.cli.remote._review import (
     _collect_uncertain_candidates,
     _count_uncertain,
     _reclassify_all,
+    _review_candidate,
     _run_quiz,
 )
 from part_io.cli.remote._state import PipelineState, Segment, _Match
+
+
+def test_review_candidate_hides_compare_when_snippet_missing(tmp_path: Path, monkeypatch) -> None:
+    state = PipelineState()
+    ep = state.episode("ep001")
+    ep.open_candidates = [_Match(score=0.9, start=5.0, end=6.0)]
+    item = ReviewItem(stem="ep001", kind="open", candidate_idx=0, score=0.9)
+
+    legends: list[str] = []
+
+    monkeypatch.setattr("part_io.cli.remote._review._emit", lambda _msg: None)
+    monkeypatch.setattr(
+        "part_io.cli.remote._review._write_stderr",
+        lambda text, end="\n", flush=False: legends.append(text),
+    )
+    monkeypatch.setattr("part_io.cli.remote._review._start_audio_segment", lambda *a, **k: None)
+    monkeypatch.setattr("part_io.cli.remote._review._stop_audio", lambda _proc: None)
+    monkeypatch.setattr("part_io.cli.remote._review._getch", lambda: "s")
+
+    result = _review_candidate(
+        state,
+        item,
+        snippets={},
+        history=[],
+        remote_dir=tmp_path,
+    )
+
+    assert result == "skipped"
+    assert legends
+    assert "[c]ompare" not in legends[0]
+
+
+def test_review_candidate_shows_compare_when_snippet_available(tmp_path: Path, monkeypatch) -> None:
+    state = PipelineState()
+    ep = state.episode("ep001")
+    ep.open_candidates = [_Match(score=0.9, start=5.0, end=6.0)]
+    item = ReviewItem(stem="ep001", kind="open", candidate_idx=0, score=0.9)
+
+    legends: list[str] = []
+
+    monkeypatch.setattr("part_io.cli.remote._review._emit", lambda _msg: None)
+    monkeypatch.setattr(
+        "part_io.cli.remote._review._write_stderr",
+        lambda text, end="\n", flush=False: legends.append(text),
+    )
+    monkeypatch.setattr("part_io.cli.remote._review._start_audio_segment", lambda *a, **k: None)
+    monkeypatch.setattr("part_io.cli.remote._review._stop_audio", lambda _proc: None)
+    monkeypatch.setattr("part_io.cli.remote._review._getch", lambda: "s")
+
+    result = _review_candidate(
+        state,
+        item,
+        snippets={"open": tmp_path / "open.mp3"},
+        history=[],
+        remote_dir=tmp_path,
+    )
+
+    assert result == "skipped"
+    assert legends
+    assert "[c]ompare" in legends[0]
 
 
 def test_count_uncertain_counts_all_audio_kinds() -> None:

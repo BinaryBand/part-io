@@ -18,6 +18,7 @@ from pathlib import Path
 
 from part_io.adapters.audio.ad_segments import AdSegment
 from part_io.adapters.process.runner import run_resolved
+from part_io.utils.config import get_codec_args_for_extension
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -129,25 +130,41 @@ def _run_ffmpeg(
     filter_complex: str,
     output: Path,
 ) -> int:
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        # Keep CLI output quiet for recoverable decoder noise in imperfect source MP3s.
-        "fatal",
-        "-y",
-        "-i",
-        str(source),
-        "-filter_complex",
-        filter_complex,
-        "-map",
-        "[out]",
-        "-c:a",
-        "libmp3lame",
-        "-b:a",
-        "128k",
-        str(output),
-    ]
+    ext = output.suffix.lower()
+    # Allow project config to override codec args
+    codec_args = get_codec_args_for_extension(ext)
+    if codec_args is None:
+        # fallback built-in mapping
+        if ext == ".mp3":
+            codec_args = ["-c:a", "libmp3lame", "-b:a", "128k"]
+        elif ext == ".opus":
+            codec_args = ["-c:a", "libopus", "-b:a", "64k"]
+        elif ext in (".m4a", ".mp4", ".m4b", ".aac"):
+            codec_args = ["-c:a", "aac", "-b:a", "128k"]
+        elif ext == ".wav":
+            codec_args = ["-c:a", "pcm_s16le"]
+        else:
+            codec_args = ["-c:a", "libmp3lame", "-b:a", "128k"]
+
+    command = (
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            # Keep CLI output quiet for recoverable decoder noise in imperfect source files.
+            "fatal",
+            "-y",
+            "-i",
+            str(source),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[out]",
+        ]
+        + codec_args
+        + [str(output)]
+    )
+
     result = run_resolved(command)
     return int(result.returncode)
 

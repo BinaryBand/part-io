@@ -147,6 +147,7 @@ def _launch_background_job(*, remote_dir: Path, job_name: str, cmd: list[str]) -
     from part_io.utils.exec import launch_resolved
 
     pid_path, log_path = _background_paths(remote_dir, job_name)
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
     existing = _background_running(pid_path)
     if existing is not None:
         print(f"Already running (pid {existing}).", file=sys.stderr)
@@ -217,15 +218,37 @@ def _cmd_prep_cut(args: argparse.Namespace) -> None:
     if not remote_dir.exists():
         sys.exit(f"Remote dir not found: {remote_dir}")
 
+    # Fail fast if prep-quiz background job is still writing state.
+    quiz_pid_path, _ = _background_paths(remote_dir, "prep-quiz")
+    if _background_running(quiz_pid_path):
+        sys.exit(
+            "remote-prep-quiz is still running. "
+            "Wait for it to finish before running remote-prep-cut."
+        )
+
+    if not state.episodes:
+        sys.exit(
+            f"No detection data in {state_path}.\n"
+            "Run `remote-prep-quiz` first and wait for it to complete."
+        )
+
     n_unc = _count_uncertain(state)
+    n_und = sum(1 for ep in state.episodes.values() if not ep.is_detected())
     _emit(f"\n{n_unc} uncertain target(s) to review.")
+    if n_und:
+        _emit(f"  ({n_und} episode(s) not yet detected — re-run remote-prep-quiz)")
     if not n_unc:
-        _emit("Nothing to review — all episodes classified.")
+        n_cut = sum(1 for ep in state.episodes.values() if ep.is_cuttable())
+        _emit(f"All episodes classified — {n_cut} cuttable. Run remote-execute-cut to proceed.")
         return
+
+    snippets = _resolve_review_snippets(args, remote_dir)
+    if not snippets:
+        _emit("No snippet audio found for compare playback; [c]ompare is disabled.")
 
     _run_review_loop(
         state,
-        snippets={},
+        snippets=snippets,
         state_path=state_path,
         remote_dir=remote_dir,
     )
@@ -463,12 +486,41 @@ def _build_prep_cut_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("prep-cut", help="Run interactive quiz and persist labels to state.")
     _add_remote_dir_arg(p)
     _add_verbose_arg(p)
+    _add_seed_args(p)
+
+
+def _resolve_review_snippets(args: argparse.Namespace, remote_dir: Path) -> dict[str, Path]:
+    snippets: dict[str, Path] = {}
+    explicit = {
+        "open": args.open_seed,
+        "close": args.close_seed,
+        "intro": args.intro_seed,
+        "outro": args.outro_seed,
+    }
+    for kind, seed in explicit.items():
+        if seed is None:
+            continue
+        if not seed.exists() or not seed.is_file():
+            sys.exit(f"Seed file for '{kind}' not found: {seed}")
+        snippets[kind] = seed
+
+    if snippets:
+        return snippets
+
+    default_dir = remote_dir.parent / "snippets"
+    for kind in ("open", "close", "intro", "outro"):
+        candidate = default_dir / f"{kind}.mp3"
+        if candidate.exists() and candidate.is_file():
+            snippets[kind] = candidate
+    return snippets
 
 
 def _cmd_precache(args: argparse.Namespace) -> None:
     import time
 
     remote_dir: Path = args.remote_dir
+    if not remote_dir.exists() or not remote_dir.is_dir():
+        sys.exit(f"Remote dir not found: {remote_dir}")
 
     if args.background:
         cmd = [

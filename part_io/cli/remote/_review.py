@@ -295,7 +295,8 @@ def _review_candidate(
     position_label = f" [{item.candidate_idx + 1}/{n_total}]" if n_total > 1 else ""
 
     undo_hint = "  [u]ndo" if history else ""
-    legend = f"  [a]pprove  [r]eject  [p]replay  [c]ompare  [s]kip  [q]uit{undo_hint}  "
+    compare_hint = "  [c]ompare" if snippet is not None else ""
+    legend = f"  [a]pprove  [r]eject  [p]replay{compare_hint}  [s]kip  [q]uit{undo_hint}  "
     score_str = f"score={candidate.score:.4f}  start={candidate.start:.1f}s"
     _emit(f"\n  [{item.kind}]{position_label}  {score_str}")
     _write_stderr(legend, end="", flush=True)
