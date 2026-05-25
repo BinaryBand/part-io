@@ -96,17 +96,12 @@
     },
     "RunSettingsModel": {
       "additionalProperties": false,
-      "description": "Operational settings persisted in ``[settings]``.\n\nFields marked *-> config* will migrate to ``__config__.toml`` once the new\ndeclarative config is wired in; they remain here for backward compatibility.",
+      "description": "Operational settings persisted in ``[settings]``.",
       "properties": {
         "ad_inclusive": {
           "default": true,
           "title": "Ad Inclusive",
           "type": "boolean"
-        },
-        "close_sample": {
-          "default": "close.mp3",
-          "title": "Close Sample",
-          "type": "string"
         },
         "debug": {
           "default": false,
@@ -123,11 +118,6 @@
           "title": "Intro Exclusive",
           "type": "boolean"
         },
-        "intro_sample": {
-          "default": "intro.mp3",
-          "title": "Intro Sample",
-          "type": "string"
-        },
         "max_gap": {
           "default": 300.0,
           "title": "Max Gap",
@@ -143,32 +133,10 @@
           "title": "Min Gap",
           "type": "number"
         },
-        "no_interactive": {
-          "default": false,
-          "title": "No Interactive",
-          "type": "boolean"
-        },
-        "open_sample": {
-          "default": "open.mp3",
-          "title": "Open Sample",
-          "type": "string"
-        },
         "output_dir": {
           "default": "downloads/remove",
           "title": "Output Dir",
           "type": "string"
-        },
-        "outro_sample": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Outro Sample"
         },
         "overwrite": {
           "default": false,
@@ -179,11 +147,6 @@
           "default": 10,
           "title": "Quiz Size",
           "type": "integer"
-        },
-        "snippets_dir": {
-          "default": "downloads/snippets",
-          "title": "Snippets Dir",
-          "type": "string"
         },
         "step_seconds": {
           "default": 0.1,
@@ -229,9 +192,63 @@
       "title": "SegmentModel",
       "type": "object"
     },
+    "SnippetProfileStateModel": {
+      "additionalProperties": false,
+      "description": "Embedded detection profile stored under ``[snippets.profile]``.",
+      "properties": {
+        "analysis_rate": {
+          "title": "Analysis Rate",
+          "type": "integer"
+        },
+        "band_count": {
+          "title": "Band Count",
+          "type": "integer"
+        },
+        "data": {
+          "title": "Data",
+          "type": "string"
+        },
+        "hop_size": {
+          "title": "Hop Size",
+          "type": "integer"
+        },
+        "n_frames": {
+          "title": "N Frames",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "n_frames",
+        "analysis_rate",
+        "hop_size",
+        "band_count",
+        "data"
+      ],
+      "title": "SnippetProfileStateModel",
+      "type": "object"
+    },
+    "SnippetStateModel": {
+      "additionalProperties": false,
+      "description": "One snippet entry in the ``[[snippets]]`` array-of-tables.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "profile": {
+          "$ref": "#/$defs/SnippetProfileStateModel"
+        }
+      },
+      "required": [
+        "name",
+        "profile"
+      ],
+      "title": "SnippetStateModel",
+      "type": "object"
+    },
     "TargetStateModel": {
       "additionalProperties": false,
-      "description": "Accumulated positive/negative examples for one snippet type.\n\nUsed both here (legacy ``[targets.*]`` in state) and in ``AudioSnippetModel``\n(new design, embedded per snippet in config).",
+      "description": "Accumulated positive/negative examples for one snippet type.",
       "properties": {
         "negatives": {
           "items": {
@@ -253,7 +270,7 @@
     },
     "TargetsByKindModel": {
       "additionalProperties": false,
-      "description": "Legacy top-level target banks persisted as ``[targets.open]`` / ``close``.",
+      "description": "Top-level target banks persisted as ``[targets.open]`` / ``[targets.close]``.",
       "properties": {
         "close": {
           "$ref": "#/$defs/TargetStateModel"
@@ -276,15 +293,15 @@
       "title": "Episodes",
       "type": "object"
     },
-    "profiles": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "title": "Profiles",
-      "type": "object"
-    },
     "settings": {
       "$ref": "#/$defs/RunSettingsModel"
+    },
+    "snippets": {
+      "items": {
+        "$ref": "#/$defs/SnippetStateModel"
+      },
+      "title": "Snippets",
+      "type": "array"
     },
     "targets": {
       "$ref": "#/$defs/TargetsByKindModel"

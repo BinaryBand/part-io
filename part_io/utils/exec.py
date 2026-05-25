@@ -14,6 +14,7 @@ import subprocess
 import threading
 from os import getenv
 from pathlib import Path
+from subprocess import CalledProcessError as CalledProcessError
 from typing import Any, Callable, Iterable, cast
 
 
@@ -116,6 +117,7 @@ def run_resolved_with_stderr_callback(
 
 
 __all__ = [
+    "CalledProcessError",
     "resolve_executable",
     "run_resolved",
     "launch_resolved",

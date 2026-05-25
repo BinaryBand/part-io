@@ -14,6 +14,8 @@ from typing import Any
 
 import numpy as np
 
+from part_io.adapters.audio.matcher import _ANALYSIS_RATE, _HOP_SIZE
+from part_io.adapters.audio.snippet_profile import decode_matrix, encode_matrix
 from part_io.utils.hash import partial_file_hash
 
 # Classification labels
@@ -22,6 +24,14 @@ _NEG = "negative"
 _UNC = "uncertain"
 _UND = "undetected"
 _AUDIO_KINDS = ("open", "close", "intro", "outro")
+
+
+@dataclass
+class SnippetEntry:
+    """A named snippet and its current detection profile (seed or consensus)."""
+
+    name: str
+    profile: np.ndarray  # float32 (n_frames, band_count*2)
 
 
 @dataclass(frozen=True)
@@ -34,13 +44,8 @@ class Segment:
     score: float
 
 
-def _profile_to_b85(arr: np.ndarray) -> str:
-    buf = io.BytesIO()
-    np.save(buf, arr)
-    return base64.b85encode(buf.getvalue()).decode("ascii")
-
-
 def _b85_to_profile(s: str) -> np.ndarray:
+    """Decode a legacy [profiles] base85 checkpoint (migration only)."""
     buf = io.BytesIO(base64.b85decode(s))
     return np.load(buf)
 
@@ -291,12 +296,25 @@ class PipelineState:
     close_target: TargetState = field(default_factory=TargetState)
     settings: RunSettings = field(default_factory=RunSettings)
     episodes: dict[str, EpisodeState] = field(default_factory=dict)
-    profiles: dict[str, np.ndarray] = field(default_factory=dict)
+    snippets: list[SnippetEntry] = field(default_factory=list)
 
     def episode(self, stem: str) -> EpisodeState:
         if stem not in self.episodes:
             self.episodes[stem] = EpisodeState()
         return self.episodes[stem]
+
+    def profile_for(self, name: str) -> np.ndarray | None:
+        for s in self.snippets:
+            if s.name == name:
+                return s.profile
+        return None
+
+    def set_profile(self, name: str, profile: np.ndarray) -> None:
+        for s in self.snippets:
+            if s.name == name:
+                s.profile = profile
+                return
+        self.snippets.append(SnippetEntry(name=name, profile=profile))
 
     @classmethod
     def load(cls, path: Path) -> "PipelineState":
@@ -310,11 +328,25 @@ class PipelineState:
             close_target=_load_target(data.get("targets", {}).get("close", {})),
             settings=_load_settings(data.get("settings", {})),
         )
-        for kind, b85 in data.get("profiles", {}).items():
+        for raw_snip in data.get("snippets", []):
             try:
-                state.profiles[kind] = _b85_to_profile(str(b85))
+                name = str(raw_snip["name"])
+                prof = raw_snip["profile"]
+                arr = decode_matrix(
+                    str(prof["data"]), int(prof["n_frames"]), int(prof["band_count"])
+                )
+                state.snippets.append(SnippetEntry(name=name, profile=arr))
             except Exception:  # noqa: BLE001, S110
-                pass  # corrupt checkpoint — will be recomputed on next run
+                pass  # corrupt snippet — will be recomputed on next run
+        # Migration: old [profiles] dict → SnippetEntry (removed in this version)
+        if not state.snippets:
+            for kind, b85 in data.get("profiles", {}).items():
+                try:
+                    state.snippets.append(
+                        SnippetEntry(name=kind, profile=_b85_to_profile(str(b85)))
+                    )
+                except Exception:  # noqa: BLE001, S110
+                    pass
         for stem, ep_raw in data.get("episodes", {}).items():
             state.episodes[stem] = _load_episode(ep_raw)
         return state
@@ -372,11 +404,17 @@ class PipelineState:
             pos = ", ".join(_fmt_seg(s) for s in deduped_pos)
             neg = ", ".join(_fmt_seg(s) for s in deduped_neg)
             lines += [f"\n[targets.{kind}]\n", f"positives = [{pos}]\n", f"negatives = [{neg}]\n"]
-        if self.profiles:
-            lines.append("\n[profiles]\n")
-            for kind in sorted(self.profiles):
-                b85 = _profile_to_b85(self.profiles[kind])
-                lines.append(f"{kind} = {json.dumps(b85)}\n")
+        for s in self.snippets:
+            n_frames, width = s.profile.shape
+            band_count = width // 2
+            lines.append("\n[[snippets]]\n")
+            lines.append(f"name = {json.dumps(s.name)}\n")
+            lines.append("\n[snippets.profile]\n")
+            lines.append(f"n_frames      = {n_frames}\n")
+            lines.append(f"analysis_rate = {_ANALYSIS_RATE}\n")
+            lines.append(f"hop_size      = {_HOP_SIZE}\n")
+            lines.append(f"band_count    = {band_count}\n")
+            lines.append(f"data          = {json.dumps(encode_matrix(s.profile))}\n")
         for stem, ep in sorted(self.episodes.items()):
             lines.append(f'\n[episodes."{stem}"]\n')
             if ep.source_hash is not None:
@@ -432,6 +470,7 @@ def _replace_target_from_dict_lists(
 
 __all__ = [
     "Segment",
+    "SnippetEntry",
     "TargetState",
     "_Match",
     "EpisodeState",
@@ -439,8 +478,6 @@ __all__ = [
     "PipelineState",
     "_fmt_seg",
     "_fmt_match",
-    "_profile_to_b85",
-    "_b85_to_profile",
     "_target_to_dict_lists",
     "_replace_target_from_dict_lists",
 ]

@@ -16,19 +16,11 @@ import argparse
 import logging
 import os
 import sys
-import tomllib
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict, TypeVar
-
-import numpy as np
-import tomli_w
+from typing import TypeVar
 
 from part_io.adapters.audio.matcher import warm_source_profile
-from part_io.adapters.audio.snippet_profile import (
-    decode_matrix,
-    snapshot_snippet_profile,
-)
+from part_io.adapters.audio.snippet_profile import decode_matrix, snapshot_snippet_profile
 from part_io.cli.remote._cut import CutSettings, _cut_cuttable
 from part_io.cli.remote._detect import _detect_batch
 from part_io.cli.remote._review import (
@@ -39,14 +31,10 @@ from part_io.cli.remote._review import (
     _run_quiz,
     _run_review_loop,
 )
-from part_io.cli.remote._state import PipelineState
-from part_io.models.pipeline.config import PipelineConfigModel
+from part_io.cli.remote._state import PipelineState, SnippetEntry
 from part_io.utils.config import get_profile_cache_dir
 
 _MIN_EPISODE_BYTES = 10 * 1024 * 1024  # skip promos — < 10 MB ≈ < 5 min at 128 kbps
-_STATE_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[1] / "models" / "schemas" / "remote_pipeline_state.schema.json"
-)
 _LOG = logging.getLogger(__name__)
 
 
@@ -58,86 +46,12 @@ _LOG = logging.getLogger(__name__)
 _AUDIO_EXTENSIONS = frozenset({".mp3", ".opus"})
 
 
-class _SnippetEntry(TypedDict):
-    name: str
-    profile: dict[str, object]
-
-
-class _PairCutRule(TypedDict):
-    type: str
-    open_snippet: str
-    close_snippet: str
-    inclusive: bool
-    min_gap: float
-    max_gap: float
-
-
-class _TrimCutRule(TypedDict):
-    type: str
-    snippet: str
-    exclusive: bool
-
-
-@dataclass(frozen=True)
-class LoadedSnippets:
-    profiles: dict[str, np.ndarray]
-
-
-def _prepare_runtime_snippets(
-    *,
-    loaded: LoadedSnippets,
-    config_path: Path,
-) -> tuple[dict[str, Path], dict[str, Path | None]]:
-    """Resolve config snippets for review and detection runtime.
-
-    Returns:
-    - ``review_snippets``: only existing files (safe for A/B compare playback)
-    - ``detect_snippets``: path when file exists else ``None`` (profile-only mode)
-    """
-    for key in ("open", "close"):
-        if key not in loaded.profiles:
-            sys.exit(f"Missing required snippet '{key}' embedded profile in {config_path}")
-    # Profile-only mode: detection runs against embedded references.
-    # Review compare playback is optional and disabled by default.
-    review_snippets: dict[str, Path] = {}
-    detect_snippets: dict[str, Path | None] = {name: None for name in loaded.profiles}
-    return review_snippets, detect_snippets
-
-
-def _load_snippets(config_path: Path) -> LoadedSnippets:
-    """Load snippet definitions from a ``__config__.toml`` file."""
-    if not config_path.exists():
-        sys.exit(f"Config not found: {config_path}\nCreate it with [[snippet]] entries.")
-    with config_path.open("rb") as f:
-        raw = tomllib.load(f)
-    try:
-        config = PipelineConfigModel.model_validate(raw)
-    except Exception as exc:  # noqa: BLE001
-        sys.exit(f"Invalid config {config_path}: {exc}")
-
-    profile_map: dict[str, np.ndarray] = {}
-    for snippet in config.snippets:
-        profile_map[snippet.name] = decode_matrix(
-            snippet.profile.data,
-            snippet.profile.n_frames,
-            snippet.profile.band_count,
-        )
-    return LoadedSnippets(profiles=profile_map)
-
-
 def _build_config_init_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "config-init",
-        help="Create a profile-only __config__.toml by snapshotting seed audio once.",
+        help="Snapshot seed audio files into __state__.toml as embedded snippet profiles.",
     )
     _add_remote_dir_arg(p)
-    p.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        metavar="CONFIG_TOML",
-        help="Output config path (default: REMOTE_DIR/__config__.toml)",
-    )
     p.add_argument("--open-seed", type=Path, required=True, help="Seed file for open snippet")
     p.add_argument("--close-seed", type=Path, required=True, help="Seed file for close snippet")
     p.add_argument("--intro-seed", type=Path, default=None, help="Optional seed file for intro")
@@ -146,61 +60,61 @@ def _build_config_init_parser(sub: argparse._SubParsersAction) -> None:
         "--force",
         action="store_true",
         default=False,
-        help="Overwrite existing config file",
+        help="Overwrite existing snippet profiles",
     )
 
 
-def _cmd_config_init(args: argparse.Namespace) -> None:
-    config_path: Path = args.config or (args.remote_dir / "__config__.toml")
-    if config_path.exists() and not args.force:
-        sys.exit(f"Config already exists: {config_path} (use --force to overwrite)")
-
-    seed_map: dict[str, Path] = {
-        "open": args.open_seed,
-        "close": args.close_seed,
-    }
-    if args.intro_seed is not None:
-        seed_map["intro"] = args.intro_seed
-    if args.outro_seed is not None:
-        seed_map["outro"] = args.outro_seed
+def _snapshot_snippets(
+    state: PipelineState,
+    state_path: Path,
+    *,
+    open_seed: Path,
+    close_seed: Path,
+    intro_seed: Path | None = None,
+    outro_seed: Path | None = None,
+) -> None:
+    """Snapshot seed audio files into state.snippets and save."""
+    seed_map: dict[str, Path] = {"open": open_seed, "close": close_seed}
+    if intro_seed is not None:
+        seed_map["intro"] = intro_seed
+    if outro_seed is not None:
+        seed_map["outro"] = outro_seed
 
     for name, seed_path in seed_map.items():
         if not seed_path.exists() or not seed_path.is_file():
             sys.exit(f"Seed file for '{name}' not found: {seed_path}")
 
-    snippets: list[_SnippetEntry] = []
+    new_snippets: list[SnippetEntry] = []
     for name, seed_path in seed_map.items():
         _emit(f"  [snapshot] {name}: {seed_path}")
-        profile = snapshot_snippet_profile(seed_path)
-        snippets.append(_SnippetEntry(name=name, profile=profile.model_dump()))
+        model = snapshot_snippet_profile(seed_path)
+        profile = decode_matrix(model.data, model.n_frames, model.band_count)
+        new_snippets.append(SnippetEntry(name=name, profile=profile))
 
-    cut_rules: list[_PairCutRule | _TrimCutRule] = [
-        _PairCutRule(
-            type="pair",
-            open_snippet="open",
-            close_snippet="close",
-            inclusive=True,
-            min_gap=-15.0,
-            max_gap=300.0,
+    state.snippets = new_snippets
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state.save(state_path)
+    _emit(f"Snippet profiles written to {state_path}.")
+
+
+def _cmd_config_init(args: argparse.Namespace) -> None:
+    state_path = args.remote_dir / "__state__.toml"
+    state = PipelineState.load(state_path)
+
+    if state.snippets and not args.force:
+        sys.exit(
+            f"Snippet profiles already exist in {state_path} (use --force to overwrite).\n"
+            f"  Current snippets: {[s.name for s in state.snippets]}"
         )
-    ]
-    if "intro" in seed_map:
-        cut_rules.append(_TrimCutRule(type="trim_before", snippet="intro", exclusive=True))
-    if "outro" in seed_map:
-        cut_rules.append(_TrimCutRule(type="trim_after", snippet="outro", exclusive=True))
 
-    payload = {
-        "snippets": snippets,
-        "cut_rules": cut_rules,
-    }
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(
-        "# Profile-only snippet config generated by remote config-init\n"
-        "# Seed files were snapshotted at init time and are not required at runtime.\n\n"
-        + tomli_w.dumps(payload),
-        encoding="utf-8",
+    _snapshot_snippets(
+        state,
+        state_path,
+        open_seed=args.open_seed,
+        close_seed=args.close_seed,
+        intro_seed=args.intro_seed,
+        outro_seed=args.outro_seed,
     )
-    print(f"Wrote profile-only config: {config_path}")
 
 
 def _full_episodes(remote_dir: Path) -> list[Path]:
@@ -294,7 +208,6 @@ def _collect_loop_candidates(
     workers: int,
     max_matches: int,
     state_path: Path,
-    snippets: dict[str, Path | None],
     remote_dir: Path,
     profile_cache_dir: Path | None = None,
     exclude_decided: set[tuple[str, str, int]] | None = None,
@@ -320,7 +233,6 @@ def _collect_loop_candidates(
         _detect_batch(
             [ep_path],
             state,
-            snippets,
             remote_dir=remote_dir,
             step_seconds=step_seconds,
             workers=workers,
@@ -383,7 +295,6 @@ def _run_loop_once(
     remote_dir: Path,
     output_dir: Path,
     snippets: dict[str, Path],
-    detect_snippets: dict[str, Path | None],
     quiz_size: int,
     overwrite: bool,
     step_seconds: float,
@@ -409,7 +320,6 @@ def _run_loop_once(
         workers=workers,
         max_matches=max_matches,
         state_path=state_path,
-        snippets=detect_snippets,
         remote_dir=remote_dir,
         profile_cache_dir=get_profile_cache_dir(remote_dir),
     )
@@ -455,7 +365,6 @@ def _run_loop_until_clean(
     remote_dir: Path,
     output_dir: Path,
     snippets: dict[str, Path],
-    detect_snippets: dict[str, Path | None],
     quiz_size: int,
     overwrite: bool,
     step_seconds: float,
@@ -485,7 +394,6 @@ def _run_loop_until_clean(
             workers=workers,
             max_matches=max_matches,
             state_path=state_path,
-            snippets=detect_snippets,
             remote_dir=remote_dir,
             profile_cache_dir=get_profile_cache_dir(remote_dir),
             exclude_decided=session_skipped,
@@ -557,14 +465,20 @@ def _cmd_review(args: argparse.Namespace) -> None:
     _apply_sticky_review_args(args, state)
     state.save(state_path)
 
-    config_path: Path = args.config or (remote_dir / "__config__.toml")
-    loaded = _load_snippets(config_path)
-    review_snippets, detect_snippets = _prepare_runtime_snippets(
-        loaded=loaded, config_path=config_path
-    )
-    for kind, profile in loaded.profiles.items():
-        if kind not in state.profiles:
-            state.profiles[kind] = profile
+    if not state.snippets:
+        if not args.open_seed or not args.close_seed:
+            sys.exit(
+                f"No snippet profiles in {state_path}.\n"
+                f"Re-run with --open-seed <file> --close-seed <file> to initialize."
+            )
+        _snapshot_snippets(
+            state,
+            state_path,
+            open_seed=args.open_seed,
+            close_seed=args.close_seed,
+            intro_seed=args.intro_seed,
+            outro_seed=args.outro_seed,
+        )
     if not remote_dir.exists():
         sys.exit(f"Remote dir not found: {remote_dir}")
 
@@ -583,7 +497,6 @@ def _cmd_review(args: argparse.Namespace) -> None:
         _detect_batch(
             to_detect,
             state,
-            detect_snippets,
             remote_dir=remote_dir,
             step_seconds=args.step_seconds,
             workers=args.workers,
@@ -605,7 +518,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
 
     _run_review_loop(
         state,
-        snippets=review_snippets,
+        snippets={},
         state_path=state_path,
         remote_dir=remote_dir,
     )
@@ -665,18 +578,24 @@ def _cmd_loop(args: argparse.Namespace) -> None:
     _apply_sticky_loop_args(args, state)
     state.save(state_path)
 
-    output_dir: Path = args.output_dir
-
-    config_path: Path = args.config or (remote_dir / "__config__.toml")
-    loaded = _load_snippets(config_path)
-    review_snippets, detect_snippets = _prepare_runtime_snippets(
-        loaded=loaded, config_path=config_path
-    )
-    for kind, profile in loaded.profiles.items():
-        if kind not in state.profiles:
-            state.profiles[kind] = profile
+    if not state.snippets:
+        if not args.open_seed or not args.close_seed:
+            sys.exit(
+                f"No snippet profiles in {state_path}.\n"
+                f"Re-run with --open-seed <file> --close-seed <file> to initialize."
+            )
+        _snapshot_snippets(
+            state,
+            state_path,
+            open_seed=args.open_seed,
+            close_seed=args.close_seed,
+            intro_seed=args.intro_seed,
+            outro_seed=args.outro_seed,
+        )
     if not remote_dir.exists():
         sys.exit(f"Remote dir not found: {remote_dir}")
+
+    output_dir: Path = args.output_dir
 
     all_full = _full_episodes(remote_dir)
     if not all_full:
@@ -687,8 +606,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
             all_full=all_full,
             remote_dir=remote_dir,
             output_dir=output_dir,
-            snippets=review_snippets,
-            detect_snippets=detect_snippets,
+            snippets={},
             quiz_size=args.quiz_size,
             overwrite=args.overwrite,
             step_seconds=args.step_seconds,
@@ -711,8 +629,7 @@ def _cmd_loop(args: argparse.Namespace) -> None:
         all_full=all_full,
         remote_dir=remote_dir,
         output_dir=output_dir,
-        snippets=review_snippets,
-        detect_snippets=detect_snippets,
+        snippets={},
         quiz_size=args.quiz_size,
         overwrite=args.overwrite,
         step_seconds=args.step_seconds,
@@ -811,18 +728,20 @@ def _add_verbose_arg(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_seed_args(p: argparse.ArgumentParser) -> None:
+    """Optional seed files — only needed on first run if __state__.toml has no profiles."""
+    p.add_argument("--open-seed", type=Path, default=None, metavar="FILE")
+    p.add_argument("--close-seed", type=Path, default=None, metavar="FILE")
+    p.add_argument("--intro-seed", type=Path, default=None, metavar="FILE")
+    p.add_argument("--outro-seed", type=Path, default=None, metavar="FILE")
+
+
 def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("review", help="Detect matches and review them interactively")
     _add_remote_dir_arg(p)
     _add_verbose_arg(p)
-    p.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        metavar="CONFIG_TOML",
-        help="Path to __config__.toml (default: REMOTE_DIR/__config__.toml)",
-    )
     _add_detect_args(p)
+    _add_seed_args(p)
     p.add_argument("--overwrite", action="store_true", default=None)
     p.add_argument(
         "--no-interactive", action="store_true", default=None, help="Detect only, skip review"
@@ -844,16 +763,10 @@ def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
     )
     _add_remote_dir_arg(p)
     _add_verbose_arg(p)
-    p.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        metavar="CONFIG_TOML",
-        help="Path to __config__.toml (default: REMOTE_DIR/__config__.toml)",
-    )
     p.add_argument("--output-dir", type=Path, default=None)
     _add_detect_args(p)
     _add_cut_args(p)
+    _add_seed_args(p)
     p.add_argument(
         "--quiz-size",
         type=int,

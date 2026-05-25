@@ -1,8 +1,8 @@
 """Pydantic models for pipeline ``__state__.toml`` files.
 
 This module covers runtime state: what the pipeline has detected so far and
-the operational settings for the current run. Audio snippet definitions and
-cut rules live in ``config.py`` (``__config__.toml``).
+the operational settings for the current run. Snippet profiles and seed paths
+are embedded directly in ``__state__.toml`` via the ``[[snippets]]`` table.
 """
 
 from __future__ import annotations
@@ -35,11 +35,7 @@ class MatchModel(BaseModel):
 
 
 class TargetStateModel(BaseModel):
-    """Accumulated positive/negative examples for one snippet type.
-
-    Used both here (legacy ``[targets.*]`` in state) and in ``AudioSnippetModel``
-    (new design, embedded per snippet in config).
-    """
+    """Accumulated positive/negative examples for one snippet type."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -48,34 +44,22 @@ class TargetStateModel(BaseModel):
 
 
 class RunSettingsModel(BaseModel):
-    """Operational settings persisted in ``[settings]``.
-
-    Fields marked *-> config* will migrate to ``__config__.toml`` once the new
-    declarative config is wired in; they remain here for backward compatibility.
-    """
+    """Operational settings persisted in ``[settings]``."""
 
     model_config = ConfigDict(extra="forbid")
 
-    step_seconds: float = 0.1  # sliding-window step during detection
-    workers: int = 2  # parallel detection workers per batch
-    max_matches: int = 3  # top-N candidates retained per episode per snippet
-    fade: float = 0.5  # fade-in/out duration (seconds) at each cut point
-    quiz_size: int = 10  # uncertain candidates per interactive review batch
-    no_interactive: bool = False  # skip review; cut automatically
-    overwrite: bool = False  # re-detect episodes that already have candidates
-    output_dir: str = "downloads/remove"  # destination for cut MP3s
-    debug: bool = False  # export planned cut clips for inspection
-
-    # -> config: these move to AudioSnippetModel / CutRuleModel once wired
-    snippets_dir: str = "downloads/snippets"
-    open_sample: str = "open.mp3"
-    close_sample: str = "close.mp3"
-    intro_sample: str = "intro.mp3"
-    outro_sample: str | None = None
-    min_gap: float = -15.0  # -> PairCutRuleModel.min_gap
-    max_gap: float = 300.0  # -> PairCutRuleModel.max_gap
-    ad_inclusive: bool = True  # -> PairCutRuleModel.inclusive
-    intro_exclusive: bool = True  # -> TrimBeforeRuleModel.exclusive
+    step_seconds: float = 0.1
+    workers: int = 2
+    max_matches: int = 3
+    min_gap: float = -15.0
+    max_gap: float = 300.0
+    ad_inclusive: bool = True
+    intro_exclusive: bool = True
+    fade: float = 0.5
+    quiz_size: int = 10
+    overwrite: bool = False
+    output_dir: str = "downloads/remove"
+    debug: bool = False
 
 
 class EpisodeStateModel(BaseModel):
@@ -83,7 +67,7 @@ class EpisodeStateModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_hash: str | None = None  # SHA-256 of first 64 KB; None = unverified
+    source_hash: str | None = None
     open_candidates: list[MatchModel] = Field(default_factory=list)
     close_candidates: list[MatchModel] = Field(default_factory=list)
     intro_candidates: list[MatchModel] = Field(default_factory=list)
@@ -92,12 +76,33 @@ class EpisodeStateModel(BaseModel):
 
 
 class TargetsByKindModel(BaseModel):
-    """Legacy top-level target banks persisted as ``[targets.open]`` / ``close``."""
+    """Top-level target banks persisted as ``[targets.open]`` / ``[targets.close]``."""
 
     model_config = ConfigDict(extra="forbid")
 
     open: TargetStateModel = Field(default_factory=TargetStateModel)
     close: TargetStateModel = Field(default_factory=TargetStateModel)
+
+
+class SnippetProfileStateModel(BaseModel):
+    """Embedded detection profile stored under ``[snippets.profile]``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    n_frames: int
+    analysis_rate: int
+    hop_size: int
+    band_count: int
+    data: str  # base85-encoded byte-shuffled zlib-compressed float32 matrix
+
+
+class SnippetStateModel(BaseModel):
+    """One snippet entry in the ``[[snippets]]`` array-of-tables."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    profile: SnippetProfileStateModel
 
 
 class PipelineStateModel(BaseModel):
@@ -107,8 +112,8 @@ class PipelineStateModel(BaseModel):
 
     targets: TargetsByKindModel = Field(default_factory=TargetsByKindModel)
     settings: RunSettingsModel = Field(default_factory=RunSettingsModel)
+    snippets: list[SnippetStateModel] = Field(default_factory=list)
     episodes: dict[str, EpisodeStateModel] = Field(default_factory=dict)
-    profiles: dict[str, str] = Field(default_factory=dict)
 
 
 class GenericStateModel(BaseModel):

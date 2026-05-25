@@ -9,10 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from part_io.adapters.audio.matcher import (
-    _ANALYSIS_RATE,
     AudioMatch,
-    _build_spectral_profile,
-    _decode_pcm_mono_16k,
     build_consensus_profile,
     find_audio_sample_matches_from_profile,
     warm_source_profile,
@@ -64,50 +61,29 @@ def _build_consensus_from_segments(
 
 def _init_profiles(
     state: PipelineState,
-    snippets: dict[str, Path | None],
     remote_dir: Path,
     *,
     emit: "Callable[[str], None]",
 ) -> None:
-    """Compute/refresh profiles for all kinds and store on state.profiles.
+    """Refresh detection profiles for all snippets in state.
 
     Priority:
       1. Fresh consensus from hash-valid positives (most accurate) → update checkpoint.
-      2. Existing checkpoint in state.profiles (transplant / no-audio-available).
-      3. Bootstrap from snippet file (first run) → save as checkpoint.
-      4. Hard fail — no profile, no snippet.
+      2. Existing checkpoint already in state.snippets (transplant / no-audio-available).
+      3. Hard fail — no profile present.
     """
-    for kind in snippets:
+    for snip in state.snippets:
+        kind = snip.name
         target = state.open_target if kind == "open" else state.close_target
         consensus = _build_consensus_from_segments(
             target.positives, remote_dir=remote_dir, episodes=state.episodes
         )
         if consensus is not None:
-            state.profiles[kind] = consensus
+            snip.profile = consensus
             emit(f"  [profile:{kind}] consensus from {len(target.positives)} positive(s)")
             continue
 
-        if kind in state.profiles:
-            emit(f"  [profile:{kind}] loaded from checkpoint")
-            continue
-
-        snippet_path = snippets[kind]
-        if snippet_path is not None and snippet_path.exists():
-            samples = _decode_pcm_mono_16k(snippet_path)
-            if not samples:
-                raise RuntimeError(
-                    f"Cannot build profile for '{kind}':"
-                    f" snippet '{snippet_path}' produced no audio."
-                )
-            arr = np.asarray(_build_spectral_profile(samples, _ANALYSIS_RATE), dtype=np.float32)
-            state.profiles[kind] = arr
-            emit(f"  [profile:{kind}] bootstrapped from snippet '{snippet_path.name}'")
-            continue
-
-        raise RuntimeError(
-            f"No profile available for kind '{kind}': "
-            "provide a snippet file or seed with at least 2 approved positives."
-        )
+        emit(f"  [profile:{kind}] loaded from checkpoint")
 
 
 def _process_detection_results(
@@ -159,7 +135,6 @@ def _process_detection_results(
 def _detect_batch(
     episodes: list[Path],
     state: PipelineState,
-    snippets: dict[str, Path | None],
     *,
     remote_dir: Path,
     step_seconds: float,
@@ -170,7 +145,9 @@ def _detect_batch(
     ep_by_stem = {ep.stem: ep for ep in episodes}
     duration_by_stem = {ep.stem: _probe_audio_duration_seconds(ep) for ep in episodes}
 
-    _init_profiles(state, snippets, remote_dir, emit=_emit)
+    _init_profiles(state, remote_dir, emit=_emit)
+
+    snippet_paths: dict[str, Path | None] = {s.name: None for s in state.snippets}
 
     def _detector(
         *,
@@ -180,13 +157,14 @@ def _detect_batch(
         score_threshold: float,
         step_seconds: float,
     ) -> list[AudioMatch]:
-        if kind not in state.profiles:
+        reference = state.profile_for(kind)
+        if reference is None:
             raise RuntimeError(
                 f"No profile for kind '{kind}'. This should have been caught by _init_profiles."
             )
         return find_audio_sample_matches_from_profile(
             source_path=source_path,
-            reference=state.profiles[kind],
+            reference=reference,
             score_threshold=score_threshold,
             step_seconds=step_seconds,
             profile_cache_dir=profile_cache_dir,
@@ -200,7 +178,7 @@ def _detect_batch(
     jobs, results = run_detection_batch(
         DetectionBatchRequest(
             episodes=episodes,
-            snippets=snippets,
+            snippets=snippet_paths,
         ),
         detector=detector,
         step_seconds=step_seconds,
