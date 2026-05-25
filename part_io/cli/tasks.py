@@ -45,11 +45,11 @@ def _print_help() -> None:
     print("  audio-review-batch  Run batch audio review generation")
     print("  audio-ad-detect     Pair open/close detections into ad_segments.json")
     print("  audio-ad-remove     Cut detected ad segments from an episode MP3")
-    print("  remote-review       Generate open/close review bundles from downloads/remote/")
-    print("  remote-cut          Cut ad segments from labeled remote episodes")
-    print("  remote-loop         Generate → review → cut one episode at a time (streamlined)")
+    print("  remote-precache     Cache episode profiles (background by default)")
+    print("  remote-prep-quiz    Prepare quiz candidates into __state__.toml")
+    print("  remote-prep-cut     Run interactive quiz and persist labels")
+    print("  remote-execute-cut  Execute cuts from current state (background by default)")
     print("  remote-config-init  Build profile-only __config__.toml from seed snippets")
-    print("  remote-precache     Pre-warm spectral profile cache for all episodes overnight")
     print("  remote-promote      Safely replace remote files with staged cleaned versions")
     print("  compile         Generate Pydantic model schemas into part_io/models/schemas")
     print("  lint            Run declared lint tasks")
@@ -146,14 +146,11 @@ _PASSTHROUGH_CMDS = {
     "audio-ad-detect",
     "audio-ad-remove",
     "audio-snippet-profile",
-    "remote-review",
-    "remote-cut",
-    "remote-loop",
-    "remote-config-init",
     "remote-precache",
-    "remote-precache-start",
-    "remote-precache-stop",
-    "remote-precache-status",
+    "remote-prep-quiz",
+    "remote-prep-cut",
+    "remote-execute-cut",
+    "remote-config-init",
     "remote-promote",
 }
 
@@ -192,13 +189,11 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace, extra: 
     if args.command == "audio-ad-remove":
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.audio_ad_remove", *extra]))
     if args.command in (
-        "remote-review",
-        "remote-cut",
-        "remote-loop",
         "remote-precache",
-        "remote-precache-start",
-        "remote-precache-stop",
-        "remote-precache-status",
+        "remote-prep-quiz",
+        "remote-prep-cut",
+        "remote-execute-cut",
+        "remote-config-init",
     ):
         sub = args.command.split("-", 1)[1]
         sys.exit(_run_cmd([sys.executable, "-m", "part_io.cli.remote_pipeline", sub, *extra]))

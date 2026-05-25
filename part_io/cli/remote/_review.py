@@ -5,11 +5,16 @@ import sys
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from part_io.adapters.audio.ad_segments import pair_ad_segments
+from part_io.adapters.audio.matcher import AudioMatch
 from part_io.cli.remote._state import (
     _AUDIO_KINDS,
+    _NEG,
+    _POS,
     _UNC,
     EpisodeState,
     PipelineState,
+    _Match,
     _replace_target_from_dict_lists,
     _target_to_dict_lists,
 )
@@ -78,7 +83,86 @@ def _collect_uncertain_candidates(state: PipelineState) -> list[ReviewItem]:
     review_items = collect_uncertain_candidates(
         episodes_dict, open_pos, open_neg, close_pos, close_neg
     )
-    return sort_by_expected_savings(list(review_items), open_pos, open_neg, close_pos, close_neg)
+    expected = sort_by_expected_savings(
+        list(review_items), open_pos, open_neg, close_pos, close_neg
+    )
+    return _sort_by_pairing_impact(state, expected)
+
+
+def _to_audio_match(candidate: _Match) -> AudioMatch:
+    return AudioMatch(
+        start_seconds=float(candidate.start),
+        end_seconds=float(candidate.end),
+        duration_seconds=max(0.0, float(candidate.end) - float(candidate.start)),
+        score=float(candidate.score),
+    )
+
+
+def _pairing_metrics_for_episode(
+    episode: EpisodeState,
+    *,
+    min_gap: float,
+    max_gap: float,
+    forced: tuple[str, int, str] | None = None,
+) -> tuple[int, float]:
+    force_kind, force_idx, force_label = forced if forced is not None else (None, -1, "")
+
+    open_matches: list[AudioMatch] = []
+    for idx, candidate in enumerate(episode.candidates_for("open")):
+        label = force_label if force_kind == "open" and idx == force_idx else candidate.label
+        if label != _NEG:
+            open_matches.append(_to_audio_match(candidate))
+
+    close_matches: list[AudioMatch] = []
+    for idx, candidate in enumerate(episode.candidates_for("close")):
+        label = force_label if force_kind == "close" and idx == force_idx else candidate.label
+        if label != _NEG:
+            close_matches.append(_to_audio_match(candidate))
+
+    if not open_matches or not close_matches:
+        return 0, 0.0
+
+    segments, _, _ = pair_ad_segments(
+        open_matches,
+        close_matches,
+        min_gap=min_gap,
+        max_gap=max_gap,
+    )
+    return len(segments), sum(seg.gap_seconds for seg in segments)
+
+
+def _sort_by_pairing_impact(state: PipelineState, items: list[ReviewItem]) -> list[ReviewItem]:
+    """Prioritize questions that most change the cut plan if flipped positive/negative."""
+    global_items = [item for item in items if item.kind in ("open", "close")]
+    local_items = [item for item in items if item.kind not in ("open", "close")]
+    min_gap = float(state.settings.cut.min_gap)
+    max_gap = float(state.settings.cut.max_gap)
+    cache: dict[tuple[str, str, int], float] = {}
+
+    def _impact(item: ReviewItem) -> float:
+        key = (item.stem, item.kind, item.candidate_idx)
+        if key in cache:
+            return cache[key]
+        episode = state.episode(item.stem)
+        pos_n, pos_gap = _pairing_metrics_for_episode(
+            episode,
+            min_gap=min_gap,
+            max_gap=max_gap,
+            forced=(item.kind, item.candidate_idx, _POS),
+        )
+        neg_n, neg_gap = _pairing_metrics_for_episode(
+            episode,
+            min_gap=min_gap,
+            max_gap=max_gap,
+            forced=(item.kind, item.candidate_idx, _NEG),
+        )
+        # Maximize pair-count impact first, then tie-break by total-gap impact.
+        score = abs(pos_n - neg_n) * 1000.0 + abs(pos_gap - neg_gap)
+        cache[key] = score
+        return score
+
+    global_items.sort(key=_impact, reverse=True)
+    return global_items + local_items
 
 
 try:

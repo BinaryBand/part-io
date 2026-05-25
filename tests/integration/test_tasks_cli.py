@@ -203,6 +203,37 @@ def test_main_remote_promote_dispatch(monkeypatch) -> None:
     ]
 
 
+def test_main_remote_prep_quiz_dispatch(monkeypatch) -> None:
+    """remote-prep-quiz should dispatch to remote pipeline with prep-quiz subcommand."""
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str]) -> int:
+        seen.append(cmd)
+        return 0
+
+    monkeypatch.setattr(tasks_cli, "_run_cmd", fake_run)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["part_io-tasks", "remote-prep-quiz", "downloads/remote", "--workers", "4"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        tasks_cli.main()
+
+    assert exc.value.code == 0
+    assert seen == [
+        [
+            tasks_cli.sys.executable,
+            "-m",
+            "part_io.cli.remote_pipeline",
+            "prep-quiz",
+            "downloads/remote",
+            "--workers",
+            "4",
+        ]
+    ]
+
+
 def test_main_lint_dispatch(monkeypatch) -> None:
     """Lint should dispatch to its dedicated handler."""
     called = {"lint": False}

@@ -43,6 +43,25 @@ def test_collect_uncertain_candidates_returns_sorted_candidates() -> None:
     ]
 
 
+def test_collect_uncertain_candidates_prioritizes_pairing_impact() -> None:
+    state = PipelineState()
+
+    # Low-score open that can form a valid pair when approved -> high information gain.
+    high_impact = state.episode("high_impact")
+    high_impact.open_candidates = [_Match(score=0.20, start=10.0, end=11.0)]
+    high_impact.close_candidates = [_Match(score=0.40, start=20.0, end=21.0, label="positive")]
+
+    # High-score open that still cannot pair (close is far out of bounds) -> low information gain.
+    low_impact = state.episode("low_impact")
+    low_impact.open_candidates = [_Match(score=0.99, start=10.0, end=11.0)]
+    low_impact.close_candidates = [_Match(score=0.80, start=1000.0, end=1001.0, label="positive")]
+
+    items = _collect_uncertain_candidates(state)
+    open_items = [item for item in items if item.kind == "open"]
+
+    assert [item.stem for item in open_items][:2] == ["high_impact", "low_impact"]
+
+
 def test_reclassify_all_promotes_uncertain_when_score_clears_threshold() -> None:
     state = PipelineState()
 

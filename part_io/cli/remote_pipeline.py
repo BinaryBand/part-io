@@ -1,13 +1,12 @@
-"""Remote episode pipeline: detect ad-break positions, review them, cut them out.
+"""Remote episode pipeline with explicit, staged commands.
 
 Subcommands:
-  review  — detect open/close matches per episode, review each interactively
-  cut     — use state.toml to pair and cut ad segments
-    loop    - detect -> review -> cut one episode at a time until done
+    precache    — cache episode profiles (background by default)
+    prep-quiz   — cache + detect candidates into __state__.toml (background by default)
+    prep-cut    — run interactive review quiz and persist answers
+    execute-cut — cut confident episodes from __state__.toml (background by default)
 
-State is stored entirely in {review_root}/state.toml.
-No clip files or manifest CSVs are written.
-Delete state.toml to start fresh.
+State is stored in {remote_dir}/__state__.toml.
 """
 
 from __future__ import annotations
@@ -135,6 +134,48 @@ def _chunks(items: list, size: int):
 def _emit(message: str) -> None:
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
+
+
+def _background_paths(remote_dir: Path, job_name: str) -> tuple[Path, Path]:
+    """Return (pidfile, logfile) for a detached background job."""
+    base = remote_dir.parent
+    safe = job_name.replace("-", "_")
+    return base / f".{safe}.pid", base / f".{safe}.log"
+
+
+def _background_running(pid_path: Path) -> int | None:
+    """Return running PID if alive, else None."""
+    if not pid_path.exists():
+        return None
+    try:
+        pid = int(pid_path.read_text().strip())
+        os.kill(pid, 0)
+        return pid
+    except (ValueError, ProcessLookupError, PermissionError):
+        return None
+
+
+def _launch_background_job(*, remote_dir: Path, job_name: str, cmd: list[str]) -> None:
+    from part_io.utils.exec import launch_resolved
+
+    pid_path, log_path = _background_paths(remote_dir, job_name)
+    existing = _background_running(pid_path)
+    if existing is not None:
+        print(f"Already running (pid {existing}).", file=sys.stderr)
+        sys.exit(1)
+
+    log_f = log_path.open("a")
+    devnull = open(os.devnull, "rb")
+    proc = launch_resolved(
+        cmd,
+        stdout=log_f,
+        stderr=log_f,
+        stdin=devnull,
+        start_new_session=True,
+    )
+    pid_path.write_text(str(proc.pid))
+    print(f"Started {job_name} (pid {proc.pid}).")
+    print(f"Log: {log_path}")
 
 
 _T = TypeVar("_T")
@@ -528,6 +569,29 @@ def _cmd_review(args: argparse.Namespace) -> None:
     )
 
 
+def _cmd_prep_cut(args: argparse.Namespace) -> None:
+    """Run interactive quiz only; detection should be prepared by prep-quiz."""
+    remote_dir: Path = args.remote_dir
+    state_path = remote_dir / "__state__.toml"
+    state = PipelineState.load(state_path)
+
+    if not remote_dir.exists():
+        sys.exit(f"Remote dir not found: {remote_dir}")
+
+    n_unc = _count_uncertain(state)
+    _emit(f"\n{n_unc} uncertain target(s) to review.")
+    if not n_unc:
+        _emit("Nothing to review — all episodes classified.")
+        return
+
+    _run_review_loop(
+        state,
+        snippets={},
+        state_path=state_path,
+        remote_dir=remote_dir,
+    )
+
+
 # ---------------------------------------------------------------------------
 # cut subcommand
 # ---------------------------------------------------------------------------
@@ -566,6 +630,39 @@ def _cmd_cut(args: argparse.Namespace) -> None:
     print(f"\nDone: {n_cut} cut, {n_skipped} skipped, {n_failed} failed.")
     if n_failed:
         sys.exit(1)
+
+
+def _cmd_execute_cut(args: argparse.Namespace) -> None:
+    """Cut episodes in the foreground or detach by default."""
+    remote_dir: Path = args.remote_dir
+    if args.background:
+        cmd = [
+            sys.executable,
+            "-m",
+            "part_io.cli.remote_pipeline",
+            "execute-cut",
+            str(remote_dir),
+            "--no-background",
+            "--yes",
+        ]
+        if args.verbose:
+            cmd.append("--verbose")
+        if args.output_dir is not None:
+            cmd += ["--output-dir", str(args.output_dir)]
+        if args.min_gap is not None:
+            cmd += ["--min-gap", str(args.min_gap)]
+        if args.max_gap is not None:
+            cmd += ["--max-gap", str(args.max_gap)]
+        if args.dry_run:
+            cmd.append("--dry-run")
+        if args.inclusive:
+            cmd.append("--inclusive")
+        if args.fade is not None:
+            cmd += ["--fade", str(args.fade)]
+        _launch_background_job(remote_dir=remote_dir, job_name="execute-cut", cmd=cmd)
+        return
+
+    _cmd_cut(args)
 
 
 # ---------------------------------------------------------------------------
@@ -740,6 +837,15 @@ def _add_seed_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--outro-seed", type=Path, default=None, metavar="FILE")
 
 
+def _add_background_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--background",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run detached in background (default: true).",
+    )
+
+
 def _build_review_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("review", help="Detect matches and review them interactively")
     _add_remote_dir_arg(p)
@@ -758,6 +864,40 @@ def _build_cut_parser(sub: argparse._SubParsersAction) -> None:
     _add_verbose_arg(p)
     p.add_argument("--output-dir", type=Path, default=None)
     _add_cut_args(p)
+
+
+def _build_execute_cut_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("execute-cut", help="Execute confident cuts from __state__.toml")
+    _add_remote_dir_arg(p)
+    _add_verbose_arg(p)
+    p.add_argument("--output-dir", type=Path, default=None)
+    _add_cut_args(p)
+    _add_background_arg(p)
+
+
+def _build_cut_start_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("cut-start", help="Start cut as a background process.")
+    _add_remote_dir_arg(p)
+    _add_verbose_arg(p)
+    p.add_argument("--output-dir", type=Path, default=None)
+    _add_cut_args(p)
+
+
+def _build_cut_stop_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("cut-stop", help="Stop a running background cut process.")
+    _add_remote_dir_arg(p)
+
+
+def _build_cut_status_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("cut-status", help="Show background cut status and recent log.")
+    _add_remote_dir_arg(p)
+    p.add_argument(
+        "--lines",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Number of recent log lines to show (default: 20)",
+    )
 
 
 def _build_loop_parser(sub: argparse._SubParsersAction) -> None:
@@ -817,12 +957,63 @@ def _build_precache_parser(sub: argparse._SubParsersAction) -> None:
         default=False,
         help="Re-build cache entries that already exist",
     )
+    _add_background_arg(p)
+
+
+def _build_prep_quiz_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "prep-quiz",
+        help="Populate __state__.toml by caching and detecting candidate matches.",
+    )
+    _add_remote_dir_arg(p)
+    _add_verbose_arg(p)
+    _add_detect_args(p)
+    _add_seed_args(p)
+    p.add_argument(
+        "--sleep",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="Pause between episodes while precaching (default: 0)",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Re-detect and re-build cached profiles",
+    )
+    _add_background_arg(p)
+
+
+def _build_prep_cut_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("prep-cut", help="Run interactive quiz and persist labels to state.")
+    _add_remote_dir_arg(p)
+    _add_verbose_arg(p)
 
 
 def _cmd_precache(args: argparse.Namespace) -> None:
     import time
 
     remote_dir: Path = args.remote_dir
+
+    if args.background:
+        cmd = [
+            sys.executable,
+            "-m",
+            "part_io.cli.remote_pipeline",
+            "precache",
+            str(remote_dir),
+            "--no-background",
+            "--sleep",
+            str(args.sleep),
+        ]
+        if args.verbose:
+            cmd.append("--verbose")
+        if args.overwrite:
+            cmd.append("--overwrite")
+        _launch_background_job(remote_dir=remote_dir, job_name="precache", cmd=cmd)
+        return
+
     sleep_s: float = args.sleep
     overwrite: bool = args.overwrite
     profile_cache_dir = get_profile_cache_dir(remote_dir)
@@ -852,6 +1043,206 @@ def _cmd_precache(args: argparse.Namespace) -> None:
             time.sleep(sleep_s)
 
     print(f"\nDone. {built} built, {cached} already cached.", flush=True)
+
+
+def _cmd_prep_quiz(args: argparse.Namespace) -> None:
+    remote_dir: Path = args.remote_dir
+    state_path = remote_dir / "__state__.toml"
+
+    if args.background:
+        cmd = [
+            sys.executable,
+            "-m",
+            "part_io.cli.remote_pipeline",
+            "prep-quiz",
+            str(remote_dir),
+            "--no-background",
+            "--sleep",
+            str(args.sleep),
+        ]
+        if args.verbose:
+            cmd.append("--verbose")
+        if args.step_seconds is not None:
+            cmd += ["--step-seconds", str(args.step_seconds)]
+        if args.workers is not None:
+            cmd += ["--workers", str(args.workers)]
+        if args.max_matches is not None:
+            cmd += ["--max-matches", str(args.max_matches)]
+        if args.open_seed is not None:
+            cmd += ["--open-seed", str(args.open_seed)]
+        if args.close_seed is not None:
+            cmd += ["--close-seed", str(args.close_seed)]
+        if args.intro_seed is not None:
+            cmd += ["--intro-seed", str(args.intro_seed)]
+        if args.outro_seed is not None:
+            cmd += ["--outro-seed", str(args.outro_seed)]
+        if args.overwrite:
+            cmd.append("--overwrite")
+        _launch_background_job(remote_dir=remote_dir, job_name="prep-quiz", cmd=cmd)
+        return
+
+    state = PipelineState.load(state_path)
+    _apply_sticky_review_args(args, state)
+    state.save(state_path)
+
+    if not state.snippets:
+        if not args.open_seed or not args.close_seed:
+            sys.exit(
+                f"No snippet profiles in {state_path}.\n"
+                f"Re-run with --open-seed <file> --close-seed <file> to initialize."
+            )
+        _snapshot_snippets(
+            state,
+            state_path,
+            open_seed=args.open_seed,
+            close_seed=args.close_seed,
+            intro_seed=args.intro_seed,
+            outro_seed=args.outro_seed,
+        )
+
+    if not remote_dir.exists():
+        sys.exit(f"Remote dir not found: {remote_dir}")
+
+    all_full = _full_episodes(remote_dir)
+    if not all_full:
+        sys.exit(f"No full-length MP3s (>= 10 MB) found in {remote_dir}")
+
+    # prep-quiz includes precaching as a guaranteed side effect.
+    precache_args = argparse.Namespace(
+        remote_dir=remote_dir,
+        verbose=args.verbose,
+        sleep=args.sleep,
+        overwrite=args.overwrite,
+        background=False,
+    )
+    _cmd_precache(precache_args)
+
+    to_detect = [
+        ep for ep in all_full if args.overwrite or not state.episode(ep.stem).is_detected()
+    ]
+    n_already = len(all_full) - len(to_detect)
+    _emit(f"Episodes: {len(all_full)} total, {n_already} detected, {len(to_detect)} to detect")
+
+    if to_detect:
+        _emit(f"\nDetecting {len(to_detect)} episode(s) with {args.workers} worker(s)...")
+        _detect_batch(
+            to_detect,
+            state,
+            remote_dir=remote_dir,
+            step_seconds=args.step_seconds,
+            workers=args.workers,
+            max_matches=args.max_matches,
+            profile_cache_dir=get_profile_cache_dir(remote_dir),
+        )
+        _reclassify_all(state)
+        state.save(state_path)
+
+    n_unc = _count_uncertain(state)
+    _emit(f"\nprep-quiz complete: {n_unc} uncertain target(s) ready for prep-cut.")
+
+
+def _cut_paths(remote_dir: Path) -> tuple[Path, Path]:
+    """Return (pidfile, logfile) for background cut process."""
+    base = remote_dir.parent
+    return base / ".cut.pid", base / ".cut.log"
+
+
+def _cut_running(pid_path: Path) -> int | None:
+    """Return the running PID if the cut process is alive, else None."""
+    if not pid_path.exists():
+        return None
+    try:
+        pid = int(pid_path.read_text().strip())
+        os.kill(pid, 0)  # signal 0 = existence check
+        return pid
+    except (ValueError, ProcessLookupError, PermissionError):
+        return None
+
+
+def _cmd_cut_start(args: argparse.Namespace) -> None:
+    from part_io.utils.exec import launch_resolved
+
+    remote_dir: Path = args.remote_dir
+    pid_path, log_path = _cut_paths(remote_dir)
+
+    existing = _cut_running(pid_path)
+    if existing is not None:
+        print(f"Already running (pid {existing}). Use cut-stop first.", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "part_io.cli.remote_pipeline",
+        "cut",
+        str(remote_dir),
+        "--yes",
+    ]
+    if args.verbose:
+        cmd.append("--verbose")
+    if args.output_dir is not None:
+        cmd += ["--output-dir", str(args.output_dir)]
+    if args.min_gap is not None:
+        cmd += ["--min-gap", str(args.min_gap)]
+    if args.max_gap is not None:
+        cmd += ["--max-gap", str(args.max_gap)]
+    if args.dry_run:
+        cmd.append("--dry-run")
+    if args.inclusive:
+        cmd.append("--inclusive")
+    if args.fade is not None:
+        cmd += ["--fade", str(args.fade)]
+
+    log_f = log_path.open("a")
+    devnull = open(os.devnull, "rb")
+    proc = launch_resolved(
+        cmd,
+        stdout=log_f,
+        stderr=log_f,
+        stdin=devnull,
+        start_new_session=True,  # detach from the terminal's process group
+    )
+    pid_path.write_text(str(proc.pid))
+    print(f"Started cut (pid {proc.pid}).")
+    print(f"Log: {log_path}")
+    print("Stop with: poetry run part-io-tasks remote-cut-stop")
+
+
+def _cmd_cut_stop(args: argparse.Namespace) -> None:
+    import signal
+
+    remote_dir: Path = args.remote_dir
+    pid_path, _ = _cut_paths(remote_dir)
+
+    pid = _cut_running(pid_path)
+    if pid is None:
+        print("No cut process is running.")
+        pid_path.unlink(missing_ok=True)
+        return
+
+    os.kill(pid, signal.SIGTERM)
+    pid_path.unlink(missing_ok=True)
+    print(f"Stopped cut (pid {pid}).")
+
+
+def _cmd_cut_status(args: argparse.Namespace) -> None:
+    remote_dir: Path = args.remote_dir
+    pid_path, log_path = _cut_paths(remote_dir)
+
+    pid = _cut_running(pid_path)
+    if pid is None:
+        print("Cut: not running.")
+        pid_path.unlink(missing_ok=True)
+    else:
+        print(f"Cut: running (pid {pid})")
+
+    if log_path.exists():
+        lines = log_path.read_text().splitlines()
+        tail = lines[-args.lines :]
+        print(f"\n--- last {len(tail)} lines of {log_path} ---")
+        print("\n".join(tail))
+    else:
+        print("No log file found.")
 
 
 def _precache_paths(remote_dir: Path) -> tuple[Path, Path]:
@@ -987,34 +1378,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Remote episode review and ad-cut pipeline.")
     sub = parser.add_subparsers(dest="subcommand", required=True)
     _build_config_init_parser(sub)
-    _build_review_parser(sub)
-    _build_cut_parser(sub)
-    _build_loop_parser(sub)
     _build_precache_parser(sub)
-    _build_precache_start_parser(sub)
-    _build_precache_stop_parser(sub)
-    _build_precache_status_parser(sub)
+    _build_prep_quiz_parser(sub)
+    _build_prep_cut_parser(sub)
+    _build_execute_cut_parser(sub)
     args = parser.parse_args()
 
     if args.verbose if hasattr(args, "verbose") else False:
         logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
 
-    if args.subcommand == "review":
-        _cmd_review(args)
-    elif args.subcommand == "config-init":
+    if args.subcommand == "config-init":
         _cmd_config_init(args)
-    elif args.subcommand == "cut":
-        _cmd_cut(args)
     elif args.subcommand == "precache":
         _cmd_precache(args)
-    elif args.subcommand == "precache-start":
-        _cmd_precache_start(args)
-    elif args.subcommand == "precache-stop":
-        _cmd_precache_stop(args)
-    elif args.subcommand == "precache-status":
-        _cmd_precache_status(args)
+    elif args.subcommand == "prep-quiz":
+        _cmd_prep_quiz(args)
+    elif args.subcommand == "prep-cut":
+        _cmd_prep_cut(args)
+    elif args.subcommand == "execute-cut":
+        _cmd_execute_cut(args)
     else:
-        _cmd_loop(args)
+        parser.error(f"Unhandled subcommand: {args.subcommand}")
 
 
 if __name__ == "__main__":
