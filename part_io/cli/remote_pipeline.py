@@ -232,6 +232,7 @@ def _cmd_prep_cut(args: argparse.Namespace) -> None:
             "Run `remote-prep-quiz` first and wait for it to complete."
         )
 
+    _reclassify_all(state)
     n_unc = _count_uncertain(state)
     n_und = sum(1 for ep in state.episodes.values() if not ep.is_detected())
     _emit(f"\n{n_unc} uncertain target(s) to review.")

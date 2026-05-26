@@ -135,6 +135,10 @@ def apply_review_decision(
     open_target_negatives: list[dict],
     close_target_positives: list[dict],
     close_target_negatives: list[dict],
+    intro_target_positives: list[dict],
+    intro_target_negatives: list[dict],
+    outro_target_positives: list[dict],
+    outro_target_negatives: list[dict],
 ) -> tuple[ReviewDecision, UndoEntry]:
     """Apply one review action (approve/reject) to episode and targets.
 
@@ -160,6 +164,10 @@ def apply_review_decision(
             open_target_positives.append(segment)
         elif kind == "close":
             close_target_positives.append(segment)
+        elif kind == "intro":
+            intro_target_positives.append(segment)
+        elif kind == "outro":
+            outro_target_positives.append(segment)
         cand["label"] = "positive"
         decision_action: Literal["approved", "rejected"] = "approved"
         target_list_was_positive = True
@@ -168,6 +176,10 @@ def apply_review_decision(
             open_target_negatives.append(segment)
         elif kind == "close":
             close_target_negatives.append(segment)
+        elif kind == "intro":
+            intro_target_negatives.append(segment)
+        elif kind == "outro":
+            outro_target_negatives.append(segment)
         cand["label"] = "negative"
         decision_action = "rejected"
         target_list_was_positive = False
@@ -203,6 +215,10 @@ def undo_review_decision(
     open_target_negatives: list[dict],
     close_target_positives: list[dict],
     close_target_negatives: list[dict],
+    intro_target_positives: list[dict],
+    intro_target_negatives: list[dict],
+    outro_target_positives: list[dict],
+    outro_target_negatives: list[dict],
 ) -> None:
     """Undo one previously applied review decision in-place."""
 
@@ -224,6 +240,14 @@ def undo_review_decision(
     elif undo.kind == "close":
         _remove_segment(
             close_target_positives if undo.target_list_was_positive else close_target_negatives
+        )
+    elif undo.kind == "intro":
+        _remove_segment(
+            intro_target_positives if undo.target_list_was_positive else intro_target_negatives
+        )
+    elif undo.kind == "outro":
+        _remove_segment(
+            outro_target_positives if undo.target_list_was_positive else outro_target_negatives
         )
 
     candidates = episode.get(f"{undo.kind}_candidates", [])
@@ -302,6 +326,10 @@ def collect_uncertain_candidates(
     open_target_negatives: list[dict],
     close_target_positives: list[dict],
     close_target_negatives: list[dict],
+    intro_target_positives: list[dict],
+    intro_target_negatives: list[dict],
+    outro_target_positives: list[dict],
+    outro_target_negatives: list[dict],
 ) -> list[ReviewItem]:
     """Return all candidates in the uncertain zone (θ⁻, θ⁺).
 
@@ -309,18 +337,24 @@ def collect_uncertain_candidates(
     Sorted by (candidate_idx, -score): all top candidates across every uncertain
     (stem, kind) pair come first, then all second candidates, etc.
     """
-    target_positives = {"open": open_target_positives, "close": close_target_positives}
-    target_negatives = {"open": open_target_negatives, "close": close_target_negatives}
-
-    # Kinds with a global target use MOE thresholds; others pass all unlabeled candidates.
-    thresholds: dict[str, tuple[float, float]] = {}
-    for kind, cfg in KINDS.items():
-        if cfg.has_global_target:
-            pos = [float(s["score"]) for s in target_positives[kind]]
-            neg = [float(s["score"]) for s in target_negatives[kind]]
-            thresholds[kind] = compute_classification_thresholds(pos, neg)
-        else:
-            thresholds[kind] = (float("inf"), float("-inf"))
+    thresholds: dict[str, tuple[float, float]] = {
+        "open": compute_classification_thresholds(
+            [float(s["score"]) for s in open_target_positives],
+            [float(s["score"]) for s in open_target_negatives],
+        ),
+        "close": compute_classification_thresholds(
+            [float(s["score"]) for s in close_target_positives],
+            [float(s["score"]) for s in close_target_negatives],
+        ),
+        "intro": compute_classification_thresholds(
+            [float(s["score"]) for s in intro_target_positives],
+            [float(s["score"]) for s in intro_target_negatives],
+        ),
+        "outro": compute_classification_thresholds(
+            [float(s["score"]) for s in outro_target_positives],
+            [float(s["score"]) for s in outro_target_negatives],
+        ),
+    }
 
     items: list[ReviewItem] = []
     for stem, ep in episodes.items():
@@ -379,11 +413,14 @@ def reclassify_all_episodes(
     open_target_negatives: list[dict],
     close_target_positives: list[dict],
     close_target_negatives: list[dict],
+    intro_target_positives: list[dict],
+    intro_target_negatives: list[dict],
+    outro_target_positives: list[dict],
+    outro_target_negatives: list[dict],
 ) -> None:
     """Recompute MOE-derived thresholds and reclassify uncertain episodes in-place.
 
-    Only `open` and `close` are globally thresholded. `intro` and `outro`
-    remain human-reviewed classes and are intentionally left unchanged here.
+    All four kinds use dedicated global target banks for threshold computation.
     """
     tp_o, tm_o = compute_classification_thresholds(
         [float(s["score"]) for s in open_target_positives],
@@ -392,6 +429,14 @@ def reclassify_all_episodes(
     tp_c, tm_c = compute_classification_thresholds(
         [float(s["score"]) for s in close_target_positives],
         [float(s["score"]) for s in close_target_negatives],
+    )
+    tp_i, tm_i = compute_classification_thresholds(
+        [float(s["score"]) for s in intro_target_positives],
+        [float(s["score"]) for s in intro_target_negatives],
+    )
+    tp_t, tm_t = compute_classification_thresholds(
+        [float(s["score"]) for s in outro_target_positives],
+        [float(s["score"]) for s in outro_target_negatives],
     )
 
     for ep in episodes.values():
@@ -410,6 +455,24 @@ def reclassify_all_episodes(
                 continue
             score = float(cand.get("score", 0.0))
             classified = classify_score_with_thresholds(score, tp_c, tm_c)
+            if classified in ("positive", "negative"):
+                cand["label"] = classified
+
+        # Intro
+        for cand in ep.get("intro_candidates", []):
+            if _candidate_label(cand) is not None:
+                continue
+            score = float(cand.get("score", 0.0))
+            classified = classify_score_with_thresholds(score, tp_i, tm_i)
+            if classified in ("positive", "negative"):
+                cand["label"] = classified
+
+        # Outro
+        for cand in ep.get("outro_candidates", []):
+            if _candidate_label(cand) is not None:
+                continue
+            score = float(cand.get("score", 0.0))
+            classified = classify_score_with_thresholds(score, tp_t, tm_t)
             if classified in ("positive", "negative"):
                 cand["label"] = classified
 
@@ -459,30 +522,41 @@ def sort_by_expected_savings(
     open_target_negatives: list[dict],
     close_target_positives: list[dict],
     close_target_negatives: list[dict],
+    intro_target_positives: list[dict],
+    intro_target_negatives: list[dict],
+    outro_target_positives: list[dict],
+    outro_target_negatives: list[dict],
 ) -> list[ReviewItem]:
     """Re-order *items* so highest expected cascade classification comes first.
 
-    Only open/close candidates are reordered — they share global targets whose
-    thresholds shift with each decision. intro/outro have no global target so
-    expected savings is always 0; they are appended after open/close in their
-    original relative order.
+    All four kinds use their global target banks for savings computation.
+    Items with equal savings preserve their original relative order (stable sort).
     """
     open_pos = [float(s["score"]) for s in open_target_positives]
     open_neg = [float(s["score"]) for s in open_target_negatives]
     close_pos = [float(s["score"]) for s in close_target_positives]
     close_neg = [float(s["score"]) for s in close_target_negatives]
+    intro_pos = [float(s["score"]) for s in intro_target_positives]
+    intro_neg = [float(s["score"]) for s in intro_target_negatives]
+    outro_pos = [float(s["score"]) for s in outro_target_positives]
+    outro_neg = [float(s["score"]) for s in outro_target_negatives]
 
     open_uncertain = [i.score for i in items if i.kind == "open"]
     close_uncertain = [i.score for i in items if i.kind == "close"]
+    intro_uncertain = [i.score for i in items if i.kind == "intro"]
+    outro_uncertain = [i.score for i in items if i.kind == "outro"]
 
     def _savings(item: ReviewItem) -> float:
         if item.kind == "open":
             return _expected_savings(item.score, open_uncertain, open_pos, open_neg)
         if item.kind == "close":
             return _expected_savings(item.score, close_uncertain, close_pos, close_neg)
+        if item.kind == "intro":
+            return _expected_savings(item.score, intro_uncertain, intro_pos, intro_neg)
+        if item.kind == "outro":
+            return _expected_savings(item.score, outro_uncertain, outro_pos, outro_neg)
         return 0.0
 
-    global_items = [i for i in items if i.kind in ("open", "close")]
-    local_items = [i for i in items if i.kind not in ("open", "close")]
-    global_items.sort(key=_savings, reverse=True)
-    return global_items + local_items
+    items = list(items)
+    items.sort(key=_savings, reverse=True)
+    return items

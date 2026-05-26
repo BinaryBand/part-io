@@ -25,7 +25,6 @@ from part_io.services.review_orchestration import (
     apply_review_dict_classes,
     collect_uncertain_candidates,
     episode_to_review_dict,
-    next_uncertain_episode_kind,
     reclassify_all_episodes,
     sort_by_expected_savings,
     undo_review_decision,
@@ -55,8 +54,22 @@ def _reclassify_all(state: PipelineState) -> None:
     open_neg = [{"score": float(s.score)} for s in state.open_target.negatives]
     close_pos = [{"score": float(s.score)} for s in state.close_target.positives]
     close_neg = [{"score": float(s.score)} for s in state.close_target.negatives]
+    intro_pos = [{"score": float(s.score)} for s in state.intro_target.positives]
+    intro_neg = [{"score": float(s.score)} for s in state.intro_target.negatives]
+    outro_pos = [{"score": float(s.score)} for s in state.outro_target.positives]
+    outro_neg = [{"score": float(s.score)} for s in state.outro_target.negatives]
 
-    reclassify_all_episodes(episodes_dict, open_pos, open_neg, close_pos, close_neg)
+    reclassify_all_episodes(
+        episodes_dict,
+        open_pos,
+        open_neg,
+        close_pos,
+        close_neg,
+        intro_pos,
+        intro_neg,
+        outro_pos,
+        outro_neg,
+    )
 
     for stem, ep_dict in episodes_dict.items():
         if stem not in state.episodes:
@@ -79,12 +92,32 @@ def _collect_uncertain_candidates(state: PipelineState) -> list[ReviewItem]:
     open_neg = [{"score": float(s.score)} for s in state.open_target.negatives]
     close_pos = [{"score": float(s.score)} for s in state.close_target.positives]
     close_neg = [{"score": float(s.score)} for s in state.close_target.negatives]
+    intro_pos = [{"score": float(s.score)} for s in state.intro_target.positives]
+    intro_neg = [{"score": float(s.score)} for s in state.intro_target.negatives]
+    outro_pos = [{"score": float(s.score)} for s in state.outro_target.positives]
+    outro_neg = [{"score": float(s.score)} for s in state.outro_target.negatives]
 
     review_items = collect_uncertain_candidates(
-        episodes_dict, open_pos, open_neg, close_pos, close_neg
+        episodes_dict,
+        open_pos,
+        open_neg,
+        close_pos,
+        close_neg,
+        intro_pos,
+        intro_neg,
+        outro_pos,
+        outro_neg,
     )
     expected = sort_by_expected_savings(
-        list(review_items), open_pos, open_neg, close_pos, close_neg
+        list(review_items),
+        open_pos,
+        open_neg,
+        close_pos,
+        close_neg,
+        intro_pos,
+        intro_neg,
+        outro_pos,
+        outro_neg,
     )
     return _sort_by_pairing_impact(state, expected)
 
@@ -133,13 +166,13 @@ def _pairing_metrics_for_episode(
 
 def _sort_by_pairing_impact(state: PipelineState, items: list[ReviewItem]) -> list[ReviewItem]:
     """Prioritize questions that most change the cut plan if flipped positive/negative."""
-    global_items = [item for item in items if item.kind in ("open", "close")]
-    local_items = [item for item in items if item.kind not in ("open", "close")]
     min_gap = float(state.settings.cut.min_gap)
     max_gap = float(state.settings.cut.max_gap)
     cache: dict[tuple[str, str, int], float] = {}
 
     def _impact(item: ReviewItem) -> float:
+        if item.kind not in ("open", "close"):
+            return 0.0
         key = (item.stem, item.kind, item.candidate_idx)
         if key in cache:
             return cache[key]
@@ -161,8 +194,9 @@ def _sort_by_pairing_impact(state: PipelineState, items: list[ReviewItem]) -> li
         cache[key] = score
         return score
 
-    global_items.sort(key=_impact, reverse=True)
-    return global_items + local_items
+    items = list(items)
+    items.sort(key=_impact, reverse=True)
+    return items
 
 
 try:
@@ -227,6 +261,8 @@ def _apply_review_decision(
     ep_dict = episode_to_review_dict(ep_state, include_bounds=True)
     open_pos, open_neg = _target_to_dict_lists(state.open_target)
     close_pos, close_neg = _target_to_dict_lists(state.close_target)
+    intro_pos, intro_neg = _target_to_dict_lists(state.intro_target)
+    outro_pos, outro_neg = _target_to_dict_lists(state.outro_target)
 
     decision, undo = apply_review_decision(
         episode=ep_dict,
@@ -238,11 +274,17 @@ def _apply_review_decision(
         open_target_negatives=open_neg,
         close_target_positives=close_pos,
         close_target_negatives=close_neg,
+        intro_target_positives=intro_pos,
+        intro_target_negatives=intro_neg,
+        outro_target_positives=outro_pos,
+        outro_target_negatives=outro_neg,
     )
 
     apply_review_dict_classes(ep_state, ep_dict)
     _replace_target_from_dict_lists(state.open_target, positives=open_pos, negatives=open_neg)
     _replace_target_from_dict_lists(state.close_target, positives=close_pos, negatives=close_neg)
+    _replace_target_from_dict_lists(state.intro_target, positives=intro_pos, negatives=intro_neg)
+    _replace_target_from_dict_lists(state.outro_target, positives=outro_pos, negatives=outro_neg)
     return decision.action, undo
 
 
@@ -253,6 +295,8 @@ def _undo_last_review(state: PipelineState, history: list[UndoEntry]) -> None:
     ep_dict = episode_to_review_dict(prev_ep, include_bounds=True)
     open_pos, open_neg = _target_to_dict_lists(state.open_target)
     close_pos, close_neg = _target_to_dict_lists(state.close_target)
+    intro_pos, intro_neg = _target_to_dict_lists(state.intro_target)
+    outro_pos, outro_neg = _target_to_dict_lists(state.outro_target)
     undo_review_decision(
         episode=ep_dict,
         undo=entry,
@@ -260,11 +304,17 @@ def _undo_last_review(state: PipelineState, history: list[UndoEntry]) -> None:
         open_target_negatives=open_neg,
         close_target_positives=close_pos,
         close_target_negatives=close_neg,
+        intro_target_positives=intro_pos,
+        intro_target_negatives=intro_neg,
+        outro_target_positives=outro_pos,
+        outro_target_negatives=outro_neg,
     )
 
     apply_review_dict_classes(prev_ep, ep_dict)
     _replace_target_from_dict_lists(state.open_target, positives=open_pos, negatives=open_neg)
     _replace_target_from_dict_lists(state.close_target, positives=close_pos, negatives=close_neg)
+    _replace_target_from_dict_lists(state.intro_target, positives=intro_pos, negatives=intro_neg)
+    _replace_target_from_dict_lists(state.outro_target, positives=outro_pos, negatives=outro_neg)
     _reclassify_all(state)
     _emit(f"\nundone ({entry.action} {entry.kind} for {entry.stem[:16]})")
 
@@ -389,17 +439,17 @@ def _run_review_loop(
     skipped: set[tuple[str, str]] = set()
     decisions = 0
     while max_decisions is None or decisions < max_decisions:
-        episodes_dict = {
-            stem: episode_to_review_dict(ep, include_bounds=False)
-            for stem, ep in state.episodes.items()
-        }
-        next_t = next_uncertain_episode_kind(episodes_dict, exclude=skipped)
-        if next_t is None:
+        items = _collect_uncertain_candidates(state)
+        next_item = next(
+            (item for item in items if (item.kind, item.stem) not in skipped),
+            None,
+        )
+        if next_item is None:
             n_uncertain = _count_uncertain(state)
             if n_uncertain:
                 _emit(f"\n{n_uncertain} uncertain target(s) skipped — restart to revisit.")
             break
-        stem, kind = next_t
+        stem, kind = next_item.stem, next_item.kind
         n_unc = _count_uncertain(state)
         _emit(f"\n{'=' * 60}")
         _emit(f"Episode: {stem}  ({n_unc} uncertain remaining)")

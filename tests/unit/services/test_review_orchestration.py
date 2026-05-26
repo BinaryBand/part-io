@@ -133,7 +133,7 @@ class TestClassifyScore:
 
 class TestCollectUncertainCandidates:
     def test_empty_episodes_returns_empty_list(self) -> None:
-        items = collect_uncertain_candidates({}, [], [], [], [])
+        items = collect_uncertain_candidates({}, [], [], [], [], [], [], [], [])
         assert items == []
 
     def test_collects_open_uncertain_candidates(self) -> None:
@@ -158,6 +158,10 @@ class TestCollectUncertainCandidates:
             open_target_negatives=[],
             close_target_positives=[],
             close_target_negatives=[],
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
         # With 1 positive and 0 negatives: theta_plus = inf, theta_minus = -inf
         # So both 0.8 and 0.7 are in uncertain zone (−inf, inf)
@@ -184,6 +188,10 @@ class TestCollectUncertainCandidates:
             open_target_negatives=[],
             close_target_positives=[],
             close_target_negatives=[],
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
         assert len(items) == 1
         assert items[0].kind == "intro"
@@ -207,6 +215,10 @@ class TestCollectUncertainCandidates:
             open_target_negatives=[],
             close_target_positives=[],
             close_target_negatives=[],
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
         # All 3 should be in uncertain zone; sorted by (idx, -score)
         assert len(items) == 3
@@ -234,9 +246,42 @@ class TestCollectUncertainCandidates:
             open_target_negatives=negatives,
             close_target_positives=[],
             close_target_negatives=[],
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
         assert len(items) == 1
         assert items[0].kind == "open"
+        assert items[0].score == 0.5
+
+    def test_filters_intro_candidates_using_moe_band_from_intro_target(self) -> None:
+        episodes = {
+            "ep_uncertain": {
+                "open_class": "undetected",
+                "open_candidates": [],
+                "close_class": "undetected",
+                "close_candidates": [],
+                "intro_class": "uncertain",
+                "intro_candidates": [{"score": 0.95}, {"score": 0.5}, {"score": 0.1}],
+                "outro_class": "undetected",
+                "outro_candidates": [],
+            },
+        }
+        # 31 identical samples => moe = 0; thresholds are exactly 0.9 and 0.2
+        items = collect_uncertain_candidates(
+            episodes,
+            open_target_positives=[],
+            open_target_negatives=[],
+            close_target_positives=[],
+            close_target_negatives=[],
+            intro_target_positives=[{"score": 0.9}] * 31,
+            intro_target_negatives=[{"score": 0.2}] * 31,
+            outro_target_positives=[],
+            outro_target_negatives=[],
+        )
+        assert len(items) == 1
+        assert items[0].kind == "intro"
         assert items[0].score == 0.5
 
 
@@ -260,6 +305,10 @@ class TestReclassifyAllEpisodes:
             open_target_negatives=[],
             close_target_positives=[],
             close_target_negatives=[],
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
         # theta_plus = 0.9 + moe([0.9]) = 0.9 + inf = inf; 0.97 < inf, so stays uncertain
         assert episodes["ep1"]["open_class"] == "uncertain"
@@ -283,6 +332,10 @@ class TestReclassifyAllEpisodes:
             open_target_negatives=[],
             close_target_positives=[],
             close_target_negatives=[],
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
         # Should not change; only uncertain is reclassified
         assert episodes["ep1"]["open_class"] == "positive"
@@ -306,10 +359,14 @@ class TestReclassifyAllEpisodes:
             open_target_negatives=[],
             close_target_positives=[],
             close_target_negatives=[],
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
         assert episodes["ep1"]["open_class"] == "undetected"
 
-    def test_reclassifies_open_close_but_not_intro_outro(self) -> None:
+    def test_reclassifies_open_close_with_moe_and_keeps_intro_outro_without_evidence(self) -> None:
         episodes = {
             "ep1": {
                 "open_class": "uncertain",
@@ -329,12 +386,49 @@ class TestReclassifyAllEpisodes:
             open_target_negatives=[{"score": 0.2}] * 31,
             close_target_positives=[{"score": 0.7}] * 31,
             close_target_negatives=[{"score": 0.2}] * 31,
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
 
         assert episodes["ep1"]["open_candidates"][0]["label"] == "positive"
         assert episodes["ep1"]["close_candidates"][0]["label"] == "negative"
         assert episodes["ep1"]["intro_candidates"][0].get("label") is None
         assert episodes["ep1"]["outro_candidates"][0].get("label") is None
+
+    def test_reclassifies_intro_outro_using_target_banks(self) -> None:
+        episodes = {
+            "ep1": {
+                "open_class": "undetected",
+                "open_candidates": [],
+                "close_class": "undetected",
+                "close_candidates": [],
+                "intro_class": "uncertain",
+                "intro_candidates": [{"score": 0.95}, {"score": 0.5}, {"score": 0.1}],
+                "outro_class": "uncertain",
+                "outro_candidates": [{"score": 0.9}, {"score": 0.5}, {"score": 0.1}],
+            },
+        }
+
+        reclassify_all_episodes(
+            episodes,
+            open_target_positives=[],
+            open_target_negatives=[],
+            close_target_positives=[],
+            close_target_negatives=[],
+            intro_target_positives=[{"score": 0.9}] * 31,
+            intro_target_negatives=[{"score": 0.2}] * 31,
+            outro_target_positives=[{"score": 0.85}] * 31,
+            outro_target_negatives=[{"score": 0.25}] * 31,
+        )
+
+        assert episodes["ep1"]["intro_candidates"][0]["label"] == "positive"
+        assert episodes["ep1"]["intro_candidates"][1].get("label") is None
+        assert episodes["ep1"]["intro_candidates"][2]["label"] == "negative"
+        assert episodes["ep1"]["outro_candidates"][0]["label"] == "positive"
+        assert episodes["ep1"]["outro_candidates"][1].get("label") is None
+        assert episodes["ep1"]["outro_candidates"][2]["label"] == "negative"
 
 
 class TestNextUncertainEpisodeKind:
@@ -412,6 +506,10 @@ class TestApplyAndUndoReviewDecision:
             open_target_negatives=open_neg,
             close_target_positives=close_pos,
             close_target_negatives=close_neg,
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
 
         assert decision.action == "approved"
@@ -420,11 +518,13 @@ class TestApplyAndUndoReviewDecision:
         assert undo.kind == "open"
         assert undo.target_list_was_positive is True
 
-    def test_apply_reject_intro_labels_negative_without_target_append(self) -> None:
+    def test_apply_reject_intro_labels_negative_and_appends_to_target(self) -> None:
         episode = {
             "intro_class": "uncertain",
             "intro_candidates": [{"score": 0.7, "start": 3.0, "end": 6.0}],
         }
+
+        intro_neg: list[dict] = []
 
         decision, undo = apply_review_decision(
             episode=episode,
@@ -436,10 +536,15 @@ class TestApplyAndUndoReviewDecision:
             open_target_negatives=[],
             close_target_positives=[],
             close_target_negatives=[],
+            intro_target_positives=[],
+            intro_target_negatives=intro_neg,
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
 
         assert decision.action == "rejected"
         assert episode["intro_candidates"][0]["label"] == "negative"
+        assert len(intro_neg) == 1
         assert undo.target_list_was_positive is False
 
     def test_undo_removes_segment_and_restores_class(self) -> None:
@@ -470,6 +575,10 @@ class TestApplyAndUndoReviewDecision:
             open_target_negatives=[],
             close_target_positives=close_pos,
             close_target_negatives=[],
+            intro_target_positives=[],
+            intro_target_negatives=[],
+            outro_target_positives=[],
+            outro_target_negatives=[],
         )
 
         assert episode["close_candidates"][0].get("label") is None
@@ -490,24 +599,34 @@ class TestSortByExpectedSavings:
             ReviewItem(stem="ep_mid", kind="open", candidate_idx=0, score=0.70),
             ReviewItem(stem="ep_low", kind="open", candidate_idx=0, score=0.60),
         ]
-        sorted_items = sort_by_expected_savings(items, positives, negatives, [], [])
+        sorted_items = sort_by_expected_savings(items, positives, negatives, [], [], [], [], [], [])
         assert sorted_items[0].stem == "ep_mid"  # highest cascade savings
         assert sorted_items[2].stem == "ep_high"  # lowest — approval barely moves θ⁺
 
-    def test_intro_outro_appended_after_open_close(self) -> None:
+    def test_intro_outro_sorted_by_savings_with_open_close(self) -> None:
+        # With 31 tight positive samples for intro (moe→0), intro gets real savings;
+        # open/close with empty banks get savings=0 and fall behind.
         items = [
-            ReviewItem(stem="ep_intro", kind="intro", candidate_idx=0, score=0.9),
+            ReviewItem(stem="ep_intro", kind="intro", candidate_idx=0, score=0.5),
             ReviewItem(stem="ep_open", kind="open", candidate_idx=0, score=0.85),
-            ReviewItem(stem="ep_outro", kind="outro", candidate_idx=0, score=0.7),
             ReviewItem(stem="ep_close", kind="close", candidate_idx=0, score=0.80),
         ]
-        positives = [{"score": 0.95}, {"score": 0.90}]
-        sorted_items = sort_by_expected_savings(items, positives, [], positives, [])
-        kinds = [i.kind for i in sorted_items]
-        # All open/close precede all intro/outro
-        last_global = max(i for i, k in enumerate(kinds) if k in ("open", "close"))
-        first_local = min(i for i, k in enumerate(kinds) if k in ("intro", "outro"))
-        assert last_global < first_local
+        intro_positives = [{"score": s} for s in [0.92, 0.93, 0.94, 0.95, 0.96] * 7]  # 35 samples
+        intro_negatives = [{"score": s} for s in [0.40, 0.41, 0.42, 0.43, 0.44] * 7]
+        sorted_items = sort_by_expected_savings(
+            items,
+            [],
+            [],
+            [],
+            [],
+            intro_positives,
+            intro_negatives,
+            [],
+            [],
+        )
+        # intro candidate at 0.5 is in the uncertain zone → real savings
+        # open/close have no banks → savings=0
+        assert sorted_items[0].stem == "ep_intro"
 
     def test_no_confirmed_samples_falls_back_gracefully(self) -> None:
         # With no positives/negatives, zone is infinite; p_approve defaults to 0.5,
@@ -516,5 +635,5 @@ class TestSortByExpectedSavings:
             ReviewItem(stem="ep_a", kind="open", candidate_idx=0, score=0.9),
             ReviewItem(stem="ep_b", kind="open", candidate_idx=0, score=0.7),
         ]
-        result = sort_by_expected_savings(items, [], [], [], [])
+        result = sort_by_expected_savings(items, [], [], [], [], [], [], [], [])
         assert len(result) == 2

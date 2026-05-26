@@ -306,6 +306,8 @@ def _migrate_episode_keys(path: Path) -> None:
 class PipelineState:
     open_target: TargetState = field(default_factory=TargetState)
     close_target: TargetState = field(default_factory=TargetState)
+    intro_target: TargetState = field(default_factory=TargetState)
+    outro_target: TargetState = field(default_factory=TargetState)
     settings: RunSettings = field(default_factory=RunSettings)
     episodes: dict[str, EpisodeState] = field(default_factory=dict)
     snippets: list[SnippetEntry] = field(default_factory=list)
@@ -338,6 +340,8 @@ class PipelineState:
         state = cls(
             open_target=_load_target(data.get("targets", {}).get("open", {})),
             close_target=_load_target(data.get("targets", {}).get("close", {})),
+            intro_target=_load_target(data.get("targets", {}).get("intro", {})),
+            outro_target=_load_target(data.get("targets", {}).get("outro", {})),
             settings=_load_settings(data.get("settings", {})),
         )
         for raw_snip in data.get("snippets", []):
@@ -398,7 +402,12 @@ class PipelineState:
             f"output_dir      = {json.dumps(c.output_dir)}\n",
             f"debug           = {str(c.debug).lower()}\n",
         ]
-        for kind, target in [("open", self.open_target), ("close", self.close_target)]:
+        for kind, target in [
+            ("open", self.open_target),
+            ("close", self.close_target),
+            ("intro", self.intro_target),
+            ("outro", self.outro_target),
+        ]:
             seen: set[tuple[str, float, float]] = set()
             deduped_pos: list[Segment] = []
             for s in target.positives:

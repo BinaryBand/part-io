@@ -135,10 +135,7 @@
         "label": {
           "anyOf": [
             {
-              "enum": [
-                "positive",
-                "negative"
-              ],
+              "enum": ["positive", "negative"],
               "type": "string"
             },
             {
@@ -157,11 +154,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "score",
-        "start",
-        "end"
-      ],
+      "required": ["score", "start", "end"],
       "title": "MatchModel",
       "type": "object"
     },
@@ -205,12 +198,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "stem",
-        "start",
-        "end",
-        "score"
-      ],
+      "required": ["stem", "start", "end", "score"],
       "title": "SegmentModel",
       "type": "object"
     },
@@ -261,10 +249,7 @@
           "$ref": "#/$defs/SnippetProfileStateModel"
         }
       },
-      "required": [
-        "name",
-        "profile"
-      ],
+      "required": ["name", "profile"],
       "title": "SnippetStateModel",
       "type": "object"
     },
