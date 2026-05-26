@@ -160,6 +160,8 @@ def _find_and_postprocess_matches(
     threshold: float,
     step_seconds: float,
     dedupe_overlap: float,
+    correlation_mode: str = "dot",
+    refine_peaks: bool = True,
     onset_anchor: bool = False,
 ) -> list[AudioMatch]:
     """Find matches and optionally apply onset-anchoring alignment."""
@@ -169,6 +171,8 @@ def _find_and_postprocess_matches(
         score_threshold=threshold,
         step_seconds=step_seconds,
         dedupe_overlap=dedupe_overlap,
+        correlation_mode=correlation_mode,
+        refine_peaks=refine_peaks,
     )
     if onset_anchor:
         matches = [anchor_to_onset(match=match, source_path=source_path) for match in matches]
@@ -183,6 +187,8 @@ def _generate_bundle(
     threshold: float,
     step_seconds: float,
     dedupe_overlap: float,
+    correlation_mode: str,
+    refine_peaks: bool,
     max_clips: int,
     output_root: Path,
     bundle_name: str | None,
@@ -213,6 +219,8 @@ def _generate_bundle(
         threshold=threshold,
         step_seconds=step_seconds,
         dedupe_overlap=dedupe_overlap,
+        correlation_mode=correlation_mode,
+        refine_peaks=refine_peaks,
         onset_anchor=onset_anchor,
     )
 
@@ -245,6 +253,8 @@ def main() -> None:
             threshold=args.threshold,
             step_seconds=args.step_seconds,
             dedupe_overlap=args.dedupe_overlap,
+            correlation_mode=args.correlation_mode,
+            refine_peaks=args.refine_peaks,
             max_clips=args.max_clips,
             output_root=args.output_root,
             bundle_name=args.bundle_name,

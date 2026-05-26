@@ -36,6 +36,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--step-seconds", type=float, default=0.1, help="Sliding-window step in seconds"
     )
+    parser.add_argument(
+        "--correlation-mode",
+        choices=("gcc-phat", "dot"),
+        default="dot",
+        help="Correlation backend used for candidate search",
+    )
+    parser.add_argument(
+        "--refine-peaks",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable local hop=1 + parabolic peak refinement",
+    )
     add_review_export_arguments(parser)
     parser.add_argument(
         "--bundle-pattern",
@@ -63,6 +75,8 @@ def _run_one(
     sample_path: Path,
     threshold: float,
     step_seconds: float,
+    correlation_mode: str,
+    refine_peaks: bool,
     max_clips: int,
     output_root: Path,
     bundle_name: str,
@@ -79,6 +93,8 @@ def _run_one(
         str(threshold),
         "--step-seconds",
         str(step_seconds),
+        "--correlation-mode",
+        correlation_mode,
         "--max-clips",
         str(max_clips),
         "--output-root",
@@ -86,6 +102,8 @@ def _run_one(
         "--bundle-name",
         bundle_name,
     ]
+    if not refine_peaks:
+        command.append("--no-refine-peaks")
     if overwrite:
         command.append("--overwrite")
     if onset_anchor:
@@ -152,6 +170,8 @@ def _run_batch_jobs(
     workers: int,
     threshold: float,
     step_seconds: float,
+    correlation_mode: str,
+    refine_peaks: bool,
     max_clips: int,
     output_root: Path,
     overwrite: bool,
@@ -169,6 +189,8 @@ def _run_batch_jobs(
                 bundle_name=bn,
                 threshold=threshold,
                 step_seconds=step_seconds,
+                correlation_mode=correlation_mode,
+                refine_peaks=refine_peaks,
                 max_clips=max_clips,
                 output_root=output_root,
                 overwrite=overwrite,
@@ -215,6 +237,8 @@ def main() -> None:
         workers=args.workers,
         threshold=args.threshold,
         step_seconds=args.step_seconds,
+        correlation_mode=args.correlation_mode,
+        refine_peaks=args.refine_peaks,
         max_clips=args.max_clips,
         output_root=args.output_root,
         overwrite=args.overwrite,

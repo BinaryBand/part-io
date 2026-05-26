@@ -24,6 +24,16 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=0.8)
     parser.add_argument("--step-seconds", type=float, default=0.1)
     parser.add_argument(
+        "--correlation-mode",
+        choices=("gcc-phat", "dot"),
+        default="dot",
+    )
+    parser.add_argument(
+        "--refine-peaks",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
         "--max-matches",
         type=int,
         default=10,
@@ -31,8 +41,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    def _detector(**kwargs):
+        return find_audio_sample_matches(
+            **kwargs,
+            correlation_mode=args.correlation_mode,
+            refine_peaks=args.refine_peaks,
+        )
+
     matches = detect_top_matches(
-        detector=find_audio_sample_matches,
+        detector=_detector,
         source_path=args.source,
         sample_path=args.sample,
         score_threshold=args.threshold,

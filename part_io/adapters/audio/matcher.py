@@ -28,6 +28,7 @@ _BAND_COUNT = 32
 _LOG = logging.getLogger(__name__)
 # ~5-minute source chunks for streaming FFT progress (INFO path only)
 _CHUNK_FRAMES: int = _ANALYSIS_RATE * 60 * 5 // _HOP_SIZE
+_CORRELATION_MODES = {"dot", "gcc-phat"}
 
 
 @dataclass(frozen=True)
@@ -237,7 +238,13 @@ def _fmt_duration(seconds: float) -> str:
     return f"{s}s"
 
 
-def _cross_correlation_search(reference: np.ndarray, source_profile: np.ndarray, hop: int):
+def _cross_correlation_search(
+    reference: np.ndarray,
+    source_profile: np.ndarray,
+    hop: int,
+    *,
+    correlation_mode: str = "dot",
+):
     with Timer("matcher._cross_correlation_search"):
         n = source_profile.shape[0]
         m = reference.shape[0]
@@ -245,9 +252,63 @@ def _cross_correlation_search(reference: np.ndarray, source_profile: np.ndarray,
         fft_size = int(2 ** np.ceil(np.log2(n + m)))
         src_fft = np.fft.rfft(source_profile, n=fft_size, axis=0)
         ref_fft = np.fft.rfft(reference, n=fft_size, axis=0)
-        corr_all = np.fft.irfft((np.conj(ref_fft) * src_fft).sum(axis=1), n=fft_size)
+        cross_spectrum = (np.conj(ref_fft) * src_fft).sum(axis=1)
+        if correlation_mode == "gcc-phat":
+            cross_spectrum = cross_spectrum / (np.abs(cross_spectrum) + 1e-9)
+        corr_all = np.fft.irfft(cross_spectrum, n=fft_size)
         scores = corr_all[: n - m + 1][::hop] / m
         return scores
+
+
+def _parabolic_peak_offset(left: float, center: float, right: float) -> float:
+    """Estimate sub-frame peak offset from three adjacent samples.
+
+    Returns an offset in ``[-0.5, 0.5]`` where 0 means the center index.
+    """
+    denominator = left - (2.0 * center) + right
+    if abs(denominator) < 1e-12:
+        return 0.0
+    offset = 0.5 * (left - right) / denominator
+    return float(np.clip(offset, -0.5, 0.5))
+
+
+def _refine_match_start_frames(
+    *,
+    reference: np.ndarray,
+    source_profile: np.ndarray,
+    coarse_start_frame: int,
+    hop: int,
+) -> tuple[float, float]:
+    """Refine a coarse frame index using local hop=1 search + parabola fit."""
+    n = source_profile.shape[0]
+    m = reference.shape[0]
+    max_start = n - m
+    if max_start <= 0:
+        return float(coarse_start_frame), -1.0
+
+    radius = max(2, hop)
+    local_start = max(0, coarse_start_frame - radius)
+    local_end = min(max_start, coarse_start_frame + radius)
+    local_source = source_profile[local_start : local_end + m]
+    if local_source.shape[0] < m:
+        return float(coarse_start_frame), -1.0
+
+    fine_scores = _windowed_search(reference, local_source, hop=1)
+    if fine_scores.size == 0:
+        return float(coarse_start_frame), -1.0
+
+    peak_index = int(np.argmax(fine_scores))
+    refined_index = float(local_start + peak_index)
+
+    if 0 < peak_index < fine_scores.size - 1:
+        offset = _parabolic_peak_offset(
+            float(fine_scores[peak_index - 1]),
+            float(fine_scores[peak_index]),
+            float(fine_scores[peak_index + 1]),
+        )
+        refined_index += offset
+
+    return refined_index, float(fine_scores[peak_index])
 
 
 def _windowed_search(reference: np.ndarray, source_profile: np.ndarray, hop: int):
@@ -287,6 +348,44 @@ def _scores_to_matches(
     return matches
 
 
+def _scores_to_matches_refined(
+    scores: np.ndarray,
+    *,
+    reference: np.ndarray,
+    source_profile: np.ndarray,
+    score_threshold: float,
+    hop: int,
+    frame_hop_seconds: float,
+    frame_offset_seconds: float,
+    sample_duration: float,
+) -> list[AudioMatch]:
+    """Convert coarse scores to matches with local sub-frame start refinement."""
+    matches: list[AudioMatch] = []
+    for coarse_index, coarse_score in enumerate(scores):
+        if coarse_score < score_threshold:
+            continue
+
+        coarse_start_frame = coarse_index * hop
+        refined_start_frame, refined_score = _refine_match_start_frames(
+            reference=reference,
+            source_profile=source_profile,
+            coarse_start_frame=coarse_start_frame,
+            hop=hop,
+        )
+        best_score = max(float(coarse_score), refined_score)
+        start_seconds = frame_offset_seconds + refined_start_frame * frame_hop_seconds
+
+        matches.append(
+            AudioMatch(
+                start_seconds=round(start_seconds, 3),
+                end_seconds=round(start_seconds + sample_duration, 3),
+                duration_seconds=round(sample_duration, 3),
+                score=round(best_score, 4),
+            )
+        )
+    return matches
+
+
 def _build_match_candidates(
     *,
     reference: np.ndarray,
@@ -296,13 +395,31 @@ def _build_match_candidates(
     hop: int,
     score_threshold: float,
     frame_offset_seconds: float = 0.0,
+    correlation_mode: str = "dot",
+    refine_peaks: bool = True,
 ) -> list[AudioMatch]:
     n = source_profile.shape[0]
     m = reference.shape[0]
 
     if not _LOG.isEnabledFor(logging.INFO) or n <= _CHUNK_FRAMES:
         with Timer("matcher._build_match_candidates"):
-            scores = _cross_correlation_search(reference, source_profile, hop)
+            scores = _cross_correlation_search(
+                reference,
+                source_profile,
+                hop,
+                correlation_mode=correlation_mode,
+            )
+        if refine_peaks:
+            return _scores_to_matches_refined(
+                scores,
+                reference=reference,
+                source_profile=source_profile,
+                score_threshold=score_threshold,
+                hop=hop,
+                frame_hop_seconds=frame_hop_seconds,
+                frame_offset_seconds=frame_offset_seconds,
+                sample_duration=sample_duration,
+            )
         return _scores_to_matches(
             scores,
             score_threshold=score_threshold,
@@ -321,9 +438,26 @@ def _build_match_candidates(
         chunk_start = k * stride
         chunk_end = min(n, chunk_start + _CHUNK_FRAMES)
         chunk_offset = frame_offset_seconds + chunk_start * frame_hop_seconds
-        scores = _cross_correlation_search(reference, source_profile[chunk_start:chunk_end], hop)
-        all_matches.extend(
-            _scores_to_matches(
+        chunk_source = source_profile[chunk_start:chunk_end]
+        scores = _cross_correlation_search(
+            reference,
+            chunk_source,
+            hop,
+            correlation_mode=correlation_mode,
+        )
+        chunk_matches = (
+            _scores_to_matches_refined(
+                scores,
+                reference=reference,
+                source_profile=chunk_source,
+                score_threshold=score_threshold,
+                hop=hop,
+                frame_hop_seconds=frame_hop_seconds,
+                frame_offset_seconds=chunk_offset,
+                sample_duration=sample_duration,
+            )
+            if refine_peaks
+            else _scores_to_matches(
                 scores,
                 score_threshold=score_threshold,
                 hop=hop,
@@ -332,6 +466,7 @@ def _build_match_candidates(
                 sample_duration=sample_duration,
             )
         )
+        all_matches.extend(chunk_matches)
         _LOG.info(
             "  [fft]  chunk %d/%d  @%s  %d hit(s) so far",
             k + 1,
@@ -417,6 +552,7 @@ def _validate_match_search_inputs(
     sample_path: Path,
     step_seconds: float,
     dedupe_overlap: float,
+    correlation_mode: str,
 ) -> None:
     if not source_path.exists():
         raise FileNotFoundError(source_path)
@@ -426,6 +562,9 @@ def _validate_match_search_inputs(
         raise ValueError("step_seconds must be positive")
     if not 0 <= dedupe_overlap <= 1:
         raise ValueError("dedupe_overlap must be in [0, 1]")
+    if correlation_mode not in _CORRELATION_MODES:
+        allowed = ", ".join(sorted(_CORRELATION_MODES))
+        raise ValueError(f"correlation_mode must be one of: {allowed}")
 
 
 def _prepare_match_search(
@@ -470,6 +609,8 @@ def find_audio_sample_matches(
     score_threshold: float = 0.8,
     step_seconds: float = 0.1,
     dedupe_overlap: float = 0.5,
+    correlation_mode: str = "dot",
+    refine_peaks: bool = True,
     search_start_seconds: float | None = None,
     search_end_seconds: float | None = None,
     profile_cache_dir: Path | None = None,
@@ -489,7 +630,13 @@ def find_audio_sample_matches(
     already-profiled episodes.
 
     """
-    _validate_match_search_inputs(source_path, sample_path, step_seconds, dedupe_overlap)
+    _validate_match_search_inputs(
+        source_path,
+        sample_path,
+        step_seconds,
+        dedupe_overlap,
+        correlation_mode,
+    )
 
     reference, source_profile, sample_duration, frame_offset_seconds = _prepare_match_search(
         source_path=source_path,
@@ -523,6 +670,8 @@ def find_audio_sample_matches(
         hop=hop,
         score_threshold=score_threshold,
         frame_offset_seconds=frame_offset_seconds,
+        correlation_mode=correlation_mode,
+        refine_peaks=refine_peaks,
     )
 
     matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
@@ -636,6 +785,8 @@ def find_audio_sample_matches_from_profile(
     score_threshold: float = 0.8,
     step_seconds: float = 0.1,
     dedupe_overlap: float = 0.5,
+    correlation_mode: str = "dot",
+    refine_peaks: bool = True,
     search_start_seconds: float | None = None,
     search_end_seconds: float | None = None,
     profile_cache_dir: Path | None = None,
@@ -651,6 +802,9 @@ def find_audio_sample_matches_from_profile(
         raise FileNotFoundError(source_path)
     if reference.size == 0 or reference.ndim != 2:
         return []
+    if correlation_mode not in _CORRELATION_MODES:
+        allowed = ", ".join(sorted(_CORRELATION_MODES))
+        raise ValueError(f"correlation_mode must be one of: {allowed}")
 
     frame_hop_seconds = _HOP_SIZE / _ANALYSIS_RATE
     sample_duration = reference.shape[0] * frame_hop_seconds
@@ -687,6 +841,8 @@ def find_audio_sample_matches_from_profile(
         hop=hop,
         score_threshold=score_threshold,
         frame_offset_seconds=frame_offset_seconds,
+        correlation_mode=correlation_mode,
+        refine_peaks=refine_peaks,
     )
     matches = _suppress_overlapping(matches, min_overlap=dedupe_overlap)
     _LOG.info("  [match]  consensus  %d candidate(s)", len(matches))

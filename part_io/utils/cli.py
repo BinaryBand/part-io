@@ -17,6 +17,18 @@ def add_audio_sample_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("source", type=Path, help="Longer audio file to scan")
     parser.add_argument("sample", type=Path, help="Reference sample to search for")
     parser.add_argument("--threshold", type=float, default=0.8, help="Match score threshold")
+    parser.add_argument(
+        "--correlation-mode",
+        choices=("gcc-phat", "dot"),
+        default="dot",
+        help="Correlation backend used for candidate search",
+    )
+    parser.add_argument(
+        "--refine-peaks",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable local hop=1 + parabolic peak refinement",
+    )
 
 
 def add_review_export_arguments(parser: argparse.ArgumentParser) -> None:
