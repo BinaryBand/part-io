@@ -71,6 +71,9 @@ convention = "google"
 "**/conftest.py" = ["D"]
 # Tests use `assert` idiomatically — S101 is expected.
 "tests/**/*.py" = ["S101"]
+# Subprocess calls in test infrastructure are intentional and hardcoded.
+"conftest.py" = ["S603", "S607"]
+"tests/test_lint.py" = ["S603"]
 
 [tool.ty.environment]
 python = ".venv"
