@@ -7,7 +7,7 @@ from pathlib import Path
 
 from part_io.adapters.audio.matcher import AudioMatch
 from part_io.cli import audio_review, audio_search
-from part_io.cli.lint import coverage
+from part_io.cli.lint.registry import build_tool_cmd
 
 
 def test_audio_search_main_prints_matches(monkeypatch, capsys, tmp_path: Path) -> None:
@@ -81,7 +81,7 @@ def test_audio_review_main_writes_bundle(monkeypatch, capsys, tmp_path: Path) ->
 def test_coverage_adapter_build_cmd_uses_current_python() -> None:
     """Coverage should run pytest through the current interpreter."""
     cfg = {"floor": 90}
-    cmd = coverage._build_cmd(cfg)
+    cmd = build_tool_cmd("coverage", cfg)
 
     assert cmd[:3] == ["python", "-m", "pytest"]
     assert "--cov-fail-under=90" in cmd

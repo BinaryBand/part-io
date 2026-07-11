@@ -6,13 +6,7 @@ import sys
 
 from part_io.cli.lint.entrypoints import run_single_tool_entrypoint
 from part_io.cli.lint.execution import run_registered_tool
-from part_io.cli.lint.registry import build_tool_cmd
 from part_io.utils.coverage import cleanup_coverage_temp_files
-
-
-def _build_cmd(cfg: dict) -> list[str]:
-    """Build pytest command with coverage floor from centralized registry."""
-    return build_tool_cmd("coverage", cfg)
 
 
 def main() -> None:

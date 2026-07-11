@@ -6,13 +6,13 @@ import pytest
 
 from part_io.adapters.errors import LintConfigError, LintProcessError
 from part_io.adapters.lint import runner as adapter_module
-from part_io.cli.lint import coverage, cpd, lizard, semgrep, ty, vulture
+from part_io.cli.lint.registry import build_tool_cmd
 
 
 def test_adapter_coverage_build_cmd() -> None:
     """Coverage adapter should build pytest command with configurable floor."""
     cfg = {"floor": 90}
-    cmd = coverage._build_cmd(cfg)
+    cmd = build_tool_cmd("coverage", cfg)
 
     assert cmd[:3] == ["python", "-m", "pytest"]
     assert "--cov-fail-under=90" in cmd
@@ -20,14 +20,14 @@ def test_adapter_coverage_build_cmd() -> None:
 
 def test_adapter_coverage_build_cmd_uses_default_floor() -> None:
     """Coverage should use default floor if not in config."""
-    cmd = coverage._build_cmd({})
+    cmd = build_tool_cmd("coverage", {})
 
     assert "--cov-fail-under=80" in cmd
 
 
 def test_adapter_cpd_build_cmd() -> None:
     """CPD adapter should build jscpd command with default config path."""
-    cmd = cpd._build_cmd({})
+    cmd = build_tool_cmd("cpd", {})
 
     assert cmd[:4] == ["npx", "--yes", "jscpd@4.0.5", "--config"]
     assert cmd[-1] == "config/jscpd.json"
@@ -35,7 +35,7 @@ def test_adapter_cpd_build_cmd() -> None:
 
 def test_adapter_semgrep_build_cmd() -> None:
     """Semgrep adapter should build hardcoded semgrep command."""
-    cmd = semgrep._build_cmd({})
+    cmd = build_tool_cmd("semgrep", {})
 
     assert cmd[0] == "semgrep"
     assert "scan" in cmd
@@ -44,7 +44,7 @@ def test_adapter_semgrep_build_cmd() -> None:
 
 def test_adapter_ty_build_cmd() -> None:
     """Ty adapter should build minimal ty command."""
-    cmd = ty._build_cmd({})
+    cmd = build_tool_cmd("ty", {})
 
     assert cmd == ["ty", "check"]
 
@@ -52,7 +52,7 @@ def test_adapter_ty_build_cmd() -> None:
 def test_adapter_vulture_build_cmd() -> None:
     """Vulture adapter should build command with optional flags from config."""
     cfg = {"min_confidence": 85, "paths": ["src"]}
-    cmd = vulture._build_cmd(cfg)
+    cmd = build_tool_cmd("vulture", cfg)
 
     assert "vulture" in cmd
     assert "--min-confidence" in cmd
@@ -62,7 +62,7 @@ def test_adapter_vulture_build_cmd() -> None:
 
 def test_adapter_vulture_build_cmd_uses_defaults() -> None:
     """Vulture should use default paths if not in config."""
-    cmd = vulture._build_cmd({})
+    cmd = build_tool_cmd("vulture", {})
 
     assert "part_io" in cmd
     assert "tests" in cmd
@@ -71,7 +71,7 @@ def test_adapter_vulture_build_cmd_uses_defaults() -> None:
 def test_adapter_lizard_build_cmd() -> None:
     """Lizard adapter should build command with optional flags from config."""
     cfg = {"ccn": 12, "length": 50, "warnings_only": True, "paths": ["app"]}
-    cmd = lizard._build_cmd(cfg)
+    cmd = build_tool_cmd("lizard", cfg)
 
     assert "lizard" in cmd
     assert "--CCN" in cmd
@@ -83,7 +83,7 @@ def test_adapter_lizard_build_cmd() -> None:
 
 def test_adapter_lizard_build_cmd_uses_defaults() -> None:
     """Lizard should use default paths if not in config."""
-    cmd = lizard._build_cmd({})
+    cmd = build_tool_cmd("lizard", {})
 
     assert "part_io" in cmd
 
