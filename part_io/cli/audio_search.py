@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from part_io.adapters.audio.matcher import find_audio_sample_matches
+from part_io.cli import handle_cli_error
 
 
 def main() -> None:
@@ -24,8 +25,7 @@ def main() -> None:
             score_threshold=args.threshold,
         )
     except (FileNotFoundError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        sys.exit(2)
+        handle_cli_error(exc)
 
     if not matches:
         print("No matches found.")

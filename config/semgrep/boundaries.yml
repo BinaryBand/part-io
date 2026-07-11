@@ -12,6 +12,7 @@ rules:
         - "/part_io/utils/exec.py"
         - "/.venv/**"
         - "/tests/**"
+        - "/conftest.py"
     patterns:
       - pattern-either:
           - pattern: import subprocess

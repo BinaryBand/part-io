@@ -10,11 +10,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import sys
 from pathlib import Path
 
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 from part_io.adapters.process.runner import run_resolved
+from part_io.cli import handle_cli_error
 
 
 def _format_clip_name(index: int, match: AudioMatch) -> str:
@@ -232,8 +232,7 @@ def main() -> None:
             overwrite=args.overwrite,
         )
     except (FileNotFoundError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        sys.exit(2)
+        handle_cli_error(exc)
 
     print(f"Bundle: {bundle_dir}")
     print(f"Exported clips: {selected_count} (from {total_matches} total matches)")
