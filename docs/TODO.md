@@ -3,7 +3,7 @@
 ## Cleanup
 
 - [x] Remove dead `_build_cmd` wrappers from the lint entrypoints. Deleted the seven `_build_cmd` defs and their now-unused `build_tool_cmd` imports from `part_io/cli/lint/<tool>.py`, and repointed `tests/unit/adapters/test_lint_adapters.py` and `tests/unit/audio/test_audio_cli.py` at `registry.build_tool_cmd("<tool>", cfg)` so they exercise the real builder.
-- [ ] (Optional) Drop the `run_single_tool_entrypoint` seam in `cli/lint/entrypoints.py`. It is a one-line pass-through (`return run_tool_fn(tool_key)`); each `main()` could call `sys.exit(run_registered_tool("<tool>"))` directly, letting the single-tool helper go. Keep `run_multi_tool_entrypoint` (the fail-fast loop earns its keep). Lower priority -- this is a deliberate contract seam.
+- [x] Drop the `cli/lint/entrypoints.py` seam entirely. Inlined `sys.exit(run_registered_tool("<tool>"))` into each `main()` and deleted the module plus its test -- both `run_single_tool_entrypoint` (a one-line pass-through) and `run_multi_tool_entrypoint` (no production callers, only its own test) were dead. Also removed the `entrypoints.py` entry from the `part_io-cli-lint-shape` allowlist in `config/semgrep/scaffold.yml`.
 
 ## Docs
 

@@ -55,8 +55,8 @@ rules:
 
   - id: part_io-cli-lint-shape
     message: >-
-      Keep part_io.cli.lint limited to the current wrapper set plus execution,
-      entrypoints, and registry. Add new tools deliberately.
+      Keep part_io.cli.lint limited to the current wrapper set plus execution
+      and registry. Add new tools deliberately.
     severity: ERROR
     languages: [python]
     paths:
@@ -65,7 +65,6 @@ rules:
       exclude:
         - /part_io/cli/lint/__init__.py
         - /part_io/cli/lint/cpd.py
-        - /part_io/cli/lint/entrypoints.py
         - /part_io/cli/lint/execution.py
         - /part_io/cli/lint/registry.py
         - /part_io/cli/lint/coverage.py
