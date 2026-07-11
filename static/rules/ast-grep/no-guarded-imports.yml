@@ -1,0 +1,25 @@
+id: no-guarded-imports
+language: python
+severity: error
+message: "Import directly and let failures propagate -- do not guard imports with try/except."
+note: >
+  Guarding an import with try/except hides missing dependencies and causes
+  confusing AttributeErrors later instead of a clear ImportError at startup.
+  Declare the dependency in pyproject.toml instead.
+rule:
+  any:
+    - pattern: |
+        try:
+            import $MOD
+        except $E:
+            $$$BODY
+    - pattern: |
+        try:
+            from $MOD import $NAME
+        except $E:
+            $$$BODY
+    - pattern: |
+        try:
+            from $MOD import $NAME as $ALIAS
+        except $E:
+            $$$BODY
