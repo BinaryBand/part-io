@@ -57,7 +57,7 @@ def run_resolved(cmd: Iterable[str], /, **kwargs: Any) -> subprocess.CompletedPr
     executable = cmd_list[0]
     resolved = resolve_executable(executable)
     full_cmd = [resolved, *cmd_list[1:]]
-    return cast(subprocess.CompletedProcess[Any], subprocess.run(full_cmd, **kwargs))  # noqa: S603
+    return cast(subprocess.CompletedProcess[Any], subprocess.run(full_cmd, **kwargs))
 
 
 __all__ = ["resolve_executable", "run_resolved"]

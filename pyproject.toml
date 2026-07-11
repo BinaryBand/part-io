@@ -74,6 +74,11 @@ convention = "google"
 # Subprocess calls in test infrastructure are intentional and hardcoded.
 "conftest.py" = ["S603", "S607"]
 "tests/test_lint.py" = ["S603"]
+# Subprocess call is deliberate; executable is validated by resolve_executable.
+"part_io/utils/exec.py" = ["S603"]
+# Package init files need no docstring.
+"part_io/__init__.py" = ["D104"]
+"part_io/services/__init__.py" = ["D104"]
 
 [tool.ty.environment]
 python = ".venv"

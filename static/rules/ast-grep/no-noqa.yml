@@ -1,0 +1,10 @@
+id: no-noqa
+language: python
+severity: error
+message: "Do not use noqa -- fix the underlying issue instead."
+note: >
+  noqa comments suppress linter warnings and hide real issues.  Fix the
+  code or adjust the linter configuration in pyproject.toml instead.
+rule:
+  kind: comment
+  regex: "noqa"
