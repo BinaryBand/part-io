@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from part_io.adapters.process.runner import run_resolved
 
 ROOT = Path(__file__).resolve().parents[2]
+_LINT_CONFIG = tomllib.loads((ROOT / "config" / "lint.toml").read_text())
 
 
 class TestRuff:
@@ -84,7 +86,17 @@ class TestVulture:
 
     def test_vulture(self):
         """Fail if Vulture reports unused code above the configured confidence threshold."""
-        result = run_resolved(["poetry", "run", "python", "-m", "part_io.cli.lint.vulture"])
+        cfg = _LINT_CONFIG["vulture"]
+        result = run_resolved(
+            [
+                "poetry",
+                "run",
+                "vulture",
+                "--min-confidence",
+                str(cfg["min_confidence"]),
+                *cfg["paths"],
+            ]
+        )
         assert result.returncode == 0
 
 
@@ -101,7 +113,12 @@ class TestLizard:
 
     def test_function_complexity(self):
         """Production functions must not exceed the configured CCN and length limits."""
-        result = run_resolved(["poetry", "run", "python", "-m", "part_io.cli.lint.lizard"])
+        cfg = _LINT_CONFIG["lizard"]
+        cmd = ["poetry", "run", "lizard", "--CCN", str(cfg["ccn"]), "--length", str(cfg["length"])]
+        if cfg.get("warnings_only"):
+            cmd.append("--warnings_only")
+        cmd += cfg["paths"]
+        result = run_resolved(cmd)
         assert result.returncode == 0
 
 
@@ -110,8 +127,22 @@ class TestCoverage:
 
     def test_coverage_floor(self) -> None:
         """Fail if total coverage of part_io/ is below the configured floor."""
+        floor = _LINT_CONFIG["coverage"]["floor"]
         result = run_resolved(
-            ["poetry", "run", "python", "-m", "part_io.cli.lint.coverage"],
+            [
+                "poetry",
+                "run",
+                "python",
+                "-m",
+                "pytest",
+                "-q",
+                "tests/",
+                "--ignore=tests/integration/test_lint.py",
+                "--ignore-glob=*/test_lint.py",
+                "--cov=part_io",
+                "--cov-report=term",
+                f"--cov-fail-under={floor}",
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -127,7 +158,7 @@ class TestCpd:
     def test_cpd(self) -> None:
         """Fail if jscpd reports duplicate code above configured threshold."""
         result = run_resolved(
-            ["poetry", "run", "python", "-m", "part_io.cli.lint.cpd"],
+            ["npx", "--yes", "jscpd@4.0.5", "--config", "config/jscpd.json"],
             capture_output=True,
             text=True,
             encoding="utf-8",

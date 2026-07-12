@@ -40,7 +40,7 @@ def test_resolve_executable_uses_existing_path(monkeypatch, tmp_path: Path) -> N
     tool = tmp_path / "tool.exe"
     tool.write_text("", encoding="utf-8")
 
-    monkeypatch.setattr(exec_utils.os, "access", lambda path, mode: Path(path) == tool)
+    monkeypatch.setattr(exec_utils.os, "access", lambda path, _mode: Path(path) == tool)
     resolved = exec_utils.resolve_executable(str(tool))
 
     assert Path(resolved) == tool.resolve()

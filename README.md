@@ -1,19 +1,20 @@
 # part-io
 
-A small Python toolkit for task orchestration and lint automation, with strong architecture guardrails.
+An audio jingle-matching toolkit: locate and extract recurring jingles/stingers inside long episode
+recordings, with strong architecture guardrails.
 
 ## Features
 
-- Typed task registry and profile-driven task selection.
-- Lint orchestration via module entrypoints.
+- Cold-start jingle discovery via human-in-the-loop tiled scanning and bisection.
+- Spectral-feature reference matching to find a known jingle across episodes.
 - Architecture and boundary enforcement with Semgrep.
-- Focused adapters for config loading, process execution, and reporting.
 
 ## Requirements
 
 - Python 3.11+
 - Poetry
-- Node.js (for `npx`-based CPD checks)
+- Node.js (for `npx`-based CPD duplicate-code checks in the test suite)
+- ffmpeg (for audio decoding/extraction)
 
 ## Installation
 
@@ -23,13 +24,7 @@ poetry install --with dev
 
 ## Common Commands
 
-Run lint profile:
-
-```bash
-poetry run part-io-tasks lint --profile strict
-```
-
-Run tests:
+Run tests (includes lint/type/architecture checks via `tests/integration/test_lint.py`):
 
 ```bash
 poetry run pytest
@@ -41,10 +36,10 @@ Run architecture/security checks:
 poetry run semgrep scan --config config/semgrep part_io tests --error
 ```
 
-Run CPD check directly:
+Run the audio review bundle CLI:
 
 ```bash
-poetry run python -m part_io.cli.lint.cpd
+poetry run part-io-audio-review
 ```
 
 ## Project Layout

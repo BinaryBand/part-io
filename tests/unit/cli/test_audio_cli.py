@@ -9,7 +9,6 @@ import pytest
 
 from part_io.adapters.audio.matcher import AudioMatch, BestMatch
 from part_io.cli import audio_bootstrap, audio_locate, audio_review, audio_search
-from part_io.cli.lint.registry import build_tool_cmd
 
 
 def test_audio_search_main_prints_matches(monkeypatch, capsys, tmp_path):
@@ -353,12 +352,3 @@ def test_audio_bootstrap_main_rejects_missing_source(monkeypatch, capsys, tmp_pa
 
     assert excinfo.value.code == 2
     assert "Source not found" in capsys.readouterr().err
-
-
-def test_coverage_adapter_build_cmd_uses_current_python():
-    """Coverage should run pytest through the current interpreter."""
-    cfg = {"floor": 90}
-    cmd = build_tool_cmd("coverage", cfg)
-
-    assert cmd[:3] == ["python", "-m", "pytest"]
-    assert "--cov-fail-under=90" in cmd

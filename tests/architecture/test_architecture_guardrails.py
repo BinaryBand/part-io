@@ -7,16 +7,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT_PATHS = {
-    ROOT / "part_io" / "cli" / "tasks.py",
-    ROOT / "part_io" / "cli" / "generate" / "tasks.py",
     ROOT / "part_io" / "cli" / "audio_search.py",
     ROOT / "part_io" / "cli" / "audio_review.py",
     ROOT / "part_io" / "cli" / "audio_locate.py",
     ROOT / "part_io" / "cli" / "audio_bootstrap.py",
 }
-ENTRYPOINT_DIRS = {
-    ROOT / "part_io" / "cli" / "lint",
-}
+ENTRYPOINT_DIRS: set[Path] = set()
 CORE_DIRS = [
     ROOT / "part_io" / "adapters",
     ROOT / "part_io" / "models",

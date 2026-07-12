@@ -47,6 +47,6 @@ jobs:
         run: poetry run semgrep scan --config config/semgrep part_io tests --error
 
       - name: CPD
-        run: poetry run python -m part_io.cli.lint.cpd
+        run: poetry run npx --yes jscpd@4.0.5 --config config/jscpd.json
 
 
