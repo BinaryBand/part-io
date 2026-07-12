@@ -169,4 +169,66 @@ def locate_jingle_span(
     return onset, offset
 
 
-__all__ = ["locate_jingle_span"]
+def locate_jingle_spans(
+    *,
+    auditor: AuditorFn,
+    region_start: float,
+    region_end: float,
+    max_occurrences: int | None = None,
+    tile_seconds: float = 10.0,
+    probe_seconds: float = 1.5,
+    resolution: float = 0.5,
+) -> list[tuple[float, float]]:
+    """Locate every jingle occurrence inside ``[region_start, region_end)``.
+
+    Repeatedly runs :func:`locate_jingle_span`, advancing the search cursor
+    past each found span (padded by ``resolution`` to keep the next discovery
+    tile off the tail of the same jingle) until the region is exhausted, no
+    further occurrence is found, or ``max_occurrences`` spans are collected.
+
+    Args:
+        auditor: Yes/no oracle answering questions about audio segments.
+        region_start: Search region start in seconds.
+        region_end: Search region end in seconds.
+        max_occurrences: Cap on spans to find, or ``None`` for no cap.
+        tile_seconds: Discovery tile width in seconds.
+        probe_seconds: Tuning probe clip length in seconds.
+        resolution: Stop bisecting below this bracket width.
+
+    Returns:
+        The ``(onset, offset)`` spans in discovery order; empty when the
+        region contains no jingle.
+
+    Raises:
+        ValueError: For an empty region, non-positive tuning parameters, or a
+            non-positive ``max_occurrences``.
+    """
+    if region_end <= region_start:
+        raise ValueError("region_end must be greater than region_start")
+    if min(tile_seconds, probe_seconds, resolution) <= 0:
+        raise ValueError("tile_seconds, probe_seconds, and resolution must be positive")
+    if max_occurrences is not None and max_occurrences <= 0:
+        raise ValueError("max_occurrences must be positive")
+
+    spans: list[tuple[float, float]] = []
+    cursor = region_start
+    while cursor < region_end and (max_occurrences is None or len(spans) < max_occurrences):
+        span = locate_jingle_span(
+            auditor=auditor,
+            region_start=cursor,
+            region_end=region_end,
+            tile_seconds=tile_seconds,
+            probe_seconds=probe_seconds,
+            resolution=resolution,
+        )
+        if span is None:
+            break
+        spans.append(span)
+        next_cursor = span[1] + resolution
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+    return spans
+
+
+__all__ = ["locate_jingle_span", "locate_jingle_spans"]

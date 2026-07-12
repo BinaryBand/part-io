@@ -16,7 +16,8 @@ from pathlib import Path
 from part_io.adapters.audio.clips import extract_audio_clip
 from part_io.cli import handle_cli_error
 from part_io.cli.audio_review import build_interactive_auditor
-from part_io.services.audio_bootstrap import locate_jingle_span
+from part_io.models.ports.audio import AuditorFn
+from part_io.services.audio_bootstrap import locate_jingle_span, locate_jingle_spans
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -28,7 +29,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=None,
-        help="Seed clip destination (default: static/jingles/<source stem>_seed.mp3)",
+        help=(
+            "Seed clip destination (default: static/jingles/<source stem>_seed.mp3); "
+            "with --max-occurrences > 1 this is a directory for the numbered seed clips"
+        ),
+    )
+    parser.add_argument(
+        "--max-occurrences",
+        type=int,
+        default=1,
+        help="Maximum number of jingle occurrences to locate in the region",
     )
     float_flags = [
         ("--region-start", 0.0, "Search region start in seconds"),
@@ -42,21 +52,34 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = _build_parser().parse_args()
+def _tuning_kwargs(args: argparse.Namespace) -> dict[str, float]:
+    return {
+        "region_start": args.region_start,
+        "region_end": args.region_end,
+        "tile_seconds": args.tile_seconds,
+        "probe_seconds": args.probe_seconds,
+        "resolution": args.resolution,
+    }
 
+
+def _write_seed(source: Path, output: Path, onset: float, offset: float) -> None:
     try:
-        if not args.source.exists():
-            raise FileNotFoundError(f"Source not found: {args.source}")
-        auditor = build_interactive_auditor(source_path=args.source)
-        span = locate_jingle_span(
-            auditor=auditor,
-            region_start=args.region_start,
-            region_end=args.region_end,
-            tile_seconds=args.tile_seconds,
-            probe_seconds=args.probe_seconds,
-            resolution=args.resolution,
+        output.parent.mkdir(parents=True, exist_ok=True)
+        extract_audio_clip(
+            source_path=source,
+            destination_path=output,
+            start_seconds=onset,
+            duration_seconds=offset - onset,
         )
+    except (FileNotFoundError, ValueError) as exc:
+        handle_cli_error(exc)
+
+    print(f"jingle {onset:.3f}s -> {offset:.3f}s written to {output}")
+
+
+def _bootstrap_single(args: argparse.Namespace, auditor: AuditorFn) -> None:
+    try:
+        span = locate_jingle_span(auditor=auditor, **_tuning_kwargs(args))
     except (FileNotFoundError, ValueError) as exc:
         handle_cli_error(exc)
 
@@ -66,19 +89,41 @@ def main() -> None:
 
     onset, offset = span
     output = args.output or Path("static") / "jingles" / f"{args.source.stem}_seed.mp3"
+    _write_seed(args.source, output, onset, offset)
 
+
+def _bootstrap_multi(args: argparse.Namespace, auditor: AuditorFn) -> None:
     try:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        extract_audio_clip(
-            source_path=args.source,
-            destination_path=output,
-            start_seconds=onset,
-            duration_seconds=offset - onset,
+        spans = locate_jingle_spans(
+            auditor=auditor, max_occurrences=args.max_occurrences, **_tuning_kwargs(args)
         )
     except (FileNotFoundError, ValueError) as exc:
         handle_cli_error(exc)
 
-    print(f"jingle {onset:.3f}s -> {offset:.3f}s written to {output}")
+    if not spans:
+        print("No jingle found in the search region.")
+        sys.exit(1)
+
+    output_dir = args.output or Path("static") / "jingles"
+    for index, (onset, offset) in enumerate(spans, start=1):
+        output = output_dir / f"{args.source.stem}_seed_{index:02d}.mp3"
+        _write_seed(args.source, output, onset, offset)
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
+
+    try:
+        if not args.source.exists():
+            raise FileNotFoundError(f"Source not found: {args.source}")
+        auditor = build_interactive_auditor(source_path=args.source)
+    except (FileNotFoundError, ValueError) as exc:
+        handle_cli_error(exc)
+
+    if args.max_occurrences == 1:
+        _bootstrap_single(args, auditor)
+    else:
+        _bootstrap_multi(args, auditor)
 
 
 if __name__ == "__main__":

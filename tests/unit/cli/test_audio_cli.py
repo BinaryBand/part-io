@@ -265,6 +265,62 @@ def test_audio_bootstrap_main_exits_when_no_jingle_found(monkeypatch, capsys, tm
     assert "No jingle found in the search region." in capsys.readouterr().out
 
 
+def test_audio_bootstrap_main_multi_writes_numbered_seed_clips(monkeypatch, capsys, tmp_path):
+    """With --max-occurrences > 1 each located span gets a numbered seed clip."""
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+    output_dir = tmp_path / "seeds"
+    extracted: list[dict] = []
+
+    monkeypatch.setattr(
+        audio_bootstrap, "locate_jingle_spans", lambda **_kwargs: [(10.0, 20.0), (50.0, 62.0)]
+    )
+    monkeypatch.setattr(
+        audio_bootstrap, "extract_audio_clip", lambda **kwargs: extracted.append(kwargs)
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audio_bootstrap",
+            str(source),
+            "--output",
+            str(output_dir),
+            "--max-occurrences",
+            "3",
+        ],
+    )
+
+    audio_bootstrap.main()
+
+    assert [kwargs["destination_path"] for kwargs in extracted] == [
+        output_dir / "episode_seed_01.mp3",
+        output_dir / "episode_seed_02.mp3",
+    ]
+    assert [(kwargs["start_seconds"], kwargs["duration_seconds"]) for kwargs in extracted] == [
+        (10.0, 10.0),
+        (50.0, 12.0),
+    ]
+    output = capsys.readouterr().out
+    assert f"jingle 10.000s -> 20.000s written to {output_dir / 'episode_seed_01.mp3'}" in output
+    assert f"jingle 50.000s -> 62.000s written to {output_dir / 'episode_seed_02.mp3'}" in output
+
+
+def test_audio_bootstrap_main_multi_exits_when_no_jingle_found(monkeypatch, capsys, tmp_path):
+    """An empty span list should print the no-jingle message and exit non-zero."""
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_spans", lambda **_kwargs: [])
+    monkeypatch.setattr(sys, "argv", ["audio_bootstrap", str(source), "--max-occurrences", "5"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        audio_bootstrap.main()
+
+    assert excinfo.value.code == 1
+    assert "No jingle found in the search region." in capsys.readouterr().out
+
+
 def test_audio_bootstrap_main_auditor_plays_segment_and_reads_input(monkeypatch, capsys, tmp_path):
     """The interactive auditor should audition via ffplay and parse the answer."""
     source = tmp_path / "episode.opus"
