@@ -33,8 +33,8 @@ The package is layered, and the layering is machine-enforced (see below), so put
 Enforcement lives in three places:
 
 1. `config/semgrep/` -- `dependencies.yml` (import direction between layers), `golden-rules.yml` (no print/subprocess/file-I/O in models/services), `boundaries.yml` (no raw subprocess, eval/exec, unsafe yaml, dynamic importlib), `scaffold.yml` (which files/dirs may exist in each layer; `tests/unit/` must mirror `part_io/`'s top-level shape).
-2. `tests/architecture/test_architecture_guardrails.py` -- AST-based checks that core modules do not import CLI and that print/sys.exit stay in entrypoints.
-3. `static/rules/ast-grep/` (via `sgconfig.yml`) -- ast-grep rules, e.g. no guarded imports.
+1. `tests/architecture/test_architecture_guardrails.py` -- AST-based checks that core modules do not import CLI and that print/sys.exit stay in entrypoints.
+1. `static/rules/ast-grep/` (via `sgconfig.yml`) -- ast-grep rules, e.g. no guarded imports.
 
 When adding a new lint tool: create `part_io/cli/lint/<tool>.py`, register it in `config/tasks.toml` (target `lint.<tool>`, module path, profile membership), and put its settings in `config/lint.toml`. The task registry is loaded from `config/tasks.toml` by `adapters/config/task_registry_loader.py`; per-tool thresholds (complexity, coverage floor, etc.) come from `config/lint.toml`.
 
