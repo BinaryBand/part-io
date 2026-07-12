@@ -12,9 +12,10 @@ import csv
 import json
 from pathlib import Path
 
+from part_io.adapters.audio.clips import extract_audio_clip, play_audio_segment
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
-from part_io.adapters.process.runner import run_resolved
 from part_io.cli import handle_cli_error
+from part_io.models.ports.audio import AuditorFn
 
 
 def _format_clip_name(index: int, match: AudioMatch) -> str:
@@ -31,27 +32,12 @@ def _render_manifest_clip_path(clip_path: Path) -> str:
 
 
 def _extract_clip(*, source_path: Path, destination_path: Path, match: AudioMatch) -> None:
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-ss",
-        f"{match.start_seconds:.3f}",
-        "-t",
-        f"{match.duration_seconds:.3f}",
-        "-i",
-        str(source_path),
-        "-c:a",
-        "libmp3lame",
-        "-b:a",
-        "128k",
-        str(destination_path),
-    ]
-    result = run_resolved(command, capture_output=True)
-    if result.returncode != 0:
-        raise ValueError(f"ffmpeg failed to write clip: {destination_path}")
+    extract_audio_clip(
+        source_path=source_path,
+        destination_path=destination_path,
+        start_seconds=match.start_seconds,
+        duration_seconds=match.duration_seconds,
+    )
 
 
 def _write_manifest(*, bundle_dir: Path, source_path: Path, matches: list[AudioMatch]) -> Path:
@@ -97,6 +83,46 @@ def _write_labels_template(
         "false_positive_indices": [],
         "threshold": threshold,
         "notes": "Fill true_positive_indices / false_positive_indices after manual listening.",
+    }
+    labels_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return labels_path
+
+
+def _build_interactive_auditor(*, source_path: Path) -> AuditorFn:
+    def _audition(start_seconds: float, duration_seconds: float, question: str) -> bool:
+        play_audio_segment(
+            source_path=source_path, start_seconds=start_seconds, duration_seconds=duration_seconds
+        )
+        answer = input(f"{question} [y/N]: ").strip().lower()
+        return answer in {"y", "yes"}
+
+    return _audition
+
+
+def _write_interactive_labels(
+    *,
+    bundle_dir: Path,
+    source_path: Path,
+    sample_path: Path,
+    threshold: float,
+    matches: list[AudioMatch],
+    auditor: AuditorFn,
+) -> Path:
+    labels_path = bundle_dir / "match_labels.json"
+    true_positive_indices: list[int] = []
+    false_positive_indices: list[int] = []
+
+    for index, match in enumerate(matches, start=1):
+        is_match = auditor(match.start_seconds, match.duration_seconds, "Is this a true match?")
+        (true_positive_indices if is_match else false_positive_indices).append(index)
+
+    payload = {
+        "source_path": str(source_path),
+        "sample_path": str(sample_path),
+        "true_positive_indices": true_positive_indices,
+        "false_positive_indices": false_positive_indices,
+        "threshold": threshold,
+        "notes": "Labeled interactively via --interactive.",
     }
     labels_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return labels_path
