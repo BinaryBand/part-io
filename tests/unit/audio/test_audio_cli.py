@@ -5,8 +5,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from part_io.adapters.audio.matcher import AudioMatch
-from part_io.cli import audio_review, audio_search
+import pytest
+
+from part_io.adapters.audio.matcher import AudioMatch, BestMatch
+from part_io.cli import audio_locate, audio_review, audio_search
 from part_io.cli.lint.registry import build_tool_cmd
 
 
@@ -76,6 +78,54 @@ def test_audio_review_main_writes_bundle(monkeypatch, capsys, tmp_path: Path) ->
     assert manifest_path.exists()
     assert labels_path.exists()
     assert "Exported clips: 1 (from 2 total matches)" in output
+
+
+def test_audio_locate_main_prints_best_match(monkeypatch, capsys, tmp_path: Path) -> None:
+    """The locate CLI should print the best match with its prominence."""
+    source = tmp_path / "source.mp3"
+    sample = tmp_path / "sample.mp3"
+    source.write_bytes(b"source")
+    sample.write_bytes(b"sample")
+
+    monkeypatch.setattr(
+        audio_locate,
+        "find_best_sample_match",
+        lambda **_kwargs: BestMatch(
+            start_seconds=6.7, end_seconds=24.7, duration_seconds=18.0, score=0.9956, prominence=4.2
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", ["audio_locate", str(source), str(sample)])
+
+    audio_locate.main()
+
+    output = capsys.readouterr().out
+    assert "6.700s -> 24.700s" in output
+    assert "prominence=4.20" in output
+
+
+def test_audio_locate_main_rejects_low_prominence(monkeypatch, capsys, tmp_path: Path) -> None:
+    """A peak below --min-prominence should exit non-zero with no match."""
+    source = tmp_path / "source.mp3"
+    sample = tmp_path / "sample.mp3"
+    source.write_bytes(b"source")
+    sample.write_bytes(b"sample")
+
+    monkeypatch.setattr(
+        audio_locate,
+        "find_best_sample_match",
+        lambda **_kwargs: BestMatch(
+            start_seconds=1.0, end_seconds=19.0, duration_seconds=18.0, score=0.98, prominence=0.5
+        ),
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["audio_locate", str(source), str(sample), "--min-prominence", "3.0"]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        audio_locate.main()
+
+    assert excinfo.value.code == 1
+    assert "No confident match found." in capsys.readouterr().out
 
 
 def test_coverage_adapter_build_cmd_uses_current_python() -> None:

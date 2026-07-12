@@ -14,6 +14,7 @@ from part_io.adapters.audio.matcher import (
     _build_spectral_profile,
     _suppress_overlapping,
     find_audio_sample_matches,
+    find_best_sample_match,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -91,6 +92,44 @@ def test_synthetic_burst_is_detected_in_noise(tmp_path: Path) -> None:
 
     assert matches
     assert any(1.9 <= match.start_seconds <= 2.2 for match in matches)
+
+
+def test_find_best_sample_match_picks_prominent_peak(tmp_path: Path) -> None:
+    """The peak-picker should land on the burst and report positive prominence."""
+    sample_rate = 16000
+    burst = _make_sine_wave(sample_rate, 1.0, 440.0)
+    sample_path = tmp_path / "sample.wav"
+    source_path = tmp_path / "source.wav"
+
+    _write_mono_wav(sample_path, burst, sample_rate)
+    prefix = _make_noise(sample_rate * 2, seed=1234)
+    suffix = _make_noise(sample_rate * 2, seed=5678)
+    _write_mono_wav(source_path, [*prefix, *burst, *suffix], sample_rate)
+
+    best = find_best_sample_match(source_path=source_path, sample_path=sample_path)
+
+    assert best is not None
+    assert 1.9 <= best.start_seconds <= 2.2
+    assert best.prominence > 0.0
+
+
+def test_find_best_sample_match_honors_search_window(tmp_path: Path) -> None:
+    """A search window shorter than the burst offset should exclude the burst."""
+    sample_rate = 16000
+    burst = _make_sine_wave(sample_rate, 1.0, 440.0)
+    sample_path = tmp_path / "sample.wav"
+    source_path = tmp_path / "source.wav"
+
+    _write_mono_wav(sample_path, burst, sample_rate)
+    prefix = _make_noise(sample_rate * 2, seed=1234)
+    _write_mono_wav(source_path, [*prefix, *burst], sample_rate)
+
+    best = find_best_sample_match(
+        source_path=source_path, sample_path=sample_path, search_seconds=1.0
+    )
+
+    assert best is not None
+    assert best.start_seconds < 1.0
 
 
 @pytest.mark.skipif(not REAL_SOURCE.exists(), reason="media not downloaded")

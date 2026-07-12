@@ -33,6 +33,24 @@ class AudioMatch:
     score: float
 
 
+@dataclass(frozen=True)
+class BestMatch:
+    """The single most likely sample occurrence, with its peak prominence.
+
+    ``prominence`` is the z-score of the similarity peak against the rest of the
+    curve (``(peak - median) / std``). It is meaningful when absolute scores are
+    compressed -- as they are for speech-heavy audio -- because it measures how
+    far the peak stands out from that source's own baseline rather than relying
+    on a fixed threshold.
+    """
+
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+    score: float
+    prominence: float
+
+
 def _decode_pcm_mono_16k(source: Path) -> list[int]:
     """Decode *source* to signed 16-bit PCM samples at a low analysis rate."""
     result = run_resolved(
@@ -129,6 +147,17 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
     return profile
 
 
+def _window_scores(reference: np.ndarray, source_profile: np.ndarray, hop: int) -> np.ndarray:
+    """Score every hop-th sliding window of *source_profile* against *reference*."""
+    windowed_profiles = np.lib.stride_tricks.sliding_window_view(
+        source_profile,
+        window_shape=reference.shape[0],
+        axis=0,
+    )
+    windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
+    return np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
+
+
 def _build_match_candidates(
     *,
     reference: np.ndarray,
@@ -138,13 +167,7 @@ def _build_match_candidates(
     hop: int,
     score_threshold: float,
 ) -> list[AudioMatch]:
-    windowed_profiles = np.lib.stride_tricks.sliding_window_view(
-        source_profile,
-        window_shape=reference.shape[0],
-        axis=0,
-    )
-    windowed_profiles = np.swapaxes(windowed_profiles, 1, 2)[::hop]
-    scores = np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
+    scores = _window_scores(reference, source_profile, hop)
 
     matches: list[AudioMatch] = []
     for start_index, score in enumerate(scores):
@@ -241,6 +264,74 @@ def find_audio_sample_matches(
     )
 
     return _suppress_overlapping(matches, min_overlap=dedupe_overlap)
+
+
+def find_best_sample_match(
+    *,
+    source_path: Path,
+    sample_path: Path,
+    step_seconds: float = 0.1,
+    search_seconds: float | None = None,
+) -> BestMatch | None:
+    """Locate the single best occurrence of *sample_path* inside *source_path*.
+
+    Unlike :func:`find_audio_sample_matches`, this reports the global peak of the
+    similarity curve plus its prominence, rather than every window above a fixed
+    threshold. Peak-picking is robust when absolute scores are compressed, which
+    is common for speech-heavy audio. Pass *search_seconds* to restrict the scan
+    to the first N seconds (e.g. an intro region).
+    """
+    if not source_path.exists():
+        raise FileNotFoundError(source_path)
+    if not sample_path.exists():
+        raise FileNotFoundError(sample_path)
+    if step_seconds <= 0:
+        raise ValueError("step_seconds must be positive")
+    if search_seconds is not None and search_seconds <= 0:
+        raise ValueError("search_seconds must be positive")
+
+    sample_samples = _decode_pcm_mono_16k(sample_path)
+    sample_rate = _ANALYSIS_RATE
+    reference = np.asarray(_build_spectral_profile(sample_samples, sample_rate), dtype=np.float32)
+    source_profile = np.asarray(
+        _build_spectral_profile(_decode_pcm_mono_16k(source_path), sample_rate), dtype=np.float32
+    )
+    if reference.size == 0 or source_profile.size == 0:
+        return None
+    if source_profile.shape[0] < reference.shape[0]:
+        return None
+
+    frame_hop_seconds = _HOP_SIZE / sample_rate
+    hop = max(1, int(step_seconds / frame_hop_seconds))
+    scores = _window_scores(reference, source_profile, hop)
+    if scores.size == 0:
+        return None
+
+    # Prominence baseline is taken over the whole curve so it stays stable, while
+    # the search window only constrains *where* the peak is selected.
+    spread = float(np.std(scores))
+    baseline = float(np.median(scores))
+    step = hop * frame_hop_seconds
+
+    search_scores = scores
+    if search_seconds is not None:
+        limit = int(search_seconds / step)
+        if limit >= 1:
+            search_scores = scores[:limit]
+
+    peak_index = int(np.argmax(search_scores))
+    peak = float(search_scores[peak_index])
+    prominence = 0.0 if spread == 0 else (peak - baseline) / spread
+
+    start_seconds = peak_index * step
+    sample_duration = len(sample_samples) / sample_rate
+    return BestMatch(
+        start_seconds=round(start_seconds, 3),
+        end_seconds=round(start_seconds + sample_duration, 3),
+        duration_seconds=round(sample_duration, 3),
+        score=round(peak, 4),
+        prominence=round(prominence, 4),
+    )
 
 
 __all__ = ["AudioMatch", "find_audio_sample_matches", "_suppress_overlapping"]
