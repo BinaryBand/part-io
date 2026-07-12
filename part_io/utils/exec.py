@@ -20,12 +20,14 @@ def resolve_executable(name: str) -> str:
     """Return an absolute path to *name* if it exists and is executable.
 
     If *name* already contains a path separator it is treated as a path
-    and validated. Otherwise ``shutil.which`` is used.
+    and validated. Otherwise ``shutil.which`` is used. Symlinks are kept
+    intact: dereferencing a venv's ``bin/python`` link would escape the
+    virtual environment.
     """
     if os.sep in name or name.startswith("."):
         path_obj = Path(name).expanduser()
         if path_obj.exists() and os.access(path_obj, os.X_OK):
-            return str(path_obj.resolve())
+            return os.path.abspath(path_obj)
         raise FileNotFoundError(f"Executable not found or not executable: {name}")
 
     path = shutil.which(name)

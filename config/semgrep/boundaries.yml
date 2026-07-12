@@ -13,6 +13,7 @@ rules:
         - "/.venv/**"
         - "/tests/**"
         - "/conftest.py"
+        - "/_git_helper.py"
     patterns:
       - pattern-either:
           - pattern: import subprocess

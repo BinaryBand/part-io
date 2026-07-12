@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from part_io.adapters.audio.matcher import AudioMatch, BestMatch
-from part_io.cli import audio_locate, audio_review, audio_search
+from part_io.cli import audio_bootstrap, audio_locate, audio_review, audio_search
 from part_io.cli.lint.registry import build_tool_cmd
 
 
@@ -221,6 +221,82 @@ def test_audio_locate_main_rejects_low_prominence(monkeypatch, capsys, tmp_path)
 
     assert excinfo.value.code == 1
     assert "No confident match found." in capsys.readouterr().out
+
+
+def test_audio_bootstrap_main_writes_seed_clip(monkeypatch, capsys, tmp_path):
+    """A located span should be extracted to the seed path and printed."""
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+    output = tmp_path / "seeds" / "episode_seed.mp3"
+    extracted: list[dict] = []
+
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", lambda **_kwargs: (47.0, 65.0))
+    monkeypatch.setattr(
+        audio_bootstrap, "extract_audio_clip", lambda **kwargs: extracted.append(kwargs)
+    )
+    monkeypatch.setattr(sys, "argv", ["audio_bootstrap", str(source), "--output", str(output)])
+
+    audio_bootstrap.main()
+
+    assert extracted == [
+        {
+            "source_path": source,
+            "destination_path": output,
+            "start_seconds": 47.0,
+            "duration_seconds": 18.0,
+        }
+    ]
+    assert output.parent.exists()
+    assert f"jingle 47.000s -> 65.000s written to {output}" in capsys.readouterr().out
+
+
+def test_audio_bootstrap_main_exits_when_no_jingle_found(monkeypatch, capsys, tmp_path):
+    """A None span should print the no-jingle message and exit non-zero."""
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", lambda **_kwargs: None)
+    monkeypatch.setattr(sys, "argv", ["audio_bootstrap", str(source)])
+
+    with pytest.raises(SystemExit) as excinfo:
+        audio_bootstrap.main()
+
+    assert excinfo.value.code == 1
+    assert "No jingle found in the search region." in capsys.readouterr().out
+
+
+def test_audio_bootstrap_main_auditor_plays_segment_and_reads_input(monkeypatch, capsys, tmp_path):
+    """The interactive auditor should audition via ffplay and parse the answer."""
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+    output = tmp_path / "episode_seed.mp3"
+    played: list[dict] = []
+
+    def _fake_locate(*, auditor, **_kwargs):
+        return (5.0, 6.5) if auditor(5.0, 1.5, "Is the jingle anywhere in this clip?") else None
+
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", _fake_locate)
+    monkeypatch.setattr(audio_bootstrap, "extract_audio_clip", lambda **_kwargs: None)
+    monkeypatch.setattr(audio_review, "play_audio_segment", lambda **kwargs: played.append(kwargs))
+    answers = iter(["y"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(sys, "argv", ["audio_bootstrap", str(source), "--output", str(output)])
+
+    audio_bootstrap.main()
+
+    assert played == [{"source_path": source, "start_seconds": 5.0, "duration_seconds": 1.5}]
+    assert "jingle 5.000s -> 6.500s" in capsys.readouterr().out
+
+
+def test_audio_bootstrap_main_rejects_missing_source(monkeypatch, capsys, tmp_path):
+    """A missing source file should exit via handle_cli_error."""
+    monkeypatch.setattr(sys, "argv", ["audio_bootstrap", str(tmp_path / "missing.opus")])
+
+    with pytest.raises(SystemExit) as excinfo:
+        audio_bootstrap.main()
+
+    assert excinfo.value.code == 2
+    assert "Source not found" in capsys.readouterr().err
 
 
 def test_coverage_adapter_build_cmd_uses_current_python():

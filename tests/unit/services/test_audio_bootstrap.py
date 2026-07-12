@@ -88,9 +88,7 @@ def test_locate_jingle_span_returns_yes_tile_bounds_when_no_probe_hits() -> None
     """A sub-probe-length jingle falls back to the unrefined yes-tile bounds."""
     auditor = _make_synthetic_auditor(33.2, 33.4)
 
-    span = locate_jingle_span(
-        auditor=auditor, region_start=0.0, region_end=60.0, probe_seconds=1.5
-    )
+    span = locate_jingle_span(auditor=auditor, region_start=0.0, region_end=60.0, probe_seconds=1.5)
 
     assert span == (30.0, 40.0)
 

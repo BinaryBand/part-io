@@ -125,22 +125,11 @@ def locate_jingle_span(
 ) -> tuple[float, float] | None:
     """Locate a jingle inside ``[region_start, region_end)`` via the auditor.
 
-    Args:
-        auditor: Port answering yes/no for ``(start, duration, question)``.
-        region_start: Start of the search region in seconds.
-        region_end: End of the search region in seconds.
-        tile_seconds: Width of the contiguous discovery tiles.
-        probe_seconds: Length of the short clips auditioned during tuning.
-        resolution: Stop bisecting once the bracket is narrower than this.
-
-    Returns:
-        The ``(onset, offset)`` span in seconds, the unrefined yes-tile bounds
-        when no probe inside the span answers yes (noisy edges or a
-        sub-probe-length jingle), or ``None`` when no tile contains the jingle.
-
-    Raises:
-        ValueError: If the region is empty or a tuning parameter is not
-            positive.
+    Returns the ``(onset, offset)`` span in seconds, the unrefined yes-tile
+    bounds when no probe inside the span answers yes (noisy edges or a
+    sub-probe-length jingle), or ``None`` when no discovery tile contains the
+    jingle. Raises ``ValueError`` for an empty region or non-positive tuning
+    parameters.
     """
     if region_end <= region_start:
         raise ValueError("region_end must be greater than region_start")

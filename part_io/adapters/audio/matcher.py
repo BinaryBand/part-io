@@ -208,6 +208,16 @@ def _suppress_overlapping(matches: list[AudioMatch], min_overlap: float = 0.5) -
     return sorted(kept, key=lambda item: item.start_seconds)
 
 
+def _validate_match_inputs(source_path: Path, sample_path: Path, step_seconds: float) -> None:
+    """Validate the inputs shared by the public matching entry points."""
+    if not source_path.exists():
+        raise FileNotFoundError(source_path)
+    if not sample_path.exists():
+        raise FileNotFoundError(sample_path)
+    if step_seconds <= 0:
+        raise ValueError("step_seconds must be positive")
+
+
 def find_audio_sample_matches(
     *,
     source_path: Path,
@@ -221,12 +231,7 @@ def find_audio_sample_matches(
     The matcher works on short energy fingerprints, which is enough for a first
     deterministic pass and keeps the implementation dependency-light.
     """
-    if not source_path.exists():
-        raise FileNotFoundError(source_path)
-    if not sample_path.exists():
-        raise FileNotFoundError(sample_path)
-    if step_seconds <= 0:
-        raise ValueError("step_seconds must be positive")
+    _validate_match_inputs(source_path, sample_path, step_seconds)
     if not 0 <= dedupe_overlap <= 1:
         raise ValueError("dedupe_overlap must be in [0, 1]")
 
@@ -268,18 +273,12 @@ def find_best_sample_match(
 ) -> BestMatch | None:
     """Locate the single best occurrence of *sample_path* inside *source_path*.
 
-    Unlike :func:`find_audio_sample_matches`, this reports the global peak of the
-    similarity curve plus its prominence, rather than every window above a fixed
-    threshold. Peak-picking is robust when absolute scores are compressed, which
-    is common for speech-heavy audio. Pass *search_seconds* to restrict the scan
-    to the first N seconds (e.g. an intro region).
+    Reports the global peak of the similarity curve plus its prominence rather
+    than every window above a fixed threshold, which stays robust when scores
+    are compressed (common for speech-heavy audio). Pass *search_seconds* to
+    restrict the scan to the first N seconds (e.g. an intro region).
     """
-    if not source_path.exists():
-        raise FileNotFoundError(source_path)
-    if not sample_path.exists():
-        raise FileNotFoundError(sample_path)
-    if step_seconds <= 0:
-        raise ValueError("step_seconds must be positive")
+    _validate_match_inputs(source_path, sample_path, step_seconds)
     if search_seconds is not None and search_seconds <= 0:
         raise ValueError("search_seconds must be positive")
 
@@ -306,11 +305,8 @@ def find_best_sample_match(
     baseline = float(np.median(scores))
     step = hop * frame_hop_seconds
 
-    search_scores = scores
-    if search_seconds is not None:
-        limit = int(search_seconds / step)
-        if limit >= 1:
-            search_scores = scores[:limit]
+    limit = int(search_seconds / step) if search_seconds is not None else 0
+    search_scores = scores[:limit] if limit >= 1 else scores
 
     peak_index = int(np.argmax(search_scores))
     peak = float(search_scores[peak_index])

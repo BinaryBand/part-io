@@ -128,6 +128,35 @@ def _write_interactive_labels(
     return labels_path
 
 
+def _write_labels(
+    *,
+    bundle_dir: Path,
+    source_path: Path,
+    sample_path: Path,
+    threshold: float,
+    matches: list[AudioMatch],
+    interactive: bool,
+    auditor: AuditorFn | None,
+) -> Path:
+    if not interactive:
+        return _write_labels_template(
+            bundle_dir=bundle_dir,
+            source_path=source_path,
+            sample_path=sample_path,
+            threshold=threshold,
+        )
+    if auditor is None:
+        raise ValueError("auditor is required when interactive=True")
+    return _write_interactive_labels(
+        bundle_dir=bundle_dir,
+        source_path=source_path,
+        sample_path=sample_path,
+        threshold=threshold,
+        matches=matches,
+        auditor=auditor,
+    )
+
+
 def _resolve_bundle_dir(
     *, output_root: Path, source_path: Path, sample_path: Path, bundle_name: str | None
 ) -> Path:
@@ -237,24 +266,15 @@ def _generate_bundle(
         source_path=source_path,
         matches=selected_matches,
     )
-    if interactive:
-        if auditor is None:
-            raise ValueError("auditor is required when interactive=True")
-        labels_path = _write_interactive_labels(
-            bundle_dir=bundle_dir,
-            source_path=source_path,
-            sample_path=sample_path,
-            threshold=threshold,
-            matches=selected_matches,
-            auditor=auditor,
-        )
-    else:
-        labels_path = _write_labels_template(
-            bundle_dir=bundle_dir,
-            source_path=source_path,
-            sample_path=sample_path,
-            threshold=threshold,
-        )
+    labels_path = _write_labels(
+        bundle_dir=bundle_dir,
+        source_path=source_path,
+        sample_path=sample_path,
+        threshold=threshold,
+        matches=selected_matches,
+        interactive=interactive,
+        auditor=auditor,
+    )
     return bundle_dir, manifest_path, labels_path, len(matches), len(selected_matches)
 
 

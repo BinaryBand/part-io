@@ -30,35 +30,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Seed clip destination (default: static/jingles/<source stem>_seed.mp3)",
     )
-    parser.add_argument(
-        "--region-start", type=float, default=0.0, help="Search region start in seconds"
-    )
-    parser.add_argument(
-        "--region-end", type=float, default=120.0, help="Search region end in seconds"
-    )
-    parser.add_argument(
-        "--tile-seconds", type=float, default=10.0, help="Discovery tile width in seconds"
-    )
-    parser.add_argument(
-        "--probe-seconds", type=float, default=1.5, help="Tuning probe clip length in seconds"
-    )
-    parser.add_argument(
-        "--resolution", type=float, default=0.5, help="Stop bisecting below this bracket width"
-    )
+    float_flags = [
+        ("--region-start", 0.0, "Search region start in seconds"),
+        ("--region-end", 120.0, "Search region end in seconds"),
+        ("--tile-seconds", 10.0, "Discovery tile width in seconds"),
+        ("--probe-seconds", 1.5, "Tuning probe clip length in seconds"),
+        ("--resolution", 0.5, "Stop bisecting below this bracket width"),
+    ]
+    for flag, default, help_text in float_flags:
+        parser.add_argument(flag, type=float, default=default, help=help_text)
     return parser
 
 
-def _validate_args(args: argparse.Namespace) -> None:
-    if not args.source.exists():
-        raise FileNotFoundError(f"Source not found: {args.source}")
-
-
 def main() -> None:
-    parser = _build_parser()
-    args = parser.parse_args()
+    args = _build_parser().parse_args()
 
     try:
-        _validate_args(args)
+        if not args.source.exists():
+            raise FileNotFoundError(f"Source not found: {args.source}")
         auditor = build_interactive_auditor(source_path=args.source)
         span = locate_jingle_span(
             auditor=auditor,
