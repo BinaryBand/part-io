@@ -186,13 +186,6 @@ def _build_match_candidates(
     return matches
 
 
-def _normalized_similarity(reference: np.ndarray, window: np.ndarray) -> float:
-    """Compute the mean frame-wise cosine similarity between two feature windows."""
-    if reference.ndim != 2 or window.ndim != 2 or reference.shape != window.shape:
-        return -1.0
-    return float(np.mean(np.sum(reference * window, axis=1)))
-
-
 def _overlap_ratio(left: AudioMatch, right: AudioMatch) -> float:
     overlap_start = max(left.start_seconds, right.start_seconds)
     overlap_end = min(left.end_seconds, right.end_seconds)

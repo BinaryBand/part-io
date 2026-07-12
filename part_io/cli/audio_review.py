@@ -175,6 +175,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow writing into an existing bundle directory",
     )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Audition each clip and label it interactively instead of writing an empty template",
+    )
     return parser
 
 
@@ -198,6 +203,8 @@ def _generate_bundle(
     output_root: Path,
     bundle_name: str | None,
     overwrite: bool,
+    interactive: bool = False,
+    auditor: AuditorFn | None = None,
 ) -> tuple[Path, Path, Path, int, int]:
     _validate_args(
         argparse.Namespace(
@@ -230,12 +237,24 @@ def _generate_bundle(
         source_path=source_path,
         matches=selected_matches,
     )
-    labels_path = _write_labels_template(
-        bundle_dir=bundle_dir,
-        source_path=source_path,
-        sample_path=sample_path,
-        threshold=threshold,
-    )
+    if interactive:
+        if auditor is None:
+            raise ValueError("auditor is required when interactive=True")
+        labels_path = _write_interactive_labels(
+            bundle_dir=bundle_dir,
+            source_path=source_path,
+            sample_path=sample_path,
+            threshold=threshold,
+            matches=selected_matches,
+            auditor=auditor,
+        )
+    else:
+        labels_path = _write_labels_template(
+            bundle_dir=bundle_dir,
+            source_path=source_path,
+            sample_path=sample_path,
+            threshold=threshold,
+        )
     return bundle_dir, manifest_path, labels_path, len(matches), len(selected_matches)
 
 
@@ -246,6 +265,7 @@ def main() -> None:
 
     try:
         _validate_args(args)
+        auditor = _build_interactive_auditor(source_path=args.source) if args.interactive else None
         bundle_dir, manifest_path, labels_path, total_matches, selected_count = _generate_bundle(
             source_path=args.source,
             sample_path=args.sample,
@@ -256,6 +276,8 @@ def main() -> None:
             output_root=args.output_root,
             bundle_name=args.bundle_name,
             overwrite=args.overwrite,
+            interactive=args.interactive,
+            auditor=auditor,
         )
     except (FileNotFoundError, ValueError) as exc:
         handle_cli_error(exc)
@@ -263,7 +285,7 @@ def main() -> None:
     print(f"Bundle: {bundle_dir}")
     print(f"Exported clips: {selected_count} (from {total_matches} total matches)")
     print(f"Manifest: {manifest_path}")
-    print(f"Labels template: {labels_path}")
+    print(f"Labels: {labels_path}")
 
 
 if __name__ == "__main__":
