@@ -13,7 +13,7 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def test_ruff_check() -> None:
-    """ruff check must produce zero diagnostics after auto-fix."""
+    """Ruff check must produce zero diagnostics after auto-fix."""
     result = _run(["ruff", "check", str(ROOT)])
     assert result.returncode == 0, (
         f"ruff check failed (exit {result.returncode}):\n\n{result.stdout}\n{result.stderr}"
@@ -21,7 +21,7 @@ def test_ruff_check() -> None:
 
 
 def test_ruff_format() -> None:
-    """ruff format --check must report no reformats needed."""
+    """Ruff format --check must report no reformats needed."""
     result = _run(["ruff", "format", "--check", str(ROOT)])
     assert result.returncode == 0, (
         f"ruff format --check found unformatted files (exit {result.returncode}):\n\n{result.stdout}"
@@ -29,7 +29,7 @@ def test_ruff_format() -> None:
 
 
 def test_ty_check() -> None:
-    """ty check must produce zero diagnostics."""
+    """Ty check must produce zero diagnostics."""
     result = _run(["ty", "check", str(ROOT)])
     assert result.returncode == 0, (
         f"ty check failed (exit {result.returncode}):\n\n{result.stdout}\n{result.stderr}"
@@ -45,7 +45,7 @@ def test_import_linter() -> None:
 
 
 def test_vulture() -> None:
-    """vulture must report no dead code above the confidence threshold."""
+    """Vulture must report no dead code above the confidence threshold."""
     result = _run(["vulture"])
     assert result.returncode == 0, (
         f"vulture found dead code (exit {result.returncode}):\n\n{result.stdout}\n{result.stderr}"
