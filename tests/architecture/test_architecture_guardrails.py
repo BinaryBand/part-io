@@ -12,6 +12,7 @@ ENTRYPOINT_PATHS = {
     ROOT / "part_io" / "cli" / "audio_search.py",
     ROOT / "part_io" / "cli" / "audio_review.py",
     ROOT / "part_io" / "cli" / "audio_locate.py",
+    ROOT / "part_io" / "cli" / "audio_bootstrap.py",
 }
 ENTRYPOINT_DIRS = {
     ROOT / "part_io" / "cli" / "lint",

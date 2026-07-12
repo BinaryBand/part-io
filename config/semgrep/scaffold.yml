@@ -86,6 +86,7 @@ rules:
         - /part_io/services/**/*.py
       exclude:
         - /part_io/services/__init__.py
+        - /part_io/services/audio_bootstrap.py
         - /part_io/services/lint_orchestrator.py
     pattern-regex: ^\s*(from|import|def|class|@|[A-Za-z_][\w]*\s*=)
 

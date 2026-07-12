@@ -88,7 +88,7 @@ def _write_labels_template(
     return labels_path
 
 
-def _build_interactive_auditor(*, source_path: Path) -> AuditorFn:
+def build_interactive_auditor(*, source_path: Path) -> AuditorFn:
     def _audition(start_seconds: float, duration_seconds: float, question: str) -> bool:
         play_audio_segment(
             source_path=source_path, start_seconds=start_seconds, duration_seconds=duration_seconds
@@ -265,7 +265,7 @@ def main() -> None:
 
     try:
         _validate_args(args)
-        auditor = _build_interactive_auditor(source_path=args.source) if args.interactive else None
+        auditor = build_interactive_auditor(source_path=args.source) if args.interactive else None
         bundle_dir, manifest_path, labels_path, total_matches, selected_count = _generate_bundle(
             source_path=args.source,
             sample_path=args.sample,

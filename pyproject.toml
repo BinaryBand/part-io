@@ -21,6 +21,7 @@ classifiers = [
 [project.scripts]
 "part-io-tasks" = "part_io.cli.tasks:main"
 "part-io-audio-review" = "part_io.cli.audio_review:main"
+"part-io-audio-bootstrap" = "part_io.cli.audio_bootstrap:main"
 
 
 [tool.poetry]
