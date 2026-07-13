@@ -87,7 +87,7 @@ convention = "google"
 # Git helper script runs subprocess with hardcoded commands — intentional and safe.
 "_git_helper.py" = ["S603"]
 # Subprocess call is deliberate; executable is validated by resolve_executable.
-"part_io/lib/exec.py" = ["S603"]
+"part_io/utils/exec.py" = ["S603"]
 # Package init files need no docstring.
 "part_io/__init__.py" = ["D104"]
 "part_io/app/__init__.py" = ["D104"]
@@ -118,7 +118,7 @@ layers = [
     "app",
     "adapters",
     "core",
-    "lib",
+    "utils",
 ]
 exhaustive = true
 exhaustive_ignores = ["__main__"]

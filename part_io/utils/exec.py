@@ -11,9 +11,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Iterable
 from os import getenv
 from pathlib import Path
-from typing import Any, Iterable, cast
+from typing import Any, cast
 
 
 def resolve_executable(name: str) -> str:
@@ -59,7 +60,7 @@ def run_resolved(cmd: Iterable[str], /, **kwargs: Any) -> subprocess.CompletedPr
     executable = cmd_list[0]
     resolved = resolve_executable(executable)
     full_cmd = [resolved, *cmd_list[1:]]
-    return cast(subprocess.CompletedProcess[Any], subprocess.run(full_cmd, **kwargs))
+    return cast("subprocess.CompletedProcess[Any]", subprocess.run(full_cmd, **kwargs))
 
 
 __all__ = ["resolve_executable", "run_resolved"]

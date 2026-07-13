@@ -1,6 +1,6 @@
 """Pytest configuration and fixtures."""
 
-from part_io.lib.coverage import cleanup_coverage_temp_files
+from part_io.utils.coverage import cleanup_coverage_temp_files
 
 
 def pytest_sessionstart(session):

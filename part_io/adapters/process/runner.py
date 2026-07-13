@@ -5,6 +5,6 @@ Callable ports implemented here are defined in part_io.core.ports.
 
 from __future__ import annotations
 
-from part_io.lib.exec import resolve_executable, run_resolved
+from part_io.utils.exec import resolve_executable, run_resolved
 
 __all__ = ["resolve_executable", "run_resolved"]
