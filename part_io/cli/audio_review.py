@@ -17,6 +17,7 @@ import typer
 from part_io.adapters.audio.clips import extract_audio_clip, play_audio_segment
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 from part_io.cli import handle_cli_error
+from part_io.cli.registry import command
 from part_io.core.ports.audio import AuditorFn  # noqa: TC001
 
 
@@ -227,6 +228,7 @@ def _generate_bundle(
     return bundle_dir, manifest_path, labels_path, len(matches), len(selected_matches)
 
 
+@command("review-audio", help="Generate review clips + manifest for manual labeling.")
 def review(
     source: Annotated[Path, typer.Argument(help="Longer audio file to scan.")],
     sample: Annotated[Path, typer.Argument(help="Reference sample to search for.")],

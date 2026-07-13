@@ -19,6 +19,7 @@ from part_io.adapters.audio.clips import extract_audio_clip
 from part_io.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
 from part_io.cli import handle_cli_error
 from part_io.cli.audio_review import build_interactive_auditor
+from part_io.cli.registry import command
 from part_io.core.ports.audio import AuditorFn  # noqa: TC001
 
 
@@ -98,6 +99,7 @@ def _bootstrap_multi(
         _write_seed(source, dest, onset, offset)
 
 
+@command("bootstrap-audio", help="Interactively locate a jingle and write a seed clip.")
 def bootstrap(
     source: Annotated[Path, typer.Argument(help="Audio file to search for the jingle.")],
     output: Annotated[

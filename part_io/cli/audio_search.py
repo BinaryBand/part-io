@@ -10,8 +10,10 @@ import typer
 
 from part_io.adapters.audio.matcher import find_audio_sample_matches
 from part_io.cli import handle_cli_error
+from part_io.cli.registry import command
 
 
+@command("search-audio", help="Find repeated occurrences of an audio sample.")
 def search(
     source: Annotated[Path, typer.Argument(help="Longer audio file to scan.")],
     sample: Annotated[Path, typer.Argument(help="Reference sample to search for.")],
