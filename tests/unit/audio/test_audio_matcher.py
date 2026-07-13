@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 import wave
 from array import array
@@ -59,8 +60,7 @@ def test_spectral_profile_uses_thirty_two_band_with_deltas() -> None:
     """The spectral extractor should emit 64-element vectors (32 bands + 32 deltas) per frame."""
     sample_rate = 16000
     samples = [
-        int(12000 * math.sin(2 * math.pi * 440 * index / sample_rate))
-        for index in range(0, 2048 * 3)
+        int(12000 * math.sin(2 * math.pi * 440 * index / sample_rate)) for index in range(2048 * 3)
     ]
 
     profile = _build_spectral_profile(samples, sample_rate)
@@ -142,7 +142,7 @@ def test_matches_are_sorted_and_non_overlapping_by_default() -> None:
 
     starts = [match.start_seconds for match in matches]
     assert starts == sorted(starts)
-    for left, right in zip(matches, matches[1:], strict=False):
+    for left, right in itertools.pairwise(matches):
         assert right.start_seconds >= left.end_seconds or left.end_seconds - right.start_seconds < (
             0.5 * min(left.duration_seconds, right.duration_seconds)
         )

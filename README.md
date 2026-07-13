@@ -1,7 +1,6 @@
 # part-io
 
-An audio jingle-matching toolkit: locate and extract recurring jingles/stingers inside long episode
-recordings, with strong architecture guardrails.
+An audio jingle-matching toolkit: locate and extract recurring jingles/stingers inside long episode recordings, with strong architecture guardrails.
 
 ## Features
 

@@ -8,10 +8,11 @@ over a 16 kHz analysis stream.
 
 from __future__ import annotations
 
+import itertools
 from array import array
 from dataclasses import dataclass
 from functools import cache
-from pathlib import Path
+from pathlib import Path  # noqa: TC003
 
 import numpy as np
 
@@ -98,9 +99,7 @@ def _build_filterbank_matrix(
     freq_hz = np.fft.rfftfreq(frame_size, d=1.0 / sample_rate)
 
     filterbank = np.zeros((len(freq_hz), band_count), dtype=np.float32)
-    for band_index, (left, right) in enumerate(
-        zip(band_edges_hz[:-1], band_edges_hz[1:], strict=False)
-    ):
+    for band_index, (left, right) in enumerate(itertools.pairwise(band_edges_hz)):
         band_bins = np.where((freq_hz >= left) & (freq_hz < right))[0]
         if band_bins.size == 0:
             nearest = int(np.argmin(np.abs(freq_hz - (left + right) / 2)))
@@ -158,7 +157,7 @@ def _window_scores(reference: np.ndarray, source_profile: np.ndarray, hop: int) 
     return np.mean(np.sum(windowed_profiles * reference[None, :, :], axis=2), axis=1)
 
 
-def _build_match_candidates(
+def _build_match_candidates(  # noqa: PLR0913
     *,
     reference: np.ndarray,
     source_profile: np.ndarray,
@@ -323,4 +322,4 @@ def find_best_sample_match(
     )
 
 
-__all__ = ["AudioMatch", "find_audio_sample_matches", "_suppress_overlapping"]
+__all__ = ["AudioMatch", "_suppress_overlapping", "find_audio_sample_matches"]

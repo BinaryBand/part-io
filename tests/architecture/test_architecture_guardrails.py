@@ -15,9 +15,9 @@ ENTRYPOINT_PATHS = {
 ENTRYPOINT_DIRS: set[Path] = set()
 CORE_DIRS = [
     ROOT / "part_io" / "adapters",
-    ROOT / "part_io" / "models",
-    ROOT / "part_io" / "services",
-    ROOT / "part_io" / "utils",
+    ROOT / "part_io" / "core",
+    ROOT / "part_io" / "app",
+    ROOT / "part_io" / "lib",
 ]
 
 

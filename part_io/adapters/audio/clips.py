@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path  # noqa: TC003
 
 from part_io.adapters.process.runner import run_resolved
 
@@ -54,4 +54,4 @@ def extract_audio_clip(
         raise ValueError(f"ffmpeg failed to write clip: {destination_path}")
 
 
-__all__ = ["play_audio_segment", "extract_audio_clip"]
+__all__ = ["extract_audio_clip", "play_audio_segment"]

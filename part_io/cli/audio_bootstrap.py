@@ -14,10 +14,10 @@ import sys
 from pathlib import Path
 
 from part_io.adapters.audio.clips import extract_audio_clip
+from part_io.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
 from part_io.cli import handle_cli_error
 from part_io.cli.audio_review import build_interactive_auditor
-from part_io.models.ports.audio import AuditorFn
-from part_io.services.audio_bootstrap import locate_jingle_span, locate_jingle_spans
+from part_io.core.ports.audio import AuditorFn  # noqa: TC001
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -115,7 +115,7 @@ def main() -> None:
 
     try:
         if not args.source.exists():
-            raise FileNotFoundError(f"Source not found: {args.source}")
+            raise FileNotFoundError(f"Source not found: {args.source}")  # noqa: TRY301
         auditor = build_interactive_auditor(source_path=args.source)
     except (FileNotFoundError, ValueError) as exc:
         handle_cli_error(exc)

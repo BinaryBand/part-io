@@ -15,7 +15,7 @@ from pathlib import Path
 from part_io.adapters.audio.clips import extract_audio_clip, play_audio_segment
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 from part_io.cli import handle_cli_error
-from part_io.models.ports.audio import AuditorFn
+from part_io.core.ports.audio import AuditorFn  # noqa: TC001
 
 
 def _format_clip_name(index: int, match: AudioMatch) -> str:
@@ -99,7 +99,7 @@ def build_interactive_auditor(*, source_path: Path) -> AuditorFn:
     return _audition
 
 
-def _write_interactive_labels(
+def _write_interactive_labels(  # noqa: PLR0913
     *,
     bundle_dir: Path,
     source_path: Path,
@@ -128,7 +128,7 @@ def _write_interactive_labels(
     return labels_path
 
 
-def _write_labels(
+def _write_labels(  # noqa: PLR0913
     *,
     bundle_dir: Path,
     source_path: Path,
@@ -221,7 +221,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-clips must be >= 0")
 
 
-def _generate_bundle(
+def _generate_bundle(  # noqa: PLR0913
     *,
     source_path: Path,
     sample_path: Path,

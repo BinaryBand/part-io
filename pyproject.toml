@@ -39,10 +39,11 @@ dev = [
     "pytest-cov (>=5.0.0,<7.0.0)",
     "ty (>=0.0.32,<0.0.33)",
     "lizard (>=1.22.1,<2.0.0)",
+    "import-linter (>=2.0,<3.0)",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/architecture", "tests/integration", "tests/unit"]
+testpaths = ["tests", "tests/architecture", "tests/integration", "tests/unit"]
 pythonpath = ["."]
 markers = ["e2e: end-to-end tests requiring external systems"]
 addopts = "-m 'not e2e'"
@@ -60,17 +61,25 @@ target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "A", "B", "S", "D"]
+select = ["ALL"]
+ignore = [
+    # Comma formatting style — ruff's opinion diverges from stdlib; not worth churn.
+    "COM812", "COM819",
+    # Allow commented-out code in docs/examples.
+    "ERA001",
+    # Exception messages use f-strings intentionally; suppressing the noise.
+    "TRY003", "EM102", "EM101",
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"**/cli/**/*.py" = ["D"]
-"**/models/**/*.py" = ["D"]
-"**/conftest.py" = ["D"]
+"**/cli/**/*.py" = ["D", "T20"]
+"**/core/**/*.py" = ["D"]
+"**/conftest.py" = ["D", "ANN", "ARG", "INP001"]
 # Tests use `assert` idiomatically — S101 is expected.
-"tests/**/*.py" = ["S101"]
+"tests/**/*.py" = ["S101", "PLR2004", "ANN", "D", "INP001", "SLF001"]
 # Subprocess calls in test infrastructure are intentional and hardcoded.
 "conftest.py" = ["S603", "S607"]
 "tests/test_lint.py" = ["S603"]
@@ -78,10 +87,10 @@ convention = "google"
 # Git helper script runs subprocess with hardcoded commands — intentional and safe.
 "_git_helper.py" = ["S603"]
 # Subprocess call is deliberate; executable is validated by resolve_executable.
-"part_io/utils/exec.py" = ["S603"]
+"part_io/lib/exec.py" = ["S603"]
 # Package init files need no docstring.
 "part_io/__init__.py" = ["D104"]
-"part_io/services/__init__.py" = ["D104"]
+"part_io/app/__init__.py" = ["D104"]
 
 [tool.ty.environment]
 python = ".venv"
@@ -99,7 +108,20 @@ output-format = "full"
 
 [tool.importlinter]
 root_package = "part_io"
-include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "Standard layered layout"
+type = "layers"
+containers = ["part_io"]
+layers = [
+    "cli",
+    "app",
+    "adapters",
+    "core",
+    "lib",
+]
+exhaustive = true
+exhaustive_ignores = ["__main__"]
 
 [tool.vulture]
 paths = ["part_io", "tests"]

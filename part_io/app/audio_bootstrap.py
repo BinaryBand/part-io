@@ -9,7 +9,7 @@ predicates -- "already playing when this clip starts?" for the onset and
 
 from __future__ import annotations
 
-from part_io.models.ports.audio import AuditorFn
+from part_io.core.ports.audio import AuditorFn  # noqa: TC001
 
 _TILE_QUESTION = "Is the jingle anywhere in this clip?"
 _ONSET_QUESTION = "Is the jingle already playing when this clip STARTS?"
@@ -114,7 +114,7 @@ def _bisect_offset(
     return low
 
 
-def locate_jingle_span(
+def locate_jingle_span(  # noqa: PLR0913
     *,
     auditor: AuditorFn,
     region_start: float,
@@ -169,7 +169,7 @@ def locate_jingle_span(
     return onset, offset
 
 
-def locate_jingle_spans(
+def locate_jingle_spans(  # noqa: PLR0913
     *,
     auditor: AuditorFn,
     region_start: float,

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from part_io.utils import coverage as cov_utils
-from part_io.utils import exec as exec_utils
+from part_io.lib import coverage as cov_utils
+from part_io.lib import exec as exec_utils
 
 
 def test_cleanup_coverage_temp_files_only_removes_top_level_files(tmp_path: Path) -> None:

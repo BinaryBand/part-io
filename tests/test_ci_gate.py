@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    return subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, check=False)
 
 
 def test_ruff_check() -> None:
@@ -53,6 +56,7 @@ def test_vulture() -> None:
     )
 
 
+@pytest.mark.skipif(shutil.which("ast-grep") is None, reason="ast-grep executable is not installed")
 def test_astgrep() -> None:
     """ast-grep architectural rules must all pass.
 
@@ -60,7 +64,7 @@ def test_astgrep() -> None:
     `brew install ast-grep`. It is not a Python package and cannot be
     declared in pyproject.toml.
     """
-    result = _run(["sg", "scan", "--config", str(ROOT / "sgconfig.yml"), str(ROOT)])
+    result = _run(["ast-grep", "scan", "--config", str(ROOT / "sgconfig.yml"), str(ROOT)])
     assert result.returncode == 0, (
         f"ast-grep found violations (exit {result.returncode}):\n\n{result.stdout}\n{result.stderr}"
     )

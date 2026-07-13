@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable  # noqa: TC003
 from csv import DictReader
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable
+from pathlib import Path  # noqa: TC003
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ def load_match_labels(label_path: Path) -> frozenset[int]:
     data = json.loads(label_path.read_text(encoding="utf-8"))
     indices = data.get("true_positive_indices")
     if not isinstance(indices, list):
-        raise ValueError(f"Label file missing 'true_positive_indices' list: {label_path}")
+        raise TypeError(f"Label file missing 'true_positive_indices' list: {label_path}")
     return frozenset(int(i) for i in indices)
 
 

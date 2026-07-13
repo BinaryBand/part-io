@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from part_io.models.ports.audio import AuditorFn
-from part_io.services.audio_bootstrap import locate_jingle_span, locate_jingle_spans
+from part_io.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
+from part_io.core.ports.audio import AuditorFn  # noqa: TC001
 
 AuditorCall = tuple[float, float, str]
 

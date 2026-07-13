@@ -9,8 +9,8 @@ from part_io.adapters.audio.evaluation import (
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 
 __all__ = [
-    "AudioMatch",
     "AudioManifestEvaluation",
+    "AudioMatch",
     "evaluate_match_manifest",
     "extract_audio_clip",
     "find_audio_sample_matches",

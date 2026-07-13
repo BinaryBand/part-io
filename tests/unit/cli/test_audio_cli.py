@@ -131,7 +131,7 @@ def test_audio_review_main_writes_interactive_labels(monkeypatch, capsys, tmp_pa
     assert "Exported clips: 1" in output
 
 
-def test_audio_review_main_default_writes_empty_template(monkeypatch, capsys, tmp_path):
+def test_audio_review_main_default_writes_empty_template(monkeypatch, tmp_path):
     """Without --interactive, the review CLI writes the empty labels template."""
     source = tmp_path / "source.mp3"
     sample = tmp_path / "sample.mp3"

@@ -6,6 +6,7 @@ import re
 import shutil
 import tomllib
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -18,7 +19,7 @@ _LINT_CONFIG = tomllib.loads((ROOT / "config" / "lint.toml").read_text())
 class TestRuff:
     """Ensure the codebase passes ruff linting and formatting checks."""
 
-    PATHS = ["part_io/", "tests/"]
+    PATHS: ClassVar[list[str]] = ["part_io/", "tests/"]
 
     def test_ruff_check(self):
         """Fail if ruff reports any lint violations."""
