@@ -11,10 +11,12 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import Iterable
 from os import getenv
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 def resolve_executable(name: str) -> str:
@@ -28,7 +30,7 @@ def resolve_executable(name: str) -> str:
     if os.sep in name or name.startswith("."):
         path_obj = Path(name).expanduser()
         if path_obj.exists() and os.access(path_obj, os.X_OK):
-            return os.path.abspath(path_obj)
+            return os.path.abspath(path_obj)  # noqa: PTH100 - resolve() would dereference symlinks
         raise FileNotFoundError(f"Executable not found or not executable: {name}")
 
     path = shutil.which(name)
@@ -46,7 +48,11 @@ def resolve_executable(name: str) -> str:
     return path
 
 
-def run_resolved(cmd: Iterable[str], /, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+def run_resolved(
+    cmd: Iterable[str],
+    /,
+    **kwargs: Any,  # noqa: ANN401 - kwargs forwarded to subprocess.run
+) -> subprocess.CompletedProcess[Any]:
     """Resolve the command's executable and call ``subprocess.run``.
 
     The first element of *cmd* is resolved with :func:`resolve_executable`.
@@ -60,7 +66,10 @@ def run_resolved(cmd: Iterable[str], /, **kwargs: Any) -> subprocess.CompletedPr
     executable = cmd_list[0]
     resolved = resolve_executable(executable)
     full_cmd = [resolved, *cmd_list[1:]]
-    return cast("subprocess.CompletedProcess[Any]", subprocess.run(full_cmd, **kwargs))
+    return cast(
+        "subprocess.CompletedProcess[Any]",
+        subprocess.run(full_cmd, check=False, **kwargs),
+    )
 
 
 __all__ = ["resolve_executable", "run_resolved"]
