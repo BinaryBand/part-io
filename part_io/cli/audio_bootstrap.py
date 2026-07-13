@@ -19,6 +19,7 @@ from part_io.adapters.audio.clips import extract_audio_clip
 from part_io.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
 from part_io.cli import handle_cli_error
 from part_io.cli.audio_review import build_interactive_auditor
+from part_io.cli.output import seed_written
 from part_io.cli.registry import command
 from part_io.core.ports.audio import AuditorFn  # noqa: TC001
 
@@ -35,7 +36,7 @@ def _write_seed(source: Path, output: Path, onset: float, offset: float) -> None
     except (FileNotFoundError, ValueError) as exc:
         handle_cli_error(exc)
 
-    print(f"jingle {onset:.3f}s -> {offset:.3f}s written to {output}")
+    print(seed_written(output, onset, offset))
 
 
 def _tuning_kwargs(

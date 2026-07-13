@@ -17,6 +17,7 @@ import typer
 from part_io.adapters.audio.clips import extract_audio_clip, play_audio_segment
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 from part_io.cli import handle_cli_error
+from part_io.cli.output import bundle_summary
 from part_io.cli.registry import command
 from part_io.core.ports.audio import AuditorFn  # noqa: TC001
 
@@ -279,10 +280,14 @@ def review(
     except (FileNotFoundError, ValueError) as exc:
         handle_cli_error(exc)
 
-    print(f"Bundle: {bundle_dir}")
-    print(f"Exported clips: {selected_count} (from {total_matches} total matches)")
-    print(f"Manifest: {manifest_path}")
-    print(f"Labels: {labels_path}")
+    for line in bundle_summary(
+        bundle_dir=bundle_dir,
+        selected_count=selected_count,
+        total_matches=total_matches,
+        manifest_path=manifest_path,
+        labels_path=labels_path,
+    ):
+        print(line)
 
 
 def main() -> None:

@@ -17,6 +17,7 @@ import typer
 
 from part_io.adapters.audio.matcher import find_best_sample_match
 from part_io.cli import handle_cli_error
+from part_io.cli.output import locate_result
 from part_io.cli.registry import command
 
 
@@ -48,10 +49,7 @@ def locate(
         print("No confident match found.")
         sys.exit(1)
 
-    print(
-        f"{match.start_seconds:.3f}s -> {match.end_seconds:.3f}s "
-        f"(score={match.score:.4f}, prominence={match.prominence:.2f})"
-    )
+    print(locate_result(match.start_seconds, match.end_seconds, match.score, match.prominence))
 
 
 def main() -> None:

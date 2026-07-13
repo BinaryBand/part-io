@@ -85,7 +85,6 @@ convention = "google"
 # Subprocess calls in test infrastructure are intentional and hardcoded.
 "conftest.py" = ["S603", "S607"]
 "tests/test_lint.py" = ["S603"]
-"tests/test_ci_gate.py" = ["S603"]
 # Git helper script runs subprocess with hardcoded commands — intentional and safe.
 "_git_helper.py" = ["S603"]
 # Subprocess call is deliberate; executable is validated by resolve_executable.
@@ -131,6 +130,7 @@ ignore_names = [
     "hello",
     "model_config",
     "validate_*",
+    "_fake_cmd",
     "pytest_sessionstart",
     "pytest_sessionfinish",
 ]

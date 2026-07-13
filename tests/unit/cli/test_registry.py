@@ -9,7 +9,7 @@ def test_command_decorator_adds_entry() -> None:
     """A function decorated with @command should appear in the registry."""
 
     @command("test-fake-cmd", help="A fake command for testing.")
-    def _fake_cmd() -> None:
+    def _fake_cmd() -> None:  # vulture: ignore
         pass
 
     after = get_commands()
@@ -32,7 +32,7 @@ def test_registry_entry_is_frozen_dataclass() -> None:
     """CommandEntry instances must be immutable."""
     entry = CommandEntry(name="x", help="y", fn=lambda: None)
     try:
-        entry.name = "z"  # type: ignore[misc]
+        entry.name = "z"  # ty: ignore[invalid-assignment]
     except AttributeError:
         return  # expected
     msg = "CommandEntry should be frozen"

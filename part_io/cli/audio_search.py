@@ -10,6 +10,7 @@ import typer
 
 from part_io.adapters.audio.matcher import find_audio_sample_matches
 from part_io.cli import handle_cli_error
+from part_io.cli.output import match_line, no_match
 from part_io.cli.registry import command
 
 
@@ -30,11 +31,11 @@ def search(
         handle_cli_error(exc)
 
     if not matches:
-        print("No matches found.")
+        print(no_match("matches"))
         sys.exit(1)
 
     for match in matches:
-        print(f"{match.start_seconds:.3f}s -> {match.end_seconds:.3f}s (score={match.score:.4f})")
+        print(match_line(match.start_seconds, match.end_seconds, match.score))
 
 
 def main() -> None:
