@@ -9,57 +9,17 @@ then writes a canonical seed clip. The seed feeds ``audio_locate`` /
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
+from typing import Annotated
+
+import typer
 
 from part_io.adapters.audio.clips import extract_audio_clip
 from part_io.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
 from part_io.cli import handle_cli_error
 from part_io.cli.audio_review import build_interactive_auditor
 from part_io.core.ports.audio import AuditorFn  # noqa: TC001
-
-
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Interactively locate a jingle in an episode and write a seed clip."
-    )
-    parser.add_argument("source", type=Path, help="Audio file to search for the jingle")
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        help=(
-            "Seed clip destination (default: static/jingles/<source stem>_seed.mp3); "
-            "with --max-occurrences > 1 this is a directory for the numbered seed clips"
-        ),
-    )
-    parser.add_argument(
-        "--max-occurrences",
-        type=int,
-        default=1,
-        help="Maximum number of jingle occurrences to locate in the region",
-    )
-    float_flags = [
-        ("--region-start", 0.0, "Search region start in seconds"),
-        ("--region-end", 120.0, "Search region end in seconds"),
-        ("--tile-seconds", 10.0, "Discovery tile width in seconds"),
-        ("--probe-seconds", 1.5, "Tuning probe clip length in seconds"),
-        ("--resolution", 0.5, "Stop bisecting below this bracket width"),
-    ]
-    for flag, default, help_text in float_flags:
-        parser.add_argument(flag, type=float, default=default, help=help_text)
-    return parser
-
-
-def _tuning_kwargs(args: argparse.Namespace) -> dict[str, float]:
-    return {
-        "region_start": args.region_start,
-        "region_end": args.region_end,
-        "tile_seconds": args.tile_seconds,
-        "probe_seconds": args.probe_seconds,
-        "resolution": args.resolution,
-    }
 
 
 def _write_seed(source: Path, output: Path, onset: float, offset: float) -> None:
@@ -77,9 +37,32 @@ def _write_seed(source: Path, output: Path, onset: float, offset: float) -> None
     print(f"jingle {onset:.3f}s -> {offset:.3f}s written to {output}")
 
 
-def _bootstrap_single(args: argparse.Namespace, auditor: AuditorFn) -> None:
+def _tuning_kwargs(
+    *,
+    region_start: float,
+    region_end: float,
+    tile_seconds: float,
+    probe_seconds: float,
+    resolution: float,
+) -> dict[str, float]:
+    return {
+        "region_start": region_start,
+        "region_end": region_end,
+        "tile_seconds": tile_seconds,
+        "probe_seconds": probe_seconds,
+        "resolution": resolution,
+    }
+
+
+def _bootstrap_single(
+    *,
+    source: Path,
+    output: Path | None,
+    auditor: AuditorFn,
+    **tuning: float,
+) -> None:
     try:
-        span = locate_jingle_span(auditor=auditor, **_tuning_kwargs(args))
+        span = locate_jingle_span(auditor=auditor, **tuning)
     except (FileNotFoundError, ValueError) as exc:
         handle_cli_error(exc)
 
@@ -88,15 +71,20 @@ def _bootstrap_single(args: argparse.Namespace, auditor: AuditorFn) -> None:
         sys.exit(1)
 
     onset, offset = span
-    output = args.output or Path("static") / "jingles" / f"{args.source.stem}_seed.mp3"
-    _write_seed(args.source, output, onset, offset)
+    dest = output or Path("static") / "jingles" / f"{source.stem}_seed.mp3"
+    _write_seed(source, dest, onset, offset)
 
 
-def _bootstrap_multi(args: argparse.Namespace, auditor: AuditorFn) -> None:
+def _bootstrap_multi(
+    *,
+    source: Path,
+    output: Path | None,
+    max_occurrences: int,
+    auditor: AuditorFn,
+    **tuning: float,
+) -> None:
     try:
-        spans = locate_jingle_spans(
-            auditor=auditor, max_occurrences=args.max_occurrences, **_tuning_kwargs(args)
-        )
+        spans = locate_jingle_spans(auditor=auditor, max_occurrences=max_occurrences, **tuning)
     except (FileNotFoundError, ValueError) as exc:
         handle_cli_error(exc)
 
@@ -104,27 +92,64 @@ def _bootstrap_multi(args: argparse.Namespace, auditor: AuditorFn) -> None:
         print("No jingle found in the search region.")
         sys.exit(1)
 
-    output_dir = args.output or Path("static") / "jingles"
+    output_dir = output or Path("static") / "jingles"
     for index, (onset, offset) in enumerate(spans, start=1):
-        output = output_dir / f"{args.source.stem}_seed_{index:02d}.mp3"
-        _write_seed(args.source, output, onset, offset)
+        dest = output_dir / f"{source.stem}_seed_{index:02d}.mp3"
+        _write_seed(source, dest, onset, offset)
 
 
-def main() -> None:
-    args = _build_parser().parse_args()
-
+def bootstrap(
+    source: Annotated[Path, typer.Argument(help="Audio file to search for the jingle.")],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            help=(
+                "Seed clip destination (default: static/jingles/<source stem>_seed.mp3); "
+                "with --max-occurrences > 1 this is a directory for the numbered seed clips."
+            )
+        ),
+    ] = None,
+    max_occurrences: Annotated[
+        int, typer.Option(help="Maximum number of jingle occurrences to locate in the region.")
+    ] = 1,
+    region_start: Annotated[float, typer.Option(help="Search region start in seconds.")] = 0.0,
+    region_end: Annotated[float, typer.Option(help="Search region end in seconds.")] = 120.0,
+    tile_seconds: Annotated[float, typer.Option(help="Discovery tile width in seconds.")] = 10.0,
+    probe_seconds: Annotated[
+        float, typer.Option(help="Tuning probe clip length in seconds.")
+    ] = 1.5,
+    resolution: Annotated[
+        float, typer.Option(help="Stop bisecting below this bracket width.")
+    ] = 0.5,
+) -> None:
+    """Interactively locate a jingle in an episode and write a seed clip."""
     try:
-        if not args.source.exists():
-            raise FileNotFoundError(f"Source not found: {args.source}")  # noqa: TRY301
-        auditor = build_interactive_auditor(source_path=args.source)
+        if not source.exists():
+            raise FileNotFoundError(f"Source not found: {source}")  # noqa: TRY301
+        auditor = build_interactive_auditor(source_path=source)
     except (FileNotFoundError, ValueError) as exc:
         handle_cli_error(exc)
 
-    if args.max_occurrences == 1:
-        _bootstrap_single(args, auditor)
+    tuning = _tuning_kwargs(
+        region_start=region_start,
+        region_end=region_end,
+        tile_seconds=tile_seconds,
+        probe_seconds=probe_seconds,
+        resolution=resolution,
+    )
+
+    if max_occurrences == 1:
+        _bootstrap_single(source=source, output=output, auditor=auditor, **tuning)
     else:
-        _bootstrap_multi(args, auditor)
+        _bootstrap_multi(
+            source=source,
+            output=output,
+            max_occurrences=max_occurrences,
+            auditor=auditor,
+            **tuning,
+        )
 
 
-if __name__ == "__main__":
-    main()
+def main() -> None:
+    """Run as a standalone script."""
+    typer.run(bootstrap)

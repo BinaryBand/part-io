@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.cli.main import main
+from part_io.cli.main import app
 
 if __name__ == "__main__":
-    main()
+    app()

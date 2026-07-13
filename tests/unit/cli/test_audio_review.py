@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from part_io.cli.audio_review import build_interactive_auditor, main
+from part_io.cli.audio_review import build_interactive_auditor, review
 
 
-def test_audio_review_main_imports() -> None:
-    """Verify audio_review.main is importable."""
-    assert main is not None
+def test_audio_review_command_imports() -> None:
+    """Verify audio_review.review is importable."""
+    assert review is not None
 
 
 def test_build_interactive_auditor_imports() -> None:

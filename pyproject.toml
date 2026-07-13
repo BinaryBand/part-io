@@ -19,6 +19,7 @@ classifiers = [
 ]
 
 [project.scripts]
+"part-io" = "part_io.cli.main:main"
 "part-io-audio-review" = "part_io.cli.audio_review:main"
 "part-io-audio-bootstrap" = "part_io.cli.audio_bootstrap:main"
 
@@ -76,11 +77,11 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"**/cli/**/*.py" = ["D", "T20"]
+"**/cli/**/*.py" = ["D", "T20", "PLR0913", "FBT002", "TC003", "PLC0415"]
 "**/core/**/*.py" = ["D"]
 "**/conftest.py" = ["D", "ANN", "ARG", "INP001"]
 # Tests use `assert` idiomatically — S101 is expected.
-"tests/**/*.py" = ["S101", "PLR2004", "ANN", "D", "INP001", "SLF001"]
+"tests/**/*.py" = ["S101", "PLR2004", "ANN", "D", "INP001", "SLF001", "ARG001", "ARG005"]
 # Subprocess calls in test infrastructure are intentional and hardcoded.
 "conftest.py" = ["S603", "S607"]
 "tests/test_lint.py" = ["S603"]

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from part_io.cli.audio_locate import main
+from part_io.cli.audio_locate import locate
 
 
-def test_audio_locate_main_imports() -> None:
-    """Verify audio_locate.main is importable."""
-    assert main is not None
+def test_audio_locate_command_imports() -> None:
+    """Verify audio_locate.locate is importable."""
+    assert locate is not None

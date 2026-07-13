@@ -7,10 +7,12 @@ matches, extracts MP3 clips, and writes a manifest plus labels template under
 
 from __future__ import annotations
 
-import argparse
 import csv
 import json
 from pathlib import Path
+from typing import Annotated
+
+import typer
 
 from part_io.adapters.audio.clips import extract_audio_clip, play_audio_segment
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
@@ -99,7 +101,7 @@ def build_interactive_auditor(*, source_path: Path) -> AuditorFn:
     return _audition
 
 
-def _write_interactive_labels(  # noqa: PLR0913
+def _write_interactive_labels(
     *,
     bundle_dir: Path,
     source_path: Path,
@@ -128,7 +130,7 @@ def _write_interactive_labels(  # noqa: PLR0913
     return labels_path
 
 
-def _write_labels(  # noqa: PLR0913
+def _write_labels(
     *,
     bundle_dir: Path,
     source_path: Path,
@@ -165,63 +167,16 @@ def _resolve_bundle_dir(
     return output_root / source_path.stem / sample_path.stem
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Generate manual review material for audio matches."
-    )
-    parser.add_argument("source", type=Path, help="Longer audio file to scan")
-    parser.add_argument("sample", type=Path, help="Reference sample to search for")
-    parser.add_argument("--threshold", type=float, default=0.8, help="Match score threshold")
-    parser.add_argument(
-        "--step-seconds", type=float, default=0.1, help="Sliding-window step in seconds"
-    )
-    parser.add_argument(
-        "--dedupe-overlap",
-        type=float,
-        default=0.5,
-        help="Suppress overlapping matches above this ratio",
-    )
-    parser.add_argument(
-        "--max-clips",
-        type=int,
-        default=25,
-        help="Maximum number of top-scored matches to export (0 means all)",
-    )
-    parser.add_argument(
-        "--output-root",
-        type=Path,
-        default=Path("downloads") / "review",
-        help="Root folder where review bundles are written",
-    )
-    parser.add_argument(
-        "--bundle-name",
-        type=str,
-        default=None,
-        help="Optional bundle directory name under output root",
-    )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Allow writing into an existing bundle directory",
-    )
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Audition each clip and label it interactively instead of writing an empty template",
-    )
-    return parser
-
-
-def _validate_args(args: argparse.Namespace) -> None:
-    if not args.source.exists():
-        raise FileNotFoundError(f"Source not found: {args.source}")
-    if not args.sample.exists():
-        raise FileNotFoundError(f"Sample not found: {args.sample}")
-    if args.max_clips < 0:
+def _validate_paths(*, source: Path, sample: Path, max_clips: int) -> None:
+    if not source.exists():
+        raise FileNotFoundError(f"Source not found: {source}")
+    if not sample.exists():
+        raise FileNotFoundError(f"Sample not found: {sample}")
+    if max_clips < 0:
         raise ValueError("--max-clips must be >= 0")
 
 
-def _generate_bundle(  # noqa: PLR0913
+def _generate_bundle(
     *,
     source_path: Path,
     sample_path: Path,
@@ -235,13 +190,7 @@ def _generate_bundle(  # noqa: PLR0913
     interactive: bool = False,
     auditor: AuditorFn | None = None,
 ) -> tuple[Path, Path, Path, int, int]:
-    _validate_args(
-        argparse.Namespace(
-            source=source_path,
-            sample=sample_path,
-            max_clips=max_clips,
-        )
-    )
+    _validate_paths(source=source_path, sample=sample_path, max_clips=max_clips)
 
     bundle_dir = _resolve_bundle_dir(
         output_root=output_root,
@@ -278,25 +227,51 @@ def _generate_bundle(  # noqa: PLR0913
     return bundle_dir, manifest_path, labels_path, len(matches), len(selected_matches)
 
 
-def main() -> None:
+def review(
+    source: Annotated[Path, typer.Argument(help="Longer audio file to scan.")],
+    sample: Annotated[Path, typer.Argument(help="Reference sample to search for.")],
+    threshold: Annotated[float, typer.Option(help="Match score threshold.")] = 0.8,
+    step_seconds: Annotated[float, typer.Option(help="Sliding-window step in seconds.")] = 0.1,
+    dedupe_overlap: Annotated[
+        float, typer.Option(help="Suppress overlapping matches above this ratio.")
+    ] = 0.5,
+    max_clips: Annotated[
+        int, typer.Option(help="Maximum top-scored matches to export (0 = all).")
+    ] = 25,
+    output_root: Annotated[
+        Path, typer.Option(help="Root folder where review bundles are written.")
+    ] = Path("downloads") / "review",
+    bundle_name: Annotated[
+        str | None,
+        typer.Option(help="Optional bundle directory name under output root."),
+    ] = None,
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite/--no-overwrite", help="Allow writing into an existing bundle."),
+    ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Audition each clip and label interactively.",
+        ),
+    ] = False,
+) -> None:
     """Generate review clips + manifest for manual labeling."""
-    parser = _build_parser()
-    args = parser.parse_args()
-
     try:
-        _validate_args(args)
-        auditor = build_interactive_auditor(source_path=args.source) if args.interactive else None
+        _validate_paths(source=source, sample=sample, max_clips=max_clips)
+        auditor = build_interactive_auditor(source_path=source) if interactive else None
         bundle_dir, manifest_path, labels_path, total_matches, selected_count = _generate_bundle(
-            source_path=args.source,
-            sample_path=args.sample,
-            threshold=args.threshold,
-            step_seconds=args.step_seconds,
-            dedupe_overlap=args.dedupe_overlap,
-            max_clips=args.max_clips,
-            output_root=args.output_root,
-            bundle_name=args.bundle_name,
-            overwrite=args.overwrite,
-            interactive=args.interactive,
+            source_path=source,
+            sample_path=sample,
+            threshold=threshold,
+            step_seconds=step_seconds,
+            dedupe_overlap=dedupe_overlap,
+            max_clips=max_clips,
+            output_root=output_root,
+            bundle_name=bundle_name,
+            overwrite=overwrite,
+            interactive=interactive,
             auditor=auditor,
         )
     except (FileNotFoundError, ValueError) as exc:
@@ -308,5 +283,6 @@ def main() -> None:
     print(f"Labels: {labels_path}")
 
 
-if __name__ == "__main__":
-    main()
+def main() -> None:
+    """Run as a standalone script."""
+    typer.run(review)
