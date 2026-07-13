@@ -216,5 +216,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Private project files
-config/**/.*
+.vscode
 docs/**/.*
+editors/
+static/**/.*
+CLAUDE.md
