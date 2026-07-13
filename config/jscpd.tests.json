@@ -1,9 +1,0 @@
-{
-  "format": "python",
-  "minTokens": 50,
-  "threshold": 0,
-  "path": ["../tests"],
-  "languages": ["python"],
-  "reporters": ["console"],
-  "ignore": ["**/.venv/**", "**/typings/**"]
-}
