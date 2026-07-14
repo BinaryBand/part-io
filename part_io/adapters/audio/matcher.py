@@ -4,6 +4,16 @@ The detector converts both inputs to mono PCM data and compares normalized
 feature sequences over fixed windows. Features are 32-band spectral-energy
 vectors concatenated with first-order delta features (64 dimensions total)
 over a 16 kHz analysis stream.
+
+Band energies are mean-centered on the *source* recording's average spectrum
+before normalization. Uncentered log-spectra share a large common component
+(the spectral tilt of all natural audio), which compresses every window score
+toward 1.0 and leaves true matches statistically indistinguishable from
+speech. After centering, scores behave like correlations: ~0.0 against
+unrelated audio and approaching 1.0 for a true occurrence, so fixed
+thresholds and prominence z-scores are both meaningful. A consequence is
+that scores are source-dependent: the same reference scored against two
+different recordings is centered on each recording's own mean spectrum.
 """
 
 from __future__ import annotations
@@ -116,13 +126,10 @@ def _stack_temporal_deltas(base_features: np.ndarray) -> np.ndarray:
     return np.concatenate([base_features, deltas], axis=1)
 
 
-def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[float]]:
-    """Build a multi-band spectral-energy feature profile.
-
-    This path computes cached band energies plus first-order deltas.
-    """
+def _band_energy_matrix(samples: list[int], sample_rate: int) -> np.ndarray:
+    """Compute raw log band energies per analysis frame (frames x bands)."""
     if len(samples) < _FRAME_SIZE:
-        return []
+        return np.zeros((0, _BAND_COUNT), dtype=np.float32)
 
     sample_array = np.asarray(samples, dtype=np.float32)
     window = np.hanning(_FRAME_SIZE).astype(np.float32)
@@ -132,18 +139,22 @@ def _build_spectral_profile(samples: list[int], sample_rate: int) -> list[list[f
     for index in range(0, len(sample_array) - _FRAME_SIZE + 1, _HOP_SIZE):
         frame = sample_array[index : index + _FRAME_SIZE] * window
         spectrum = np.abs(np.fft.rfft(frame)) ** 2
-        vector = np.log1p(spectrum @ filterbank).astype(np.float32)
-        norm = float(np.linalg.norm(vector)) or 1.0
-        raw_bands.append(vector / norm)
+        raw_bands.append(np.log1p(spectrum @ filterbank).astype(np.float32))
 
-    if not raw_bands:
-        return []
+    return np.stack(raw_bands)
 
-    band_matrix = np.stack(raw_bands)
-    features = _stack_temporal_deltas(band_matrix)
 
-    profile: list[list[float]] = [row.tolist() for row in features]
-    return profile
+def _finalize_profile(band_matrix: np.ndarray, mean_bands: np.ndarray) -> np.ndarray:
+    """Center band energies on *mean_bands*, L2-normalize frames, append deltas.
+
+    Centering removes the spectral tilt shared by all natural audio, which
+    otherwise dominates the window dot product and compresses every score
+    toward 1.0 regardless of whether the reference is actually present.
+    """
+    centered = band_matrix - mean_bands
+    norms = np.linalg.norm(centered, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    return _stack_temporal_deltas(centered / norms)
 
 
 def _window_scores(reference: np.ndarray, source_profile: np.ndarray, hop: int) -> np.ndarray:
@@ -228,7 +239,9 @@ def find_audio_sample_matches(
     """Find likely occurrences of *sample_path* inside *source_path*.
 
     The matcher works on short energy fingerprints, which is enough for a first
-    deterministic pass and keeps the implementation dependency-light.
+    deterministic pass and keeps the implementation dependency-light. Both
+    profiles are centered on the source's mean spectrum, so *score_threshold*
+    acts on correlation-like scores (~0.0 baseline, ~1.0 for a true match).
     """
     _validate_match_inputs(source_path, sample_path, step_seconds)
     if not 0 <= dedupe_overlap <= 1:
@@ -238,15 +251,16 @@ def find_audio_sample_matches(
     sample_samples = _decode_pcm_mono_16k(sample_path)
 
     sample_rate = _ANALYSIS_RATE
-    reference = np.asarray(_build_spectral_profile(sample_samples, sample_rate), dtype=np.float32)
-    if reference.size == 0:
+    source_bands = _band_energy_matrix(source_samples, sample_rate)
+    sample_bands = _band_energy_matrix(sample_samples, sample_rate)
+    if sample_bands.size == 0 or source_bands.size == 0:
+        return []
+    if source_bands.shape[0] < sample_bands.shape[0]:
         return []
 
-    source_profile = np.asarray(
-        _build_spectral_profile(source_samples, sample_rate), dtype=np.float32
-    )
-    if source_profile.size == 0 or source_profile.shape[0] < reference.shape[0]:
-        return []
+    mean_bands = source_bands.mean(axis=0)
+    reference = _finalize_profile(sample_bands, mean_bands)
+    source_profile = _finalize_profile(source_bands, mean_bands)
 
     frame_hop_seconds = _HOP_SIZE / sample_rate
     hop = max(1, int(step_seconds / frame_hop_seconds))
@@ -283,14 +297,16 @@ def find_best_sample_match(
 
     sample_samples = _decode_pcm_mono_16k(sample_path)
     sample_rate = _ANALYSIS_RATE
-    reference = np.asarray(_build_spectral_profile(sample_samples, sample_rate), dtype=np.float32)
-    source_profile = np.asarray(
-        _build_spectral_profile(_decode_pcm_mono_16k(source_path), sample_rate), dtype=np.float32
-    )
-    if reference.size == 0 or source_profile.size == 0:
+    source_bands = _band_energy_matrix(_decode_pcm_mono_16k(source_path), sample_rate)
+    sample_bands = _band_energy_matrix(sample_samples, sample_rate)
+    if sample_bands.size == 0 or source_bands.size == 0:
         return None
-    if source_profile.shape[0] < reference.shape[0]:
+    if source_bands.shape[0] < sample_bands.shape[0]:
         return None
+
+    mean_bands = source_bands.mean(axis=0)
+    reference = _finalize_profile(sample_bands, mean_bands)
+    source_profile = _finalize_profile(source_bands, mean_bands)
 
     frame_hop_seconds = _HOP_SIZE / sample_rate
     hop = max(1, int(step_seconds / frame_hop_seconds))

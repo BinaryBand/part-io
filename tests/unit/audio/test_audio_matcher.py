@@ -12,7 +12,8 @@ import pytest
 
 from part_io.adapters.audio.matcher import (
     AudioMatch,
-    _build_spectral_profile,
+    _band_energy_matrix,
+    _finalize_profile,
     _suppress_overlapping,
     find_audio_sample_matches,
     find_best_sample_match,
@@ -63,10 +64,10 @@ def test_spectral_profile_uses_thirty_two_band_with_deltas() -> None:
         int(12000 * math.sin(2 * math.pi * 440 * index / sample_rate)) for index in range(2048 * 3)
     ]
 
-    profile = _build_spectral_profile(samples, sample_rate)
+    band_matrix = _band_energy_matrix(samples, sample_rate)
+    profile = _finalize_profile(band_matrix, band_matrix.mean(axis=0))
 
-    assert len(profile) == 5
-    assert all(len(vector) == 64 for vector in profile)
+    assert profile.shape == (5, 64)
 
 
 def test_synthetic_burst_is_detected_in_noise(tmp_path: Path) -> None:
@@ -90,8 +91,10 @@ def test_synthetic_burst_is_detected_in_noise(tmp_path: Path) -> None:
         step_seconds=0.1,
     )
 
+    # Mean-centered scoring should isolate the burst with no false positives:
+    # every reported match must sit on the burst, not the surrounding noise.
     assert matches
-    assert any(1.9 <= match.start_seconds <= 2.2 for match in matches)
+    assert all(1.9 <= match.start_seconds <= 2.2 for match in matches)
 
 
 def test_find_best_sample_match_picks_prominent_peak(tmp_path: Path) -> None:
