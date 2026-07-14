@@ -2,15 +2,88 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
+
 from part_io.cli.output import (
+    ExitCode,
     bundle_summary,
+    emit,
+    fail,
     locate_result,
     match_line,
     no_match,
     seed_written,
 )
+
+# -- ExitCode --------------------------------------------------------------
+
+
+def test_exit_code_values() -> None:
+    """ExitCode members have the expected numeric values."""
+    assert ExitCode.OK == 0
+    assert ExitCode.NO_RESULT == 1
+    assert ExitCode.USER_ERROR == 2
+    assert ExitCode.INTERNAL == 70
+
+
+# -- emit ------------------------------------------------------------------
+
+
+def test_emit_string(capsys) -> None:
+    """emit() with a plain string prints it."""
+    emit("hello world")
+    assert capsys.readouterr().out.strip() == "hello world"
+
+
+def test_emit_list(capsys) -> None:
+    """emit() with a list prints each element on its own line."""
+    emit(["line1", "line2", "line3"])
+    lines = capsys.readouterr().out.strip().split("\n")
+    assert lines == ["line1", "line2", "line3"]
+
+
+def test_emit_json_string(capsys) -> None:
+    """emit() with as_json=True wraps a string in a JSON object."""
+    emit("hello", as_json=True)
+    data = json.loads(capsys.readouterr().out)
+    assert data == {"message": "hello"}
+
+
+def test_emit_json_dict(capsys) -> None:
+    """emit() with as_json=True and a dict serializes it."""
+    emit({"key": "value", "count": 42}, as_json=True)
+    data = json.loads(capsys.readouterr().out)
+    assert data == {"key": "value", "count": 42}
+
+
+def test_emit_json_list(capsys) -> None:
+    """emit() with as_json=True and a list serializes it."""
+    emit(["a", "b"], as_json=True)
+    data = json.loads(capsys.readouterr().out)
+    assert data == ["a", "b"]
+
+
+# -- fail ------------------------------------------------------------------
+
+
+def test_fail_exits_with_user_error() -> None:
+    """fail() raises SystemExit with USER_ERROR code."""
+    with pytest.raises(SystemExit) as excinfo:
+        fail(RuntimeError("boom"))
+    assert excinfo.value.code == ExitCode.USER_ERROR
+
+
+def test_fail_prints_to_stderr(capsys) -> None:
+    """fail() prints the exception message to stderr."""
+    with pytest.raises(SystemExit):
+        fail(RuntimeError("something went wrong"))
+    assert "something went wrong" in capsys.readouterr().err
+
+
+# -- existing formatters ---------------------------------------------------
 
 
 def test_no_match() -> None:

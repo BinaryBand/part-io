@@ -10,16 +10,18 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from part_io.adapters.audio.clips import extract_audio_clip, play_audio_segment
+from part_io.adapters.audio.clips import extract_audio_clip
 from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
-from part_io.cli import handle_cli_error
-from part_io.cli.output import bundle_summary
+from part_io.cli.commands.audio._auditor import build_interactive_auditor
+from part_io.cli.output import _json_flag, bundle_summary, emit, fail
 from part_io.cli.registry import command
-from part_io.core.ports.audio import AuditorFn  # noqa: TC001
+
+if TYPE_CHECKING:
+    from part_io.core.ports.audio import AuditorFn
 
 
 def _format_clip_name(index: int, match: AudioMatch) -> str:
@@ -92,17 +94,6 @@ def _write_labels_template(
     return labels_path
 
 
-def build_interactive_auditor(*, source_path: Path) -> AuditorFn:
-    def _audition(start_seconds: float, duration_seconds: float, question: str) -> bool:
-        play_audio_segment(
-            source_path=source_path, start_seconds=start_seconds, duration_seconds=duration_seconds
-        )
-        answer = input(f"{question} [y/N]: ").strip().lower()
-        return answer in {"y", "yes"}
-
-    return _audition
-
-
 def _write_interactive_labels(
     *,
     bundle_dir: Path,
@@ -110,23 +101,31 @@ def _write_interactive_labels(
     sample_path: Path,
     threshold: float,
     matches: list[AudioMatch],
-    auditor: AuditorFn,
 ) -> Path:
-    labels_path = bundle_dir / "match_labels.json"
-    true_positive_indices: list[int] = []
-    false_positive_indices: list[int] = []
+    from part_io.adapters.audio.clips import play_audio_segment
+
+    true_indices: list[int] = []
+    false_indices: list[int] = []
 
     for index, match in enumerate(matches, start=1):
-        is_match = auditor(match.start_seconds, match.duration_seconds, "Is this a true match?")
-        (true_positive_indices if is_match else false_positive_indices).append(index)
+        play_audio_segment(
+            source_path=source_path,
+            start_seconds=match.start_seconds,
+            duration_seconds=match.duration_seconds,
+        )
+        answer = input(f"Match {index}/{len(matches)} (score={match.score:.4f})? [y/n]: ")
+        if answer.strip().lower() in ("y", "yes"):
+            true_indices.append(index)
+        else:
+            false_indices.append(index)
 
+    labels_path = bundle_dir / "match_labels.json"
     payload = {
         "source_path": str(source_path),
         "sample_path": str(sample_path),
-        "true_positive_indices": true_positive_indices,
-        "false_positive_indices": false_positive_indices,
+        "true_positive_indices": true_indices,
+        "false_positive_indices": false_indices,
         "threshold": threshold,
-        "notes": "Labeled interactively via --interactive.",
     }
     labels_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return labels_path
@@ -142,31 +141,20 @@ def _write_labels(
     interactive: bool,
     auditor: AuditorFn | None,
 ) -> Path:
-    if not interactive:
-        return _write_labels_template(
+    if interactive and auditor is not None:
+        return _write_interactive_labels(
             bundle_dir=bundle_dir,
             source_path=source_path,
             sample_path=sample_path,
             threshold=threshold,
+            matches=matches,
         )
-    if auditor is None:
-        raise ValueError("auditor is required when interactive=True")
-    return _write_interactive_labels(
+    return _write_labels_template(
         bundle_dir=bundle_dir,
         source_path=source_path,
         sample_path=sample_path,
         threshold=threshold,
-        matches=matches,
-        auditor=auditor,
     )
-
-
-def _resolve_bundle_dir(
-    *, output_root: Path, source_path: Path, sample_path: Path, bundle_name: str | None
-) -> Path:
-    if bundle_name:
-        return output_root / bundle_name
-    return output_root / source_path.stem / sample_path.stem
 
 
 def _validate_paths(*, source: Path, sample: Path, max_clips: int) -> None:
@@ -175,7 +163,7 @@ def _validate_paths(*, source: Path, sample: Path, max_clips: int) -> None:
     if not sample.exists():
         raise FileNotFoundError(f"Sample not found: {sample}")
     if max_clips < 0:
-        raise ValueError("--max-clips must be >= 0")
+        raise ValueError("max_clips must be non-negative")
 
 
 def _generate_bundle(
@@ -189,17 +177,14 @@ def _generate_bundle(
     output_root: Path,
     bundle_name: str | None,
     overwrite: bool,
-    interactive: bool = False,
-    auditor: AuditorFn | None = None,
+    interactive: bool,
+    auditor: AuditorFn | None,
 ) -> tuple[Path, Path, Path, int, int]:
-    _validate_paths(source=source_path, sample=sample_path, max_clips=max_clips)
+    source_stem = source_path.stem
+    sample_stem = sample_path.stem
+    dir_name = bundle_name or f"{source_stem}/{sample_stem}"
+    bundle_dir = output_root / dir_name
 
-    bundle_dir = _resolve_bundle_dir(
-        output_root=output_root,
-        source_path=source_path,
-        sample_path=sample_path,
-        bundle_name=bundle_name,
-    )
     if bundle_dir.exists() and not overwrite:
         raise ValueError(f"Bundle already exists: {bundle_dir} (use --overwrite)")
 
@@ -229,10 +214,17 @@ def _generate_bundle(
     return bundle_dir, manifest_path, labels_path, len(matches), len(selected_matches)
 
 
-@command("review-audio", help="Generate review clips + manifest for manual labeling.")
+@command("audio", "review", help="Generate review clips + manifest for manual labeling.")
 def review(
-    source: Annotated[Path, typer.Argument(help="Longer audio file to scan.")],
-    sample: Annotated[Path, typer.Argument(help="Reference sample to search for.")],
+    ctx: typer.Context,
+    source: Annotated[
+        Path,
+        typer.Option("--source", prompt="Source audio file", help="Longer audio file to scan."),
+    ],
+    sample: Annotated[
+        Path,
+        typer.Option("--sample", prompt="Reference sample", help="Reference sample to search for."),
+    ],
     threshold: Annotated[float, typer.Option(help="Match score threshold.")] = 0.8,
     step_seconds: Annotated[float, typer.Option(help="Sliding-window step in seconds.")] = 0.1,
     dedupe_overlap: Annotated[
@@ -278,18 +270,15 @@ def review(
             auditor=auditor,
         )
     except (FileNotFoundError, ValueError) as exc:
-        handle_cli_error(exc)
+        fail(exc)
 
-    for line in bundle_summary(
-        bundle_dir=bundle_dir,
-        selected_count=selected_count,
-        total_matches=total_matches,
-        manifest_path=manifest_path,
-        labels_path=labels_path,
-    ):
-        print(line)
-
-
-def main() -> None:
-    """Run as a standalone script."""
-    typer.run(review)
+    emit(
+        bundle_summary(
+            bundle_dir=bundle_dir,
+            selected_count=selected_count,
+            total_matches=total_matches,
+            manifest_path=manifest_path,
+            labels_path=labels_path,
+        ),
+        as_json=_json_flag(ctx),
+    )

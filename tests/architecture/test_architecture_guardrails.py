@@ -6,13 +6,12 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ENTRYPOINT_PATHS = {
-    ROOT / "part_io" / "cli" / "audio_search.py",
-    ROOT / "part_io" / "cli" / "audio_review.py",
-    ROOT / "part_io" / "cli" / "audio_locate.py",
-    ROOT / "part_io" / "cli" / "audio_bootstrap.py",
+
+# Modules that are allowed to call print() or sys.exit().
+PRINT_ALLOWED_PATHS = {
+    ROOT / "part_io" / "cli" / "main.py",
+    ROOT / "part_io" / "cli" / "output.py",
 }
-ENTRYPOINT_DIRS: set[Path] = set()
 CORE_DIRS = [
     ROOT / "part_io" / "adapters",
     ROOT / "part_io" / "core",
@@ -25,10 +24,8 @@ def _python_files(base: Path):
     return [path for path in base.rglob("*.py") if path.name != "__init__.py"]
 
 
-def _is_entrypoint(path: Path) -> bool:
-    if path in ENTRYPOINT_PATHS:
-        return True
-    return any(parent == entry_dir for entry_dir in ENTRYPOINT_DIRS for parent in path.parents)
+def _is_print_allowed(path: Path) -> bool:
+    return path in PRINT_ALLOWED_PATHS
 
 
 def _is_cli_import(module: str | None) -> bool:
@@ -50,9 +47,9 @@ def test_core_modules_do_not_import_cli() -> None:
 
 
 def test_non_entrypoints_do_not_call_print_or_sys_exit() -> None:
-    """Only entrypoint modules may print or terminate the process."""
+    """Only allowed modules may print or terminate the process."""
     for path in _python_files(ROOT / "part_io"):
-        if _is_entrypoint(path):
+        if _is_print_allowed(path):
             continue
 
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -61,7 +58,7 @@ def test_non_entrypoints_do_not_call_print_or_sys_exit() -> None:
                 continue
 
             if isinstance(node.func, ast.Name) and node.func.id == "print":
-                raise AssertionError(f"{path} calls print() outside an entrypoint")
+                raise AssertionError(f"{path} calls print() outside an allowed module")
 
             if (
                 isinstance(node.func, ast.Attribute)
@@ -69,4 +66,4 @@ def test_non_entrypoints_do_not_call_print_or_sys_exit() -> None:
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == "sys"
             ):
-                raise AssertionError(f"{path} calls sys.exit() outside an entrypoint")
+                raise AssertionError(f"{path} calls sys.exit() outside an allowed module")

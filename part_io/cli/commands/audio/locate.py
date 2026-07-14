@@ -9,22 +9,27 @@ episode. Use ``--search-seconds`` to limit the scan to an intro/outro region and
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from part_io.adapters.audio.matcher import find_best_sample_match
-from part_io.cli import handle_cli_error
-from part_io.cli.output import locate_result
+from part_io.cli.output import ExitCode, _json_flag, emit, fail, locate_result
 from part_io.cli.registry import command
 
 
-@command("locate-audio", help="Locate the single best occurrence of an audio sample.")
+@command("audio", "locate", help="Locate the single best occurrence of an audio sample.")
 def locate(
-    source: Annotated[Path, typer.Argument(help="Longer audio file to scan.")],
-    sample: Annotated[Path, typer.Argument(help="Reference sample to search for.")],
+    ctx: typer.Context,
+    source: Annotated[
+        Path,
+        typer.Option("--source", prompt="Source audio file", help="Longer audio file to scan."),
+    ],
+    sample: Annotated[
+        Path,
+        typer.Option("--sample", prompt="Reference sample", help="Reference sample to search for."),
+    ],
     step_seconds: Annotated[float, typer.Option(help="Sliding-window step.")] = 0.1,
     search_seconds: Annotated[
         float | None,
@@ -43,19 +48,13 @@ def locate(
             search_seconds=search_seconds,
         )
     except (FileNotFoundError, ValueError) as exc:
-        handle_cli_error(exc)
+        fail(exc)
 
     if match is None or match.prominence < min_prominence:
-        print("No confident match found.")
-        sys.exit(1)
+        emit("No confident match found.", as_json=_json_flag(ctx))
+        raise SystemExit(ExitCode.NO_RESULT)
 
-    print(locate_result(match.start_seconds, match.end_seconds, match.score, match.prominence))
-
-
-def main() -> None:
-    """Run as a standalone script."""
-    typer.run(locate)
-
-
-if __name__ == "__main__":
-    main()
+    emit(
+        locate_result(match.start_seconds, match.end_seconds, match.score, match.prominence),
+        as_json=_json_flag(ctx),
+    )

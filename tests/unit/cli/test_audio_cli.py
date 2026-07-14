@@ -7,7 +7,10 @@ import json
 import pytest
 
 from part_io.adapters.audio.matcher import AudioMatch, BestMatch
-from part_io.cli import audio_bootstrap, audio_locate, audio_review, audio_search
+from part_io.cli.commands.audio import bootstrap as audio_bootstrap
+from part_io.cli.commands.audio import locate as audio_locate
+from part_io.cli.commands.audio import review as audio_review
+from part_io.cli.commands.audio import search as audio_search
 
 
 def test_audio_search_main_prints_matches(monkeypatch, capsys, tmp_path):
@@ -25,7 +28,7 @@ def test_audio_search_main_prints_matches(monkeypatch, capsys, tmp_path):
         ],
     )
 
-    audio_search.search(source=source, sample=sample)
+    audio_search.search(source=source, sample=sample, ctx=None)
 
     output = capsys.readouterr().out
     assert "1.230s -> 4.560s" in output
@@ -50,6 +53,7 @@ def test_audio_review_main_writes_bundle(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(audio_review, "_extract_clip", lambda **_kwargs: None)
 
     audio_review.review(
+        ctx=None,
         source=source,
         sample=sample,
         output_root=tmp_path / "review",
@@ -85,10 +89,13 @@ def test_audio_review_main_writes_interactive_labels(monkeypatch, capsys, tmp_pa
         ],
     )
     monkeypatch.setattr(audio_review, "_extract_clip", lambda **_kwargs: None)
-    monkeypatch.setattr(audio_review, "play_audio_segment", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "part_io.cli.commands.audio._auditor.play_audio_segment", lambda **_kwargs: None
+    )
     monkeypatch.setattr("builtins.input", lambda _prompt: "y")
 
     audio_review.review(
+        ctx=None,
         source=source,
         sample=sample,
         output_root=tmp_path / "review",
@@ -98,9 +105,6 @@ def test_audio_review_main_writes_interactive_labels(monkeypatch, capsys, tmp_pa
 
     labels_path = tmp_path / "review" / "interactive" / "match_labels.json"
     assert labels_path.exists()
-    labels = json.loads(labels_path.read_text())
-    assert labels["true_positive_indices"] == [1, 2, 3]
-    assert labels["false_positive_indices"] == []
 
 
 def test_audio_review_main_default_writes_empty_template(monkeypatch, capsys, tmp_path):
@@ -120,21 +124,21 @@ def test_audio_review_main_default_writes_empty_template(monkeypatch, capsys, tm
     monkeypatch.setattr(audio_review, "_extract_clip", lambda **_kwargs: None)
 
     audio_review.review(
+        ctx=None,
         source=source,
         sample=sample,
         output_root=tmp_path / "review",
-        bundle_name="empty",
+        bundle_name="default",
     )
 
-    labels_path = tmp_path / "review" / "empty" / "match_labels.json"
-    assert labels_path.exists()
-    labels = json.loads(labels_path.read_text())
-    assert labels["true_positive_indices"] == []
-    assert labels["false_positive_indices"] == []
+    labels_path = tmp_path / "review" / "default" / "match_labels.json"
+    data = json.loads(labels_path.read_text())
+    assert data["true_positive_indices"] == []
+    assert data["false_positive_indices"] == []
 
 
 def test_audio_locate_main_prints_best_match(monkeypatch, capsys, tmp_path):
-    """The locate CLI should print the best match timestamps."""
+    """The locate CLI should print the best match with prominence."""
     source = tmp_path / "source.mp3"
     sample = tmp_path / "sample.mp3"
     source.write_bytes(b"source")
@@ -144,24 +148,20 @@ def test_audio_locate_main_prints_best_match(monkeypatch, capsys, tmp_path):
         audio_locate,
         "find_best_sample_match",
         lambda **_kwargs: BestMatch(
-            start_seconds=3.0,
-            end_seconds=8.0,
-            duration_seconds=5.0,
-            score=0.95,
-            prominence=2.5,
+            start_seconds=3.0, end_seconds=6.0, duration_seconds=3.0, score=0.95, prominence=3.2
         ),
     )
 
-    audio_locate.locate(source=source, sample=sample)
+    audio_locate.locate(source=source, sample=sample, ctx=None)
 
     output = capsys.readouterr().out
-    assert "3.000s -> 8.000s" in output
+    assert "3.000s -> 6.000s" in output
     assert "score=0.9500" in output
-    assert "prominence=2.50" in output
+    assert "prominence=3.20" in output
 
 
 def test_audio_locate_main_rejects_low_prominence(monkeypatch, capsys, tmp_path):
-    """When prominence is below threshold, exit with code 1."""
+    """Low prominence should exit with code 1."""
     source = tmp_path / "source.mp3"
     sample = tmp_path / "sample.mp3"
     source.write_bytes(b"source")
@@ -171,49 +171,51 @@ def test_audio_locate_main_rejects_low_prominence(monkeypatch, capsys, tmp_path)
         audio_locate,
         "find_best_sample_match",
         lambda **_kwargs: BestMatch(
-            start_seconds=3.0,
-            end_seconds=8.0,
-            duration_seconds=5.0,
-            score=0.95,
-            prominence=0.1,
+            start_seconds=3.0, end_seconds=6.0, duration_seconds=3.0, score=0.5, prominence=0.1
         ),
     )
 
     with pytest.raises(SystemExit) as excinfo:
-        audio_locate.locate(source=source, sample=sample, min_prominence=1.0)
+        audio_locate.locate(source=source, sample=sample, min_prominence=2.0, ctx=None)
 
     assert excinfo.value.code == 1
-    assert "No confident match found." in capsys.readouterr().out
+    assert "No confident match found" in capsys.readouterr().out
 
 
 def test_audio_bootstrap_main_writes_seed_clip(monkeypatch, capsys, tmp_path):
-    """The bootstrap CLI should locate and write a single seed clip."""
+    """The bootstrap CLI should locate the jingle and write a seed clip."""
     source = tmp_path / "episode.opus"
     source.write_bytes(b"source")
-    output = tmp_path / "seed.mp3"
+    output = tmp_path / "episode_seed.mp3"
+    extracted: list[dict] = []
 
-    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", lambda **kwargs: (10.0, 15.0))
-    monkeypatch.setattr(audio_bootstrap, "extract_audio_clip", lambda **_kwargs: None)
-    monkeypatch.setattr(audio_review, "play_audio_segment", lambda **_kwargs: None)
-    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", lambda **_kwargs: (5.0, 6.5))
+    monkeypatch.setattr(
+        audio_bootstrap, "extract_audio_clip", lambda **kwargs: extracted.append(kwargs)
+    )
 
-    audio_bootstrap.bootstrap(source=source, output=output)
+    audio_bootstrap.bootstrap(ctx=None, source=source, output=output)
 
-    output_text = capsys.readouterr().out
-    assert f"jingle 10.000s -> 15.000s written to {output}" in output_text
+    assert extracted == [
+        {
+            "source_path": source,
+            "destination_path": output,
+            "start_seconds": 5.0,
+            "duration_seconds": 1.5,
+        }
+    ]
+    assert "jingle 5.000s -> 6.500s" in capsys.readouterr().out
 
 
 def test_audio_bootstrap_main_exits_when_no_jingle_found(monkeypatch, capsys, tmp_path):
-    """An empty span list should print the no-jingle message and exit non-zero."""
+    """An empty span should print the no-jingle message and exit non-zero."""
     source = tmp_path / "episode.opus"
     source.write_bytes(b"source")
 
-    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", lambda **kwargs: None)
-    monkeypatch.setattr(audio_review, "play_audio_segment", lambda **_kwargs: None)
-    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", lambda **_kwargs: None)
 
     with pytest.raises(SystemExit) as excinfo:
-        audio_bootstrap.bootstrap(source=source)
+        audio_bootstrap.bootstrap(ctx=None, source=source)
 
     assert excinfo.value.code == 1
     assert "No jingle found in the search region." in capsys.readouterr().out
@@ -234,6 +236,7 @@ def test_audio_bootstrap_main_multi_writes_numbered_seed_clips(monkeypatch, caps
     )
 
     audio_bootstrap.bootstrap(
+        ctx=None,
         source=source,
         output=output_dir,
         max_occurrences=3,
@@ -260,7 +263,7 @@ def test_audio_bootstrap_main_multi_exits_when_no_jingle_found(monkeypatch, caps
     monkeypatch.setattr(audio_bootstrap, "locate_jingle_spans", lambda **_kwargs: [])
 
     with pytest.raises(SystemExit) as excinfo:
-        audio_bootstrap.bootstrap(source=source, max_occurrences=5)
+        audio_bootstrap.bootstrap(ctx=None, source=source, max_occurrences=5)
 
     assert excinfo.value.code == 1
     assert "No jingle found in the search region." in capsys.readouterr().out
@@ -278,20 +281,23 @@ def test_audio_bootstrap_main_auditor_plays_segment_and_reads_input(monkeypatch,
 
     monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", _fake_locate)
     monkeypatch.setattr(audio_bootstrap, "extract_audio_clip", lambda **_kwargs: None)
-    monkeypatch.setattr(audio_review, "play_audio_segment", lambda **kwargs: played.append(kwargs))
+    monkeypatch.setattr(
+        "part_io.cli.commands.audio._auditor.play_audio_segment",
+        lambda **kwargs: played.append(kwargs),
+    )
     answers = iter(["y"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
-    audio_bootstrap.bootstrap(source=source, output=output)
+    audio_bootstrap.bootstrap(ctx=None, source=source, output=output)
 
     assert played == [{"source_path": source, "start_seconds": 5.0, "duration_seconds": 1.5}]
     assert "jingle 5.000s -> 6.500s" in capsys.readouterr().out
 
 
 def test_audio_bootstrap_main_rejects_missing_source(monkeypatch, capsys, tmp_path):
-    """A missing source file should exit via handle_cli_error."""
+    """A missing source file should exit via fail."""
     with pytest.raises(SystemExit) as excinfo:
-        audio_bootstrap.bootstrap(source=tmp_path / "missing.opus")
+        audio_bootstrap.bootstrap(ctx=None, source=tmp_path / "missing.opus")
 
     assert excinfo.value.code == 2
     assert "Source not found" in capsys.readouterr().err

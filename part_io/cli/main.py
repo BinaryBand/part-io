@@ -1,8 +1,8 @@
-"""cli.main: the command-line interface.
+"""cli.main: the central command-line interface.
 
-When invoked with no arguments ``part-io`` presents a numbered picker of
-available commands.  Commands are registered via the :mod:`part_io.cli.registry`
-decorator at each function's definition site and assembled here automatically.
+Assembles the Typer app from the registry via :func:`discover`, builds one
+sub-app per command group, provides a global ``--json`` flag and a Rich
+numbered picker for bare invocation.
 """
 
 from __future__ import annotations
@@ -14,16 +14,40 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-# Import command modules to trigger @command registration.
-from part_io.cli import audio_bootstrap, audio_locate, audio_review, audio_search  # noqa: F401
-from part_io.cli.registry import get_commands
+from part_io.cli.registry import CommandEntry, discover
 
-app = typer.Typer(add_completion=False, invoke_without_command=True)
+app = typer.Typer(add_completion=False, invoke_without_command=True, rich_markup_mode="rich")
 console = Console()
 
-# -- assemble the command tree from the registry ---------------------------
-for _entry in get_commands():
-    app.command(_entry.name, help=_entry.help)(_entry.fn)
+# -- assemble the command tree from auto-discovery --------------------------
+
+
+def _build_app() -> None:
+    """Populate *app* with commands discovered from ``cli.commands``."""
+    groups: dict[str, list[CommandEntry]] = {}
+    roots: list[CommandEntry] = []
+
+    for entry in discover():
+        if entry.group:
+            groups.setdefault(entry.group, []).append(entry)
+        else:
+            roots.append(entry)
+
+    for group_name, entries in groups.items():
+        sub = typer.Typer(
+            rich_markup_mode="rich",
+            no_args_is_help=True,
+            help=f"{group_name} commands",
+        )
+        for e in entries:
+            sub.command(e.name, help=e.help)(e.fn)
+        app.add_typer(sub, name=group_name)
+
+    for entry in roots:
+        app.command(entry.name, help=entry.help)(entry.fn)
+
+
+_build_app()
 
 
 # -- picker ----------------------------------------------------------------
@@ -31,19 +55,20 @@ for _entry in get_commands():
 
 def _show_picker() -> None:
     """Display a numbered menu and dispatch the selected command."""
-    commands = get_commands()
+    commands = discover()
 
-    console.print(Panel("[bold]part-io[/bold] — audio tooling CLI", style="cyan", expand=False))
+    console.print(Panel("[bold]part-io[/bold] -- audio tooling CLI", style="cyan", expand=False))
     for idx, entry in enumerate(commands, start=1):
-        console.print(f"  [bold]{idx}[/bold]. [green]{entry.name}[/green]  — {entry.help}")
+        label = f"{entry.group} {entry.name}" if entry.group else entry.name
+        console.print(f"  [bold]{idx}[/bold]. [green]{label}[/green]  -- {entry.help}")
     console.print()
 
-    valid_names = [entry.name for entry in commands]
+    valid_labels = [(f"{e.group} {e.name}" if e.group else e.name) for e in commands]
     range_hint = f"1-{len(commands)}"
     raw = Prompt.ask(
         f"Pick a command [{range_hint}]",
         console=console,
-        choices=[str(i) for i in range(1, len(commands) + 1)] + valid_names,
+        choices=[str(i) for i in range(1, len(commands) + 1)] + valid_labels,
         show_choices=False,
     )
     choice = raw.strip()
@@ -52,22 +77,22 @@ def _show_picker() -> None:
         console.print("No selection.", style="yellow")
         raise typer.Exit(code=0)
 
-    # Accept a number or a command name.
+    # Accept a number or a command label.
     if choice.isdigit():
         idx = int(choice) - 1
         if 0 <= idx < len(commands):
-            selected = commands[idx].name
+            selected = valid_labels[idx]
         else:
             console.print(f"Invalid choice: {choice}", style="red")
             raise typer.Exit(code=1)
-    elif choice in valid_names:
+    elif choice in valid_labels:
         selected = choice
     else:
         console.print(f"Unknown command: {choice}", style="red")
         raise typer.Exit(code=1)
 
     # Re-invoke the app with the chosen subcommand.
-    app([selected], standalone_mode=False)
+    app(selected.split(), standalone_mode=False)
 
 
 # -- callback (runs on every invocation) ------------------------------------
@@ -80,8 +105,15 @@ def main(
         bool,
         typer.Option("--version", "-v", help="Show version and exit."),
     ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output results as JSON."),
+    ] = False,
 ) -> None:
     """part-io: audio tooling CLI."""
+    ctx.ensure_object(dict)
+    ctx.obj["json"] = json_output
+
     if version:
         from importlib.metadata import version as pkg_version
 

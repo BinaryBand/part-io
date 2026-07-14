@@ -7,7 +7,12 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "part-io Contributors" }]
 requires-python = ">=3.11"
-dependencies = ["pydantic (>=2.0.0,<3.0.0)", "numpy (>=1.26.0,<3.0.0)", "typer (>=0.26.8,<1.0.0)"]
+dependencies = [
+    "pydantic (>=2.0.0,<3.0.0)",
+    "numpy (>=1.26.0,<3.0.0)",
+    "typer (>=0.26.8,<1.0.0)",
+    "rich (>=13.0.0,<15.0.0)",
+]
 keywords = ["python", "cli", "automation", "lint", "tasks"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -20,8 +25,6 @@ classifiers = [
 
 [project.scripts]
 "part-io" = "part_io.cli.main:main"
-"part-io-audio-review" = "part_io.cli.audio_review:main"
-"part-io-audio-bootstrap" = "part_io.cli.audio_bootstrap:main"
 
 
 [tool.poetry]
@@ -130,7 +133,7 @@ ignore_names = [
     "hello",
     "model_config",
     "validate_*",
-    "_fake_cmd",
+    "_fake_*",
     "pytest_sessionstart",
     "pytest_sessionfinish",
 ]

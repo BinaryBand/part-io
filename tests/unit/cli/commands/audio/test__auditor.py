@@ -1,14 +1,8 @@
-"""Tests for the cli.commands.audio.review module."""
+"""Tests for the cli.commands.audio._auditor module."""
 
 from __future__ import annotations
 
 from part_io.cli.commands.audio._auditor import build_interactive_auditor
-from part_io.cli.commands.audio.review import review
-
-
-def test_audio_review_command_imports() -> None:
-    """Verify audio review command is importable."""
-    assert review is not None
 
 
 def test_build_interactive_auditor_imports() -> None:

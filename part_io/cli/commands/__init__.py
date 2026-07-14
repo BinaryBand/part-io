@@ -1,0 +1,6 @@
+"""Self-registering CLI commands.
+
+Command modules under this package are auto-discovered by
+:func:`part_io.cli.registry.discover` — importing this package is not
+required; ``discover()`` walks it with ``pkgutil.walk_packages``.
+"""
