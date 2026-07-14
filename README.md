@@ -11,14 +11,14 @@ An audio jingle-matching toolkit: locate and extract recurring jingles/stingers 
 ## Requirements
 
 - Python 3.11+
-- Poetry
+- uv
 - Node.js (for `npx`-based CPD duplicate-code checks in the test suite)
 - ffmpeg (for audio decoding/extraction)
 
 ## Installation
 
 ```bash
-poetry install --with dev
+uv sync --all-groups
 ```
 
 ## Common Commands
@@ -26,19 +26,19 @@ poetry install --with dev
 Run tests (includes lint/type/architecture checks via `tests/integration/test_lint.py`):
 
 ```bash
-poetry run pytest
+uv run pytest
 ```
 
 Run architecture/security checks:
 
 ```bash
-poetry run semgrep scan --config config/semgrep part_io tests --error
+uv run semgrep scan --config config/semgrep part_io tests --error
 ```
 
 Run the audio review bundle CLI:
 
 ```bash
-poetry run part-io-audio-review
+uv run part-io-audio-review
 ```
 
 ## Project Layout

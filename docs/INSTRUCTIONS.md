@@ -4,16 +4,16 @@ part-io finds and extracts recurring jingles/stingers inside long episode record
 
 ## 1. Install
 
-Requirements: Python 3.11+, Poetry, ffmpeg on `PATH`, and Node.js (only needed for the `npx`-based duplicate-code check in the test suite).
+Requirements: Python 3.11+, uv, ffmpeg on `PATH`, and Node.js (only needed for the `npx`-based duplicate-code check in the test suite).
 
 ```bash
-poetry install --with dev
+uv sync --all-groups
 ```
 
 Verify everything is wired up:
 
 ```bash
-poetry run pytest
+uv run pytest
 ```
 
 Note: running the test suite mutates your working tree -- `conftest.py` runs `ruff format` and `ruff check --fix` across the repo at the start of every pytest session.
@@ -31,7 +31,7 @@ You always start with a long episode recording and no reference clip. The comman
 No reference sample needed yet. Point it at the region of the episode where you expect the jingle to appear; it plays candidate tiles through `ffplay` and asks yes/no questions until it has pinned down the exact onset and offset.
 
 ```bash
-poetry run part-io audio bootstrap --source episode.mp3 \
+uv run part-io audio bootstrap --source episode.mp3 \
   --region-start 0 --region-end 120
 ```
 
@@ -48,14 +48,14 @@ Useful flags:
 Once you have a seed clip, search for it across the full episode (or a different episode entirely):
 
 ```bash
-poetry run part-io audio search --source episode.mp3 \
+uv run part-io audio search --source episode.mp3 \
   --sample static/jingles/episode_seed.mp3 --threshold 0.8
 ```
 
 This prints every match above the score threshold with its timestamp. If you only care about the single strongest match, use `audio locate` instead -- it scores matches by a prominence z-score rather than a fixed threshold:
 
 ```bash
-poetry run part-io audio locate --source episode.mp3 \
+uv run part-io audio locate --source episode.mp3 \
   --sample static/jingles/episode_seed.mp3 --search-seconds 120 --min-prominence 2.0
 ```
 
@@ -64,7 +64,7 @@ poetry run part-io audio locate --source episode.mp3 \
 `part-io audio search` gives you timestamps, but you should listen before relying on them. `part-io audio review` extracts an MP3 clip per match plus a manifest and a labels file:
 
 ```bash
-poetry run part-io audio review --source episode.mp3 \
+uv run part-io audio review --source episode.mp3 \
   --sample static/jingles/episode_seed.mp3 \
   --threshold 0.8 --max-clips 25 --interactive
 ```
