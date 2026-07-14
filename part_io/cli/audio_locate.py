@@ -55,3 +55,7 @@ def locate(
 def main() -> None:
     """Run as a standalone script."""
     typer.run(locate)
+
+
+if __name__ == "__main__":
+    main()

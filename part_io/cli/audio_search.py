@@ -41,3 +41,7 @@ def search(
 def main() -> None:
     """Run as a standalone script."""
     typer.run(search)
+
+
+if __name__ == "__main__":
+    main()
