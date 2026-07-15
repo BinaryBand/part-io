@@ -64,6 +64,7 @@ def _show_picker() -> None:
     console.print()
 
     valid_labels = [(f"{e.group} {e.name}" if e.group else e.name) for e in commands]
+    label_to_entry: dict[str, CommandEntry] = dict(zip(valid_labels, commands, strict=True))
     range_hint = f"1-{len(commands)}"
     raw = Prompt.ask(
         f"Pick a command [{range_hint}]",
@@ -91,8 +92,14 @@ def _show_picker() -> None:
         console.print(f"Unknown command: {choice}", style="red")
         raise typer.Exit(code=1)
 
-    # Re-invoke the app with the chosen subcommand.
-    app(selected.split(), standalone_mode=False)
+    # Re-invoke the app with the chosen subcommand, walking through required
+    # args when the picker is used (non-interactive fallback via prompt= on
+    # each Option still works for direct terminal invocation).
+    from part_io.cli.prompting import prompt_for_args
+
+    entry = label_to_entry[selected]
+    extra_args = prompt_for_args(entry)
+    app(selected.split() + extra_args, standalone_mode=False)
 
 
 # -- callback (runs on every invocation) ------------------------------------
