@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 [project.scripts]
-"part-io" = "part_io.cli.main:main"
+"part-io" = "part_io.cli.main:app"
 
 
 [build-system]

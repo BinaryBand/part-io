@@ -1,5 +1,10 @@
 # TODO
 
+## Features
+
+- [ ] Auto-download sample episode(s) from RSS feeds.
+- [ ] Tweak CLI to be more guided.
+
 ## Cleanup
 
 - [x] Remove dead `_build_cmd` wrappers from the lint entrypoints. Deleted the seven `_build_cmd` defs and their now-unused `build_tool_cmd` imports from `part_io/cli/lint/<tool>.py`, and repointed `tests/unit/adapters/test_lint_adapters.py` and `tests/unit/audio/test_audio_cli.py` at `registry.build_tool_cmd("<tool>", cfg)` so they exercise the real builder.
