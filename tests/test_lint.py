@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = ROOT / "part_io"
+PACKAGE = ROOT / "partio"
 TESTS = ROOT / "tests"
 # The mirrored, per-layer unit tests live under tests/unit/, leaving the rest of
 # tests/ (e.g. tests/infrastructure/, tests/integration/) free for test

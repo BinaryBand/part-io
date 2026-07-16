@@ -1,4 +1,4 @@
-# part-io
+# partio
 
 An audio jingle-matching toolkit: locate and extract recurring jingles/stingers inside long episode recordings, with strong architecture guardrails.
 
@@ -32,18 +32,18 @@ uv run pytest
 Run architecture/security checks:
 
 ```bash
-uv run semgrep scan --config config/semgrep part_io tests --error
+uv run semgrep scan --config config/semgrep partio tests --error
 ```
 
 Run the audio review bundle CLI:
 
 ```bash
-uv run part-io-audio-review
+uv run partio-audio-review
 ```
 
 ## Project Layout
 
-- `part_io/` application package.
+- `partio/` application package.
 - `config/` lint and Semgrep policy configuration.
 - `tests/` architecture, integration, and unit tests.
 

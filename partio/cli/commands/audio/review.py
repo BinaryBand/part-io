@@ -14,14 +14,14 @@ from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from part_io.adapters.audio.clips import extract_audio_clip
-from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
-from part_io.cli.commands.audio._auditor import build_interactive_auditor
-from part_io.cli.output import _json_flag, bundle_summary, emit, fail
-from part_io.cli.registry import command
+from partio.adapters.audio.clips import extract_audio_clip
+from partio.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
+from partio.cli.commands.audio._auditor import build_interactive_auditor
+from partio.cli.output import _json_flag, bundle_summary, emit, fail
+from partio.cli.registry import command
 
 if TYPE_CHECKING:
-    from part_io.core.ports.audio import AuditorFn
+    from partio.core.ports.audio import AuditorFn
 
 
 def _format_clip_name(index: int, match: AudioMatch) -> str:
@@ -102,7 +102,7 @@ def _write_interactive_labels(
     threshold: float,
     matches: list[AudioMatch],
 ) -> Path:
-    from part_io.adapters.audio.clips import play_audio_segment
+    from partio.adapters.audio.clips import play_audio_segment
 
     true_indices: list[int] = []
     false_indices: list[int] = []

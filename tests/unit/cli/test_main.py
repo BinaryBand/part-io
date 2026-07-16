@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typer.testing import CliRunner
 
-from part_io.cli.main import app
-from part_io.cli.registry import get_commands
+from partio.cli.main import app
+from partio.cli.registry import get_commands
 
 runner = CliRunner()
 
@@ -21,7 +21,7 @@ def test_app_version_flag() -> None:
     """--version should print the package version."""
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "part-io" in result.stdout
+    assert "partio" in result.stdout
 
 
 def test_audio_group_shows_help() -> None:

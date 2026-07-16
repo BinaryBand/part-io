@@ -1,6 +1,6 @@
-# Getting Started with part-io
+# Getting Started with partio
 
-part-io finds and extracts recurring jingles/stingers inside long episode recordings. This guide walks through installation and the unified CLI.
+partio finds and extracts recurring jingles/stingers inside long episode recordings. This guide walks through installation and the unified CLI.
 
 ## 1. Install
 
@@ -22,16 +22,16 @@ Note: running the test suite mutates your working tree -- `conftest.py` runs `ru
 
 You always start with a long episode recording and no reference clip. The commands chain together like this:
 
-1. **`part-io audio bootstrap`** -- cold start. Interactively narrows down a region of the episode to a clean jingle clip ("seed") that you can reuse.
-1. **`part-io audio search`** / **`part-io audio locate`** -- once you have a seed clip, find every place (or the single best place) it recurs across the same or other episodes.
-1. **`part-io audio review`** -- generate an extracted-clip bundle plus a manifest so you can sanity-check matches by ear before trusting them.
+1. **`partio audio bootstrap`** -- cold start. Interactively narrows down a region of the episode to a clean jingle clip ("seed") that you can reuse.
+1. **`partio audio search`** / **`partio audio locate`** -- once you have a seed clip, find every place (or the single best place) it recurs across the same or other episodes.
+1. **`partio audio review`** -- generate an extracted-clip bundle plus a manifest so you can sanity-check matches by ear before trusting them.
 
 ### Step 1: Bootstrap a seed clip
 
 No reference sample needed yet. Point it at the region of the episode where you expect the jingle to appear; it plays candidate tiles through `ffplay` and asks yes/no questions until it has pinned down the exact onset and offset.
 
 ```bash
-uv run part-io audio bootstrap --source episode.mp3 \
+uv run partio audio bootstrap --source episode.mp3 \
   --region-start 0 --region-end 120
 ```
 
@@ -48,23 +48,23 @@ Useful flags:
 Once you have a seed clip, search for it across the full episode (or a different episode entirely):
 
 ```bash
-uv run part-io audio search --source episode.mp3 \
+uv run partio audio search --source episode.mp3 \
   --sample static/jingles/episode_seed.mp3 --threshold 0.8
 ```
 
 This prints every match above the score threshold with its timestamp. If you only care about the single strongest match, use `audio locate` instead -- it scores matches by a prominence z-score rather than a fixed threshold:
 
 ```bash
-uv run part-io audio locate --source episode.mp3 \
+uv run partio audio locate --source episode.mp3 \
   --sample static/jingles/episode_seed.mp3 --search-seconds 120 --min-prominence 2.0
 ```
 
 ### Step 3: Review matches before trusting them
 
-`part-io audio search` gives you timestamps, but you should listen before relying on them. `part-io audio review` extracts an MP3 clip per match plus a manifest and a labels file:
+`partio audio search` gives you timestamps, but you should listen before relying on them. `partio audio review` extracts an MP3 clip per match plus a manifest and a labels file:
 
 ```bash
-uv run part-io audio review --source episode.mp3 \
+uv run partio audio review --source episode.mp3 \
   --sample static/jingles/episode_seed.mp3 \
   --threshold 0.8 --max-clips 25 --interactive
 ```
@@ -77,12 +77,12 @@ uv run part-io audio review --source episode.mp3 \
 
 | Command | Purpose |
 |---|---|
-| `part-io audio bootstrap` | Find a jingle with no reference clip yet |
-| `part-io audio search` | List every match of a seed clip above a threshold |
-| `part-io audio locate` | Find the single best/strongest match |
-| `part-io audio review` | Extract clips + manifest for manual verification |
+| `partio audio bootstrap` | Find a jingle with no reference clip yet |
+| `partio audio search` | List every match of a seed clip above a threshold |
+| `partio audio locate` | Find the single best/strongest match |
+| `partio audio review` | Extract clips + manifest for manual verification |
 
-All commands are accessible through the unified `part-io` entry point. Running `part-io` with no arguments opens an interactive picker.
+All commands are accessible through the unified `partio` entry point. Running `partio` with no arguments opens an interactive picker.
 
 Global options:
 

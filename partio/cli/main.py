@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from part_io.cli.registry import CommandEntry, discover
+from partio.cli.registry import CommandEntry, discover
 
 app = typer.Typer(add_completion=False, invoke_without_command=True, rich_markup_mode="rich")
 console = Console()
@@ -57,7 +57,7 @@ def _show_picker() -> None:
     """Display a numbered menu and dispatch the selected command."""
     commands = discover()
 
-    console.print(Panel("[bold]part-io[/bold] -- audio tooling CLI", style="cyan", expand=False))
+    console.print(Panel("[bold]partio[/bold] -- audio tooling CLI", style="cyan", expand=False))
     for idx, entry in enumerate(commands, start=1):
         label = f"{entry.group} {entry.name}" if entry.group else entry.name
         console.print(f"  [bold]{idx}[/bold]. [green]{label}[/green]  -- {entry.help}")
@@ -95,7 +95,7 @@ def _show_picker() -> None:
     # Re-invoke the app with the chosen subcommand, walking through required
     # args when the picker is used (non-interactive fallback via prompt= on
     # each Option still works for direct terminal invocation).
-    from part_io.cli.prompting import prompt_for_args
+    from partio.cli.prompting import prompt_for_args
 
     entry = label_to_entry[selected]
     extra_args = prompt_for_args(entry)
@@ -117,14 +117,14 @@ def main(
         typer.Option("--json", help="Output results as JSON."),
     ] = False,
 ) -> None:
-    """part-io: audio tooling CLI."""
+    """partio: audio tooling CLI."""
     ctx.ensure_object(dict)
     ctx.obj["json"] = json_output
 
     if version:
         from importlib.metadata import version as pkg_version
 
-        console.print(f"part-io {pkg_version('part-io')}")
+        console.print(f"partio {pkg_version('partio')}")
         raise typer.Exit(code=0)
 
     if ctx.invoked_subcommand is None:

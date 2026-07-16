@@ -26,7 +26,7 @@ from pathlib import Path  # noqa: TC003
 
 import numpy as np
 
-from part_io.adapters.process.runner import run_resolved
+from partio.adapters.process.runner import run_resolved
 
 _ANALYSIS_RATE = 16000
 _FRAME_SIZE = 2048

@@ -6,11 +6,11 @@ import json
 
 import pytest
 
-from part_io.adapters.audio.matcher import AudioMatch, BestMatch
-from part_io.cli.commands.audio import bootstrap as audio_bootstrap
-from part_io.cli.commands.audio import locate as audio_locate
-from part_io.cli.commands.audio import review as audio_review
-from part_io.cli.commands.audio import search as audio_search
+from partio.adapters.audio.matcher import AudioMatch, BestMatch
+from partio.cli.commands.audio import bootstrap as audio_bootstrap
+from partio.cli.commands.audio import locate as audio_locate
+from partio.cli.commands.audio import review as audio_review
+from partio.cli.commands.audio import search as audio_search
 
 
 def test_audio_search_main_prints_matches(monkeypatch, capsys, tmp_path):
@@ -90,7 +90,7 @@ def test_audio_review_main_writes_interactive_labels(monkeypatch, capsys, tmp_pa
     )
     monkeypatch.setattr(audio_review, "_extract_clip", lambda **_kwargs: None)
     monkeypatch.setattr(
-        "part_io.cli.commands.audio._auditor.play_audio_segment", lambda **_kwargs: None
+        "partio.cli.commands.audio._auditor.play_audio_segment", lambda **_kwargs: None
     )
     monkeypatch.setattr("builtins.input", lambda _prompt: "y")
 
@@ -282,7 +282,7 @@ def test_audio_bootstrap_main_auditor_plays_segment_and_reads_input(monkeypatch,
     monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", _fake_locate)
     monkeypatch.setattr(audio_bootstrap, "extract_audio_clip", lambda **_kwargs: None)
     monkeypatch.setattr(
-        "part_io.cli.commands.audio._auditor.play_audio_segment",
+        "partio.cli.commands.audio._auditor.play_audio_segment",
         lambda **kwargs: played.append(kwargs),
     )
     answers = iter(["y"])

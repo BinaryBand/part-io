@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from part_io.adapters.audio.matcher import (
+from partio.adapters.audio.matcher import (
     AudioMatch,
     _band_energy_matrix,
     _finalize_profile,

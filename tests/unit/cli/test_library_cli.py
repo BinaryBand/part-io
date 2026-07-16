@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from part_io.cli.commands.library import _store
-from part_io.cli.commands.library import add as library_add
-from part_io.cli.commands.library import list as library_list
-from part_io.cli.commands.library import remove as library_remove
-from part_io.cli.output import ExitCode
-from part_io.core.ports import AudioPathKind
+from partio.cli.commands.library import _store
+from partio.cli.commands.library import add as library_add
+from partio.cli.commands.library import list as library_list
+from partio.cli.commands.library import remove as library_remove
+from partio.cli.output import ExitCode
+from partio.core.ports import AudioPathKind
 
 
 @pytest.fixture(autouse=True)

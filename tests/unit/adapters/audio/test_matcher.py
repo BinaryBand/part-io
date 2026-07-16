@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
+from partio.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 
 
 def test_audio_match_imports() -> None:

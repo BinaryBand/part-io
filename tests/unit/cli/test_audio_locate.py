@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.cli.commands.audio.locate import locate
+from partio.cli.commands.audio.locate import locate
 
 
 def test_audio_locate_command_imports() -> None:

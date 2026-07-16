@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.cli.registry import CommandEntry, command, discover, get_commands
+from partio.cli.registry import CommandEntry, command, discover, get_commands
 
 
 def test_command_decorator_adds_grouped_entry() -> None:
@@ -16,7 +16,7 @@ def test_command_decorator_adds_grouped_entry() -> None:
     entries = [e for e in after if e.group == "testgroup" and e.name == "testverb"]
     assert len(entries) == 1
     # Clean up so other tests aren't polluted.
-    from part_io.cli import registry as _reg
+    from partio.cli import registry as _reg
 
     _reg._registry[:] = [
         e for e in _reg._registry if not (e.group == "testgroup" and e.name == "testverb")
@@ -35,7 +35,7 @@ def test_command_decorator_adds_root_entry() -> None:
     assert len(entries) == 1
     assert entries[0].group is None
     # Clean up.
-    from part_io.cli import registry as _reg
+    from partio.cli import registry as _reg
 
     _reg._registry[:] = [e for e in _reg._registry if e.name != "test-root-cmd"]
 

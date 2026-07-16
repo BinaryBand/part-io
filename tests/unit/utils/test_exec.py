@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.utils.exec import resolve_executable, run_resolved
+from partio.utils.exec import resolve_executable, run_resolved
 
 
 def test_resolve_executable_imports() -> None:

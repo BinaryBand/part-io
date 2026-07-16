@@ -14,9 +14,9 @@ from typing import Annotated
 
 import typer
 
-from part_io.adapters.audio.matcher import find_best_sample_match
-from part_io.cli.output import ExitCode, _json_flag, emit, fail, locate_result
-from part_io.cli.registry import command
+from partio.adapters.audio.matcher import find_best_sample_match
+from partio.cli.output import ExitCode, _json_flag, emit, fail, locate_result
+from partio.cli.registry import command
 
 
 @command("audio", "locate", help="Locate the single best occurrence of an audio sample.")

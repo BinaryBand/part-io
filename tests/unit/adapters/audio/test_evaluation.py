@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.adapters.audio.evaluation import (
+from partio.adapters.audio.evaluation import (
     AudioManifestEvaluation,
     evaluate_match_manifest,
     load_match_labels,

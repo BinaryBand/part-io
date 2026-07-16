@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.cli.commands.audio.bootstrap import bootstrap
+from partio.cli.commands.audio.bootstrap import bootstrap
 
 
 def test_audio_bootstrap_command_imports() -> None:

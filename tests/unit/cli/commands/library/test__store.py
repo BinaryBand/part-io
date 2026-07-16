@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from part_io.cli.commands.library import _store
-from part_io.core.ports import AudioPathEntry, AudioPathKind
+from partio.cli.commands.library import _store
+from partio.core.ports import AudioPathEntry, AudioPathKind
 
 
 def test_default_store_round_trips_an_entry(tmp_path: Path, monkeypatch) -> None:

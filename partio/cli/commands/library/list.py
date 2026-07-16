@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import typer  # noqa: TC002
 
-from part_io.cli.commands.library._store import default_store
-from part_io.cli.output import ExitCode, _json_flag, emit, no_match
-from part_io.cli.registry import command
+from partio.cli.commands.library._store import default_store
+from partio.cli.output import ExitCode, _json_flag, emit, no_match
+from partio.cli.registry import command
 
 
 @command("library", "list", help="List remembered audio paths.")

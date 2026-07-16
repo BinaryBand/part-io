@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
 if TYPE_CHECKING:
-    from part_io.cli.registry import CommandEntry
+    from partio.cli.registry import CommandEntry
 
 console = Console()
 

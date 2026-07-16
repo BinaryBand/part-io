@@ -35,7 +35,7 @@ jobs:
         run: uv sync --all-groups
 
       - name: Ruff
-        run: uv run ruff check part_io tests
+        run: uv run ruff check partio tests
 
       - name: Type check
         run: uv run ty check
@@ -44,7 +44,7 @@ jobs:
         run: uv run pytest -q
 
       - name: Semgrep
-        run: uv run semgrep scan --config config/semgrep part_io tests --error
+        run: uv run semgrep scan --config config/semgrep partio tests --error
 
       - name: CPD
         run: uv run npx --yes jscpd@4.0.5 --config config/jscpd.json

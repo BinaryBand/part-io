@@ -14,14 +14,14 @@ from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from part_io.adapters.audio.clips import extract_audio_clip
-from part_io.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
-from part_io.cli.commands.audio._auditor import build_interactive_auditor
-from part_io.cli.output import ExitCode, _json_flag, emit, fail, seed_written
+from partio.adapters.audio.clips import extract_audio_clip
+from partio.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
+from partio.cli.commands.audio._auditor import build_interactive_auditor
+from partio.cli.output import ExitCode, _json_flag, emit, fail, seed_written
 
 if TYPE_CHECKING:
-    from part_io.core.ports.audio import AuditorFn
-from part_io.cli.registry import command
+    from partio.core.ports.audio import AuditorFn
+from partio.cli.registry import command
 
 
 def _write_seed(source: Path, output: Path, onset: float, offset: float) -> None:

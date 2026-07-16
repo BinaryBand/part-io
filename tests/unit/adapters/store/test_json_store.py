@@ -7,7 +7,7 @@ from pathlib import Path  # noqa: TC003
 
 import pytest
 
-from part_io.adapters.store.json_store import JsonItemStore
+from partio.adapters.store.json_store import JsonItemStore
 
 
 @dataclass(frozen=True)

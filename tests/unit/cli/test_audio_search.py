@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.cli.commands.audio.search import search
+from partio.cli.commands.audio.search import search
 
 
 def test_audio_search_command_imports() -> None:

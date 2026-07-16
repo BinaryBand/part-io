@@ -6,9 +6,9 @@ from typing import Annotated
 
 import typer
 
-from part_io.cli.commands.library._store import default_store
-from part_io.cli.output import _json_flag, emit, fail
-from part_io.cli.registry import command
+from partio.cli.commands.library._store import default_store
+from partio.cli.output import _json_flag, emit, fail
+from partio.cli.registry import command
 
 
 @command("library", "remove", help="Forget a remembered audio path.")

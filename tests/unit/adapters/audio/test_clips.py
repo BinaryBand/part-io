@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.adapters.audio.clips import extract_audio_clip, play_audio_segment
+from partio.adapters.audio.clips import extract_audio_clip, play_audio_segment
 
 
 def test_extract_audio_clip_imports() -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from part_io.core.main import clamp
+from partio.core.main import clamp
 
 finite = st.floats(allow_nan=False, allow_infinity=False)
 

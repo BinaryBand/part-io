@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.cli.commands.audio._auditor import build_interactive_auditor
+from partio.cli.commands.audio._auditor import build_interactive_auditor
 
 
 def test_build_interactive_auditor_imports() -> None:

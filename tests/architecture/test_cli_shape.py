@@ -1,6 +1,6 @@
 """Conformance test enforcing the standard CLI shape.
 
-Asserts, over :func:`~part_io.cli.registry.discover`, that every registered
+Asserts, over :func:`~partio.cli.registry.discover`, that every registered
 command satisfies the naming, help, docstring, and reachability rules.  This
 test is the actual enforcer -- it makes the CLI shape portable across projects.
 """
@@ -11,8 +11,8 @@ import ast
 import re
 from pathlib import Path
 
-from part_io.cli.main import app
-from part_io.cli.registry import discover
+from partio.cli.main import app
+from partio.cli.registry import discover
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -62,7 +62,7 @@ def test_command_functions_have_docstrings() -> None:
 
 def test_no_command_module_calls_print_or_sys_exit() -> None:
     """Command modules must not call print() or sys.exit() directly."""
-    commands_dir = ROOT / "part_io" / "cli" / "commands"
+    commands_dir = ROOT / "partio" / "cli" / "commands"
     for path in commands_dir.rglob("*.py"):
         if path.name == "__init__.py":
             continue

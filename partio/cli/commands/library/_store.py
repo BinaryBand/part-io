@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from part_io.adapters.store import JsonItemStore
-from part_io.core.ports import AudioPathEntry, AudioPathKind
+from partio.adapters.store import JsonItemStore
+from partio.core.ports import AudioPathEntry, AudioPathKind
 
 DEFAULT_LIBRARY_PATH = Path("static") / "library.json"
 

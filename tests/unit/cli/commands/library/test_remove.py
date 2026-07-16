@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.cli.commands.library.remove import remove
+from partio.cli.commands.library.remove import remove
 
 
 def test_library_remove_command_imports() -> None:

@@ -1,6 +1,6 @@
 """Shared interactive auditor for audio review and bootstrap.
 
-Builds an :class:`~part_io.core.ports.audio.AuditorFn` that plays audio
+Builds an :class:`~partio.core.ports.audio.AuditorFn` that plays audio
 segments through ``ffplay`` and asks yes/no questions via ``input()``.
 """
 
@@ -9,11 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from part_io.adapters.audio.clips import play_audio_segment
-from part_io.cli.output import emit
+from partio.adapters.audio.clips import play_audio_segment
+from partio.cli.output import emit
 
 if TYPE_CHECKING:
-    from part_io.core.ports.audio import AuditorFn
+    from partio.core.ports.audio import AuditorFn
 
 
 def build_interactive_auditor(*, source_path: Path) -> AuditorFn:

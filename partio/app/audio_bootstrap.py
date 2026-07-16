@@ -9,7 +9,7 @@ predicates -- "already playing when this clip starts?" for the onset and
 
 from __future__ import annotations
 
-from part_io.core.ports.audio import AuditorFn  # noqa: TC001
+from partio.core.ports.audio import AuditorFn  # noqa: TC001
 
 _TILE_QUESTION = "Is the jingle anywhere in this clip?"
 _ONSET_QUESTION = "Is the jingle already playing when this clip STARTS?"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.utils.coverage import cleanup_coverage_temp_files
+from partio.utils.coverage import cleanup_coverage_temp_files
 
 
 def test_cleanup_coverage_temp_files_imports() -> None:

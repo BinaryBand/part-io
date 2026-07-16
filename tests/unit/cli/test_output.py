@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from part_io.cli.output import (
+from partio.cli.output import (
     ExitCode,
     bundle_summary,
     emit,

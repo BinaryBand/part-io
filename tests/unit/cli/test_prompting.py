@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import typer
 
-from part_io.cli.prompting import prompt_for_args, required_options
-from part_io.cli.registry import CommandEntry
+from partio.cli.prompting import prompt_for_args, required_options
+from partio.cli.registry import CommandEntry
 
 # -- stub command functions for introspection tests --------------------------
 
@@ -117,8 +117,8 @@ def test_prompt_for_args_returns_flat_flag_list() -> None:
     """prompt_for_args should return ["--flag", "value", ...] pairs."""
     entry = CommandEntry(name="search", group="audio", help="Search.", fn=_stub_search)
     with (
-        patch("part_io.cli.prompting.Prompt.ask", return_value="./source.mp3"),
-        patch("part_io.cli.prompting.Console.print"),
+        patch("partio.cli.prompting.Prompt.ask", return_value="./source.mp3"),
+        patch("partio.cli.prompting.Console.print"),
     ):
         result = prompt_for_args(entry)
 
@@ -138,11 +138,11 @@ def test_prompt_for_args_uses_correct_prompt_for_int() -> None:
     """IntPrompt.ask should be called for int-typed required options."""
     entry = CommandEntry(name="all-types", group="test", help="All types.", fn=_stub_all_types)
     with (
-        patch("part_io.cli.prompting.IntPrompt.ask", return_value=42),
-        patch("part_io.cli.prompting.Prompt.ask", side_effect=["name", "./path"]),
-        patch("part_io.cli.prompting.FloatPrompt.ask", return_value=1.5),
-        patch("part_io.cli.prompting.Confirm.ask", return_value=True),
-        patch("part_io.cli.prompting.Console.print"),
+        patch("partio.cli.prompting.IntPrompt.ask", return_value=42),
+        patch("partio.cli.prompting.Prompt.ask", side_effect=["name", "./path"]),
+        patch("partio.cli.prompting.FloatPrompt.ask", return_value=1.5),
+        patch("partio.cli.prompting.Confirm.ask", return_value=True),
+        patch("partio.cli.prompting.Console.print"),
     ):
         result = prompt_for_args(entry)
 
@@ -155,11 +155,11 @@ def test_prompt_for_args_uses_confirm_for_bool() -> None:
     """Confirm.ask should be called for bool-typed required options."""
     entry = CommandEntry(name="all-types", group="test", help="All types.", fn=_stub_all_types)
     with (
-        patch("part_io.cli.prompting.Prompt.ask", side_effect=["name", "./path"]),
-        patch("part_io.cli.prompting.IntPrompt.ask", return_value=1),
-        patch("part_io.cli.prompting.FloatPrompt.ask", return_value=0.5),
-        patch("part_io.cli.prompting.Confirm.ask", return_value=True),
-        patch("part_io.cli.prompting.Console.print"),
+        patch("partio.cli.prompting.Prompt.ask", side_effect=["name", "./path"]),
+        patch("partio.cli.prompting.IntPrompt.ask", return_value=1),
+        patch("partio.cli.prompting.FloatPrompt.ask", return_value=0.5),
+        patch("partio.cli.prompting.Confirm.ask", return_value=True),
+        patch("partio.cli.prompting.Console.print"),
     ):
         result = prompt_for_args(entry)
 
@@ -172,11 +172,11 @@ def test_prompt_for_args_uses_float_prompt_for_float() -> None:
     """FloatPrompt.ask should be called for float-typed required options."""
     entry = CommandEntry(name="all-types", group="test", help="All types.", fn=_stub_all_types)
     with (
-        patch("part_io.cli.prompting.Prompt.ask", side_effect=["name", "./path"]),
-        patch("part_io.cli.prompting.IntPrompt.ask", return_value=1),
-        patch("part_io.cli.prompting.FloatPrompt.ask", return_value=3.14),
-        patch("part_io.cli.prompting.Confirm.ask", return_value=True),
-        patch("part_io.cli.prompting.Console.print"),
+        patch("partio.cli.prompting.Prompt.ask", side_effect=["name", "./path"]),
+        patch("partio.cli.prompting.IntPrompt.ask", return_value=1),
+        patch("partio.cli.prompting.FloatPrompt.ask", return_value=3.14),
+        patch("partio.cli.prompting.Confirm.ask", return_value=True),
+        patch("partio.cli.prompting.Console.print"),
     ):
         result = prompt_for_args(entry)
 

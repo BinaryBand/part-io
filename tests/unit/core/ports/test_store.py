@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from part_io.core.ports.store import AudioPathEntry, AudioPathKind
+from partio.core.ports.store import AudioPathEntry, AudioPathKind
 
 
 def test_audio_path_kind_values() -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.cli.commands.audio.review import review
+from partio.cli.commands.audio.review import review
 
 
 def test_audio_review_command_imports() -> None:

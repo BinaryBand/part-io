@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003
 
-from part_io.adapters.process.runner import run_resolved
+from partio.adapters.process.runner import run_resolved
 
 
 def play_audio_segment(*, source_path: Path, start_seconds: float, duration_seconds: float) -> None:

@@ -9,14 +9,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # Modules that are allowed to call print() or sys.exit().
 PRINT_ALLOWED_PATHS = {
-    ROOT / "part_io" / "cli" / "main.py",
-    ROOT / "part_io" / "cli" / "output.py",
+    ROOT / "partio" / "cli" / "main.py",
+    ROOT / "partio" / "cli" / "output.py",
 }
 CORE_DIRS = [
-    ROOT / "part_io" / "adapters",
-    ROOT / "part_io" / "core",
-    ROOT / "part_io" / "app",
-    ROOT / "part_io" / "lib",
+    ROOT / "partio" / "adapters",
+    ROOT / "partio" / "core",
+    ROOT / "partio" / "app",
+    ROOT / "partio" / "lib",
 ]
 
 
@@ -29,7 +29,7 @@ def _is_print_allowed(path: Path) -> bool:
 
 
 def _is_cli_import(module: str | None) -> bool:
-    return module is not None and module.startswith("part_io.cli")
+    return module is not None and module.startswith("partio.cli")
 
 
 def test_core_modules_do_not_import_cli() -> None:
@@ -42,13 +42,13 @@ def test_core_modules_do_not_import_cli() -> None:
                     raise AssertionError(f"{path} imports CLI module {node.module}")
                 if isinstance(node, ast.Import):
                     for alias in node.names:
-                        if alias.name.startswith("part_io.cli"):
+                        if alias.name.startswith("partio.cli"):
                             raise AssertionError(f"{path} imports CLI module {alias.name}")
 
 
 def test_non_entrypoints_do_not_call_print_or_sys_exit() -> None:
     """Only allowed modules may print or terminate the process."""
-    for path in _python_files(ROOT / "part_io"):
+    for path in _python_files(ROOT / "partio"):
         if _is_print_allowed(path):
             continue
 

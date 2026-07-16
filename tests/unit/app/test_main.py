@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.app import main
+from partio.app import main
 
 
 def test_app_main_imports() -> None:

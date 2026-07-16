@@ -7,9 +7,9 @@ from typing import Annotated
 
 import typer
 
-from part_io.adapters.audio.matcher import find_audio_sample_matches
-from part_io.cli.output import ExitCode, _json_flag, emit, fail, match_line, no_match
-from part_io.cli.registry import command
+from partio.adapters.audio.matcher import find_audio_sample_matches
+from partio.cli.output import ExitCode, _json_flag, emit, fail, match_line, no_match
+from partio.cli.registry import command
 
 
 @command("audio", "search", help="Find repeated occurrences of an audio sample.")

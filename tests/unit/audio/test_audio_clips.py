@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from part_io.adapters.audio import clips
-from part_io.adapters.audio.clips import extract_audio_clip, play_audio_segment
+from partio.adapters.audio import clips
+from partio.adapters.audio.clips import extract_audio_clip, play_audio_segment
 
 
 class _MockCompletedProcess:

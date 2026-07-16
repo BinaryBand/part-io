@@ -6,7 +6,7 @@ import json
 from csv import DictWriter
 from pathlib import Path  # noqa: TC003
 
-from part_io.adapters.audio.evaluation import evaluate_match_manifest, load_match_labels
+from partio.adapters.audio.evaluation import evaluate_match_manifest, load_match_labels
 
 
 def _write_manifest(manifest_path: Path, indices: list[int]) -> None:

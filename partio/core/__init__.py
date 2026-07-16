@@ -1,1 +1,1 @@
-"""Pydantic models for strong typing across the part_io architecture."""
+"""Pydantic models for strong typing across the partio architecture."""

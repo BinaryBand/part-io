@@ -14,8 +14,8 @@ def _python_files(base: Path) -> list[Path]:
 
 
 def test_module_length() -> None:
-    """Every .py file in part_io/ must stay under MAX_LINES lines."""
-    for path in _python_files(ROOT / "part_io"):
+    """Every .py file in partio/ must stay under MAX_LINES lines."""
+    for path in _python_files(ROOT / "partio"):
         if any(skip in [*path.parents, path] for skip in SKIP_DIRS):
             continue
         text = path.read_text(encoding="utf-8")

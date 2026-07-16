@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from part_io.cli.commands.library.list import list_entries
+from partio.cli.commands.library.list import list_entries
 
 
 def test_library_list_command_imports() -> None:
