@@ -63,7 +63,7 @@ def test_audio_bootstrap_subcommand_help() -> None:
 
 
 def test_registry_contains_all_commands() -> None:
-    """The registry should list exactly the four audio commands."""
+    """The registry should list exactly the four audio commands and the library commands."""
     commands = get_commands()
     names = {(entry.group, entry.name) for entry in commands}
     assert names == {
@@ -71,6 +71,9 @@ def test_registry_contains_all_commands() -> None:
         ("audio", "locate"),
         ("audio", "review"),
         ("audio", "bootstrap"),
+        ("library", "add"),
+        ("library", "list"),
+        ("library", "remove"),
     }
 
 

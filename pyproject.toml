@@ -134,6 +134,7 @@ ignore_names = [
     "model_config",
     "validate_*",
     "_fake_*",
+    "_library_path",
     "pytest_sessionstart",
     "pytest_sessionfinish",
 ]
