@@ -74,6 +74,7 @@ def test_registry_contains_all_commands() -> None:
         ("library", "add"),
         ("library", "list"),
         ("library", "remove"),
+        ("library", "download"),
     }
 
 

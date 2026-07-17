@@ -26,6 +26,19 @@ You always start with a long episode recording and no reference clip. The comman
 1. **`partio audio search`** / **`partio audio locate`** -- once you have a seed clip, find every place (or the single best place) it recurs across the same or other episodes.
 1. **`partio audio review`** -- generate an extracted-clip bundle plus a manifest so you can sanity-check matches by ear before trusting them.
 
+### Step 0 (optional): Grab episodes from an RSS feed
+
+If you don't already have an episode on disk, pull the latest ones straight from a podcast feed. Each episode is downloaded into `static/downloads/` and remembered in the library as a `source`, ready for the steps below.
+
+```bash
+uv run partio library download --feed https://example.com/podcast/rss --count 3
+```
+
+- `--count` -- how many of the latest episodes to fetch (default `1`).
+- `--dest` -- download directory (default `static/downloads`).
+
+Re-running the same command is safe: episodes already downloaded (matched by their slugified filename) are skipped. Use `partio library list` to see everything you've remembered.
+
 ### Step 1: Bootstrap a seed clip
 
 No reference sample needed yet. Point it at the region of the episode where you expect the jingle to appear; it plays candidate tiles through `ffplay` and asks yes/no questions until it has pinned down the exact onset and offset.

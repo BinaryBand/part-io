@@ -2,7 +2,7 @@
 
 ## Features
 
-- [ ] Auto-download sample episode(s) from RSS feeds.
+- [x] Auto-download sample episode(s) from RSS feeds. Added `partio library download --feed <url> --count N`: `adapters/feed/` fetches (httpx) and parses (feedparser) the feed, `app/feed_ingest.plan_downloads` selects the latest N (deduping against the library), and each episode is downloaded into `static/downloads/` and remembered as a `SOURCE` entry.
 - [ ] Tweak CLI to be more guided.
 
 ## Cleanup

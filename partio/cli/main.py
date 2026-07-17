@@ -53,51 +53,55 @@ _build_app()
 # -- picker ----------------------------------------------------------------
 
 
+_QUIT_CHOICE = "q"
+
+
+def _label_for(entry: CommandEntry) -> str:
+    """Render an entry's ``group name`` (or bare ``name``) invocation label."""
+    return f"{entry.group} {entry.name}" if entry.group else entry.name
+
+
 def _show_picker() -> None:
-    """Display a numbered menu and dispatch the selected command."""
+    """Display a numbered menu, grouped by command group, and dispatch the choice."""
     commands = discover()
 
     console.print(Panel("[bold]partio[/bold] -- audio tooling CLI", style="cyan", expand=False))
+
+    last_group: str | None = None
     for idx, entry in enumerate(commands, start=1):
-        label = f"{entry.group} {entry.name}" if entry.group else entry.name
-        console.print(f"  [bold]{idx}[/bold]. [green]{label}[/green]  -- {entry.help}")
+        if entry.group != last_group:
+            console.print(f"\n[dim]{entry.group or 'commands'}[/dim]")
+            last_group = entry.group
+        console.print(f"  [bold]{idx}[/bold]. [green]{entry.name}[/green]  -- {entry.help}")
+    console.print(f"\n  [bold]{_QUIT_CHOICE}[/bold]. [yellow]quit[/yellow]")
     console.print()
 
-    valid_labels = [(f"{e.group} {e.name}" if e.group else e.name) for e in commands]
-    label_to_entry: dict[str, CommandEntry] = dict(zip(valid_labels, commands, strict=True))
-    range_hint = f"1-{len(commands)}"
-    raw = Prompt.ask(
-        f"Pick a command [{range_hint}]",
-        console=console,
-        choices=[str(i) for i in range(1, len(commands) + 1)] + valid_labels,
-        show_choices=False,
-    )
-    choice = raw.strip()
+    labels = [_label_for(e) for e in commands]
+    numbers = [str(i) for i in range(1, len(commands) + 1)]
+    try:
+        choice = Prompt.ask(
+            f"Pick a command [1-{len(commands)}], or '{_QUIT_CHOICE}' to quit",
+            console=console,
+            choices=[*numbers, *labels, _QUIT_CHOICE],
+            default=_QUIT_CHOICE,
+            show_choices=False,
+        ).strip()
+    except (KeyboardInterrupt, EOFError):
+        console.print("\nCancelled.", style="yellow")
+        raise typer.Exit(code=0) from None
 
-    if not choice:
-        console.print("No selection.", style="yellow")
+    if choice == _QUIT_CHOICE:
         raise typer.Exit(code=0)
 
-    # Accept a number or a command label.
-    if choice.isdigit():
-        idx = int(choice) - 1
-        if 0 <= idx < len(commands):
-            selected = valid_labels[idx]
-        else:
-            console.print(f"Invalid choice: {choice}", style="red")
-            raise typer.Exit(code=1)
-    elif choice in valid_labels:
-        selected = choice
-    else:
-        console.print(f"Unknown command: {choice}", style="red")
-        raise typer.Exit(code=1)
+    # ``choices`` above guarantees a number or a valid label reaches here.
+    selected = labels[int(choice) - 1] if choice.isdigit() else choice
 
     # Re-invoke the app with the chosen subcommand, walking through required
     # args when the picker is used (non-interactive fallback via prompt= on
     # each Option still works for direct terminal invocation).
     from partio.cli.prompting import prompt_for_args
 
-    entry = label_to_entry[selected]
+    entry = commands[labels.index(selected)]
     extra_args = prompt_for_args(entry)
     app(selected.split() + extra_args, standalone_mode=False)
 
