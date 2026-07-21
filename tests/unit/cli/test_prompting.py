@@ -198,35 +198,63 @@ def _entry(label: str, path: str):
     return AudioPathEntry(id=label, path=Path(path), label=label, kind=AudioPathKind.SOURCE)
 
 
-def test_prompt_path_picks_remembered_entry() -> None:
-    """Selecting a number returns the matching remembered path, not the raw input."""
+def test_prompt_path_offers_library_entries_to_the_picker() -> None:
+    """Remembered entries become picker options, and the chosen value is used."""
     entry = CommandEntry(name="search", group="audio", help="Search.", fn=_stub_search)
     library = [_entry("Ep A", "static/downloads/a.mp3"), _entry("Ep B", "static/downloads/b.mp3")]
     with (
         patch("partio.cli.prompting._library_entries", return_value=library),
-        patch("partio.cli.prompting.Prompt.ask", return_value="2"),
+        patch(
+            "partio.cli.prompting.select_one", return_value="static/downloads/b.mp3"
+        ) as select_mock,
         patch("partio.cli.prompting.Console.print"),
     ):
         result = prompt_for_args(entry)
 
-    # Both --source and --sample resolve to the 2nd remembered entry's path.
+    # Both --source and --sample resolve to the picked entry's path.
     assert result == [
         "--source",
         "static/downloads/b.mp3",
         "--sample",
         "static/downloads/b.mp3",
     ]
+    options = select_mock.call_args.args[1]
+    assert [o.value for o in options[:2]] == [
+        "static/downloads/a.mp3",
+        "static/downloads/b.mp3",
+    ]
+    assert [o.title for o in options[:2]] == ["Ep A", "Ep B"]
+    # The trailing escape hatch is always offered.
+    assert options[-1].title == "enter a path manually"
 
 
 def test_prompt_path_custom_falls_back_to_free_text() -> None:
-    """Choosing 'c' prompts for a manually typed path."""
+    """Choosing "enter a path manually" prompts for a typed path."""
+    from partio.cli.prompting import _CUSTOM_PATH_CHOICE
+
     entry = CommandEntry(name="search", group="audio", help="Search.", fn=_stub_search)
     library = [_entry("Ep A", "static/downloads/a.mp3")]
     with (
         patch("partio.cli.prompting._library_entries", return_value=library),
-        patch("partio.cli.prompting.Prompt.ask", side_effect=["c", "/my/own.mp3", "c", "/two.mp3"]),
+        patch("partio.cli.prompting.select_one", return_value=_CUSTOM_PATH_CHOICE),
+        patch("partio.cli.prompting.Prompt.ask", side_effect=["/my/own.mp3", "/two.mp3"]),
         patch("partio.cli.prompting.Console.print"),
     ):
         result = prompt_for_args(entry)
 
     assert result == ["--source", "/my/own.mp3", "--sample", "/two.mp3"]
+
+
+def test_prompt_path_cancelled_picker_falls_back_to_free_text() -> None:
+    """Cancelling the picker (ctrl-c) still lets the user type a path."""
+    entry = CommandEntry(name="search", group="audio", help="Search.", fn=_stub_search)
+    library = [_entry("Ep A", "static/downloads/a.mp3")]
+    with (
+        patch("partio.cli.prompting._library_entries", return_value=library),
+        patch("partio.cli.prompting.select_one", return_value=None),
+        patch("partio.cli.prompting.Prompt.ask", side_effect=["/typed.mp3", "/typed2.mp3"]),
+        patch("partio.cli.prompting.Console.print"),
+    ):
+        result = prompt_for_args(entry)
+
+    assert result == ["--source", "/typed.mp3", "--sample", "/typed2.mp3"]

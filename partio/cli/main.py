@@ -12,9 +12,9 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt
 
 from partio.cli.registry import CommandEntry, discover
+from partio.cli.select import Option, select_one
 
 app = typer.Typer(add_completion=False, invoke_without_command=True, rich_markup_mode="rich")
 console = Console()
@@ -53,7 +53,7 @@ _build_app()
 # -- picker ----------------------------------------------------------------
 
 
-_QUIT_CHOICE = "q"
+_QUIT = "__quit__"
 
 
 def _label_for(entry: CommandEntry) -> str:
@@ -62,45 +62,27 @@ def _label_for(entry: CommandEntry) -> str:
 
 
 def _show_picker() -> None:
-    """Display a numbered menu, grouped by command group, and dispatch the choice."""
+    """Display the arrow-key command menu and dispatch the choice."""
     commands = discover()
 
     console.print(Panel("[bold]partio[/bold] -- audio tooling CLI", style="cyan", expand=False))
 
-    last_group: str | None = None
-    for idx, entry in enumerate(commands, start=1):
-        if entry.group != last_group:
-            console.print(f"\n[dim]{entry.group or 'commands'}[/dim]")
-            last_group = entry.group
-        console.print(f"  [bold]{idx}[/bold]. [green]{entry.name}[/green]  -- {entry.help}")
-    console.print(f"\n  [bold]{_QUIT_CHOICE}[/bold]. [yellow]quit[/yellow]")
-    console.print()
+    options = [
+        Option(title=entry.name, value=_label_for(entry), help=entry.help, group=entry.group)
+        for entry in commands
+    ]
+    options.append(Option(title="quit", value=_QUIT, help="Exit partio."))
 
-    labels = [_label_for(e) for e in commands]
-    numbers = [str(i) for i in range(1, len(commands) + 1)]
-    try:
-        choice = Prompt.ask(
-            f"Pick a command [1-{len(commands)}], or '{_QUIT_CHOICE}' to quit",
-            console=console,
-            choices=[*numbers, *labels, _QUIT_CHOICE],
-            default=_QUIT_CHOICE,
-            show_choices=False,
-        ).strip()
-    except (KeyboardInterrupt, EOFError):
-        console.print("\nCancelled.", style="yellow")
-        raise typer.Exit(code=0) from None
-
-    if choice == _QUIT_CHOICE:
+    selected = select_one("Pick a command", options, console=console)
+    if selected is None or selected == _QUIT:
         raise typer.Exit(code=0)
-
-    # ``choices`` above guarantees a number or a valid label reaches here.
-    selected = labels[int(choice) - 1] if choice.isdigit() else choice
 
     # Re-invoke the app with the chosen subcommand, walking through required
     # args when the picker is used (non-interactive fallback via prompt= on
     # each Option still works for direct terminal invocation).
     from partio.cli.prompting import prompt_for_args
 
+    labels = [_label_for(entry) for entry in commands]
     entry = commands[labels.index(selected)]
     extra_args = prompt_for_args(entry)
     app(selected.split() + extra_args, standalone_mode=False)

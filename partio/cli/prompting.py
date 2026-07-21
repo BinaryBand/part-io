@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
 from partio.cli.commands.library._store import default_store
+from partio.cli.select import Option, select_one
 
 if TYPE_CHECKING:
     from partio.cli.registry import CommandEntry
@@ -128,32 +129,27 @@ def _library_entries() -> list[AudioPathEntry]:
 def _prompt_path(prompt_text: str) -> str:
     """Prompt for a filesystem path, offering the remembered library as a picker.
 
-    When the library has entries, they are listed as a numbered menu so the user
-    can pick a remembered file (e.g. an episode just downloaded) instead of
-    typing a path. Choosing ``c`` -- or an empty library -- falls back to a plain
-    text prompt.
+    When the library has entries, they become an arrow-key menu so the user can
+    pick a remembered file (e.g. an episode just downloaded) instead of typing a
+    path. Choosing "enter a path manually" -- or an empty library -- falls back
+    to a plain text prompt.
     """
     entries = _library_entries()
     if not entries:
         return Prompt.ask(prompt_text, console=console)
 
-    console.print("[dim]Remembered audio (from your library):[/dim]")
-    for idx, entry in enumerate(entries, start=1):
-        console.print(
-            f"  [bold]{idx}[/bold]. [green]{entry.label}[/green] "
-            f"[dim]({entry.kind.value}) {entry.path}[/dim]"
+    options = [
+        Option(
+            title=entry.label,
+            value=str(entry.path),
+            help=f"({entry.kind.value}) {entry.path}",
+            group="remembered audio",
         )
-    console.print(f"  [bold]{_CUSTOM_PATH_CHOICE}[/bold]. [yellow]enter a path manually[/yellow]")
+        for entry in entries
+    ]
+    options.append(Option(title="enter a path manually", value=_CUSTOM_PATH_CHOICE))
 
-    numbers = [str(i) for i in range(1, len(entries) + 1)]
-    choice = Prompt.ask(
-        prompt_text,
-        console=console,
-        choices=[*numbers, _CUSTOM_PATH_CHOICE],
-        default="1",
-        show_choices=False,
-    ).strip()
-
-    if choice == _CUSTOM_PATH_CHOICE:
+    chosen = select_one(prompt_text, options, console=console)
+    if chosen is None or chosen == _CUSTOM_PATH_CHOICE:
         return Prompt.ask("path", console=console)
-    return str(entries[int(choice) - 1].path)
+    return chosen
