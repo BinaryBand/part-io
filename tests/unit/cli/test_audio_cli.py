@@ -11,6 +11,13 @@ from partio.cli.commands.audio import bootstrap as audio_bootstrap
 from partio.cli.commands.audio import locate as audio_locate
 from partio.cli.commands.audio import review as audio_review
 from partio.cli.commands.audio import search as audio_search
+from partio.cli.commands.library import _store as library_store
+
+
+@pytest.fixture(autouse=True)
+def _library_path(tmp_path, monkeypatch):
+    """Keep `audio bootstrap` from registering its seeds in the real library."""
+    monkeypatch.setattr(library_store, "DEFAULT_LIBRARY_PATH", tmp_path / "library.json")
 
 
 def test_audio_search_main_prints_matches(monkeypatch, capsys, tmp_path):
@@ -205,6 +212,55 @@ def test_audio_bootstrap_main_writes_seed_clip(monkeypatch, capsys, tmp_path):
         }
     ]
     assert "jingle 5.000s -> 6.500s" in capsys.readouterr().out
+
+
+def test_audio_bootstrap_registers_the_seed_as_a_sample(monkeypatch, tmp_path):
+    """The seed lands in the library as a SAMPLE, so --sample pickers can offer it."""
+    from partio.core.ports import AudioPathKind
+
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+    output = tmp_path / "episode_seed.mp3"
+
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", lambda **_kwargs: (5.0, 6.5))
+    monkeypatch.setattr(audio_bootstrap, "extract_audio_clip", lambda **_kwargs: None)
+
+    audio_bootstrap.bootstrap(ctx=None, source=source, output=output)
+
+    entries = library_store.default_store().list_items()
+    assert [(e.path, e.kind) for e in entries] == [(output, AudioPathKind.SAMPLE)]
+    assert entries[0].label == "episode_seed"
+
+
+def test_audio_bootstrap_does_not_duplicate_an_existing_seed(monkeypatch, tmp_path):
+    """Re-running over the same destination refreshes the clip without a second entry."""
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+    output = tmp_path / "episode_seed.mp3"
+
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", lambda **_kwargs: (5.0, 6.5))
+    monkeypatch.setattr(audio_bootstrap, "extract_audio_clip", lambda **_kwargs: None)
+
+    audio_bootstrap.bootstrap(ctx=None, source=source, output=output)
+    audio_bootstrap.bootstrap(ctx=None, source=source, output=output)
+
+    assert len(library_store.default_store().list_items()) == 1
+
+
+def test_audio_bootstrap_registers_every_seed_of_a_multi_run(monkeypatch, tmp_path):
+    """Each numbered seed from --max-occurrences is remembered separately."""
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+
+    monkeypatch.setattr(
+        audio_bootstrap, "locate_jingle_spans", lambda **_kwargs: [(1.0, 2.0), (5.0, 6.0)]
+    )
+    monkeypatch.setattr(audio_bootstrap, "extract_audio_clip", lambda **_kwargs: None)
+
+    audio_bootstrap.bootstrap(ctx=None, source=source, output=tmp_path / "seeds", max_occurrences=2)
+
+    labels = [e.label for e in library_store.default_store().list_items()]
+    assert labels == ["episode_seed_01", "episode_seed_02"]
 
 
 def test_audio_bootstrap_main_exits_when_no_jingle_found(monkeypatch, capsys, tmp_path):

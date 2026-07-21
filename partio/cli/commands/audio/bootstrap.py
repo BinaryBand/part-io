@@ -9,6 +9,7 @@ then writes a canonical seed clip. The seed feeds ``audio_locate`` /
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -17,7 +18,9 @@ import typer
 from partio.adapters.audio.clips import extract_audio_clip
 from partio.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
 from partio.cli.commands.audio._auditor import build_interactive_auditor
+from partio.cli.commands.library._store import default_store
 from partio.cli.output import ExitCode, _json_flag, emit, fail, seed_written
+from partio.core.ports import AudioPathEntry, AudioPathKind
 
 if TYPE_CHECKING:
     from partio.core.ports.audio import AuditorFn
@@ -25,6 +28,12 @@ from partio.cli.registry import command
 
 
 def _write_seed(source: Path, output: Path, onset: float, offset: float) -> None:
+    """Extract the seed clip and remember it as a reusable reference sample.
+
+    Registering it is what closes the loop: the seed exists to be handed to
+    ``audio locate`` / ``audio search``, whose ``--sample`` pickers read the
+    library.  A seed left only on disk would never be offered.
+    """
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
         extract_audio_clip(
@@ -35,6 +44,22 @@ def _write_seed(source: Path, output: Path, onset: float, offset: float) -> None
         )
     except (FileNotFoundError, ValueError) as exc:
         fail(exc)
+    _remember_seed(output)
+
+
+def _remember_seed(output: Path) -> None:
+    """Add *output* to the library as a SAMPLE, ignoring an existing entry."""
+    store = default_store()
+    if any(entry.path == output for entry in store.list_items()):
+        return
+    store.add_item(
+        AudioPathEntry(
+            id=uuid.uuid4().hex[:8],
+            path=output,
+            label=output.stem,
+            kind=AudioPathKind.SAMPLE,
+        )
+    )
 
 
 def _tuning_kwargs(

@@ -234,34 +234,96 @@ def test_ask_propagates_go_back_from_a_number_prompt() -> None:
 # -- library path picker -----------------------------------------------------
 
 
-def _entry(label: str, path: str):
+def _entry(label: str, path: str, kind=None):
     from partio.core.ports import AudioPathEntry, AudioPathKind
 
-    return AudioPathEntry(id=label, path=Path(path), label=label, kind=AudioPathKind.SOURCE)
+    return AudioPathEntry(id=label, path=Path(path), label=label, kind=kind or AudioPathKind.SOURCE)
+
+
+def _sample(label: str, path: str):
+    """A bootstrapped seed clip, as `audio bootstrap` now registers them."""
+    from partio.core.ports import AudioPathKind
+
+    return _entry(label, path, AudioPathKind.SAMPLE)
 
 
 def test_prompt_path_offers_library_entries_to_the_picker() -> None:
     """Remembered entries become picker options, and the chosen value is used."""
-    entry = CommandEntry(name="search", group="audio", help="Search.", fn=_stub_search)
     library = [_entry("Ep A", "static/downloads/a.mp3"), _entry("Ep B", "static/downloads/b.mp3")]
     with (
         patch("partio.cli.prompting._library_entries", return_value=library),
         patch(
             "partio.cli.prompting.select_one", return_value="static/downloads/b.mp3"
         ) as select_mock,
-        patch("partio.cli.prompting.Console.print"),
     ):
-        result = _as_args(prompt_for_args(entry))
-    assert result == [
-        "--source",
-        "static/downloads/b.mp3",
-        "--sample",
-        "static/downloads/b.mp3",
-    ]
+        assert _ask(Path, "--source") == "static/downloads/b.mp3"
+
     options = select_mock.call_args.args[1]
     assert [o.value for o in options[:2]] == ["static/downloads/a.mp3", "static/downloads/b.mp3"]
     assert [o.title for o in options[:2]] == ["Ep A", "Ep B"]
     assert options[-1].title == "enter a path manually"
+
+
+def test_sample_prompt_offers_only_bootstrapped_samples() -> None:
+    """--sample must not offer whole source episodes."""
+    library = [
+        _entry("Ep A", "static/downloads/a.mp3"),
+        _sample("a_seed", "static/jingles/a_seed.mp3"),
+        _entry("Ep B", "static/downloads/b.mp3"),
+    ]
+    with (
+        patch("partio.cli.prompting._library_entries", return_value=library),
+        patch("partio.cli.prompting.select_one", return_value="x") as select_mock,
+    ):
+        _ask(Path, "--sample")
+
+    options = select_mock.call_args.args[1]
+    assert [o.title for o in options] == ["a_seed", "enter a path manually"]
+    assert options[0].group == "remembered samples"
+
+
+def test_source_prompt_offers_only_sources() -> None:
+    """--source likewise skips seed clips."""
+    library = [
+        _entry("Ep A", "static/downloads/a.mp3"),
+        _sample("a_seed", "static/jingles/a_seed.mp3"),
+    ]
+    with (
+        patch("partio.cli.prompting._library_entries", return_value=library),
+        patch("partio.cli.prompting.select_one", return_value="x") as select_mock,
+    ):
+        _ask(Path, "--source")
+
+    options = select_mock.call_args.args[1]
+    assert [o.title for o in options] == ["Ep A", "enter a path manually"]
+    assert options[0].group == "remembered sources"
+
+
+def test_sample_prompt_falls_back_when_nothing_is_bootstrapped_yet() -> None:
+    """Before any bootstrap there are no samples, so just ask for a path."""
+    with (
+        patch("partio.cli.prompting._library_entries", return_value=[_entry("Ep A", "a.mp3")]),
+        patch("partio.cli.prompting.select_one") as select_mock,
+        patch("partio.cli.prompting.questionary.path") as path_mock,
+    ):
+        path_mock.return_value.application.key_bindings = KeyBindings()
+        path_mock.return_value.ask.return_value = "/typed.mp3"
+        assert _ask(Path, "--sample") == "/typed.mp3"
+
+    select_mock.assert_not_called()
+
+
+def test_unknown_flag_names_offer_every_remembered_path() -> None:
+    """A path flag that is not a kind name is not narrowed at all."""
+    library = [_entry("Ep A", "a.mp3"), _sample("a_seed", "seed.mp3")]
+    with (
+        patch("partio.cli.prompting._library_entries", return_value=library),
+        patch("partio.cli.prompting.select_one", return_value="x") as select_mock,
+    ):
+        _ask(Path, "--reference-clip")
+
+    options = select_mock.call_args.args[1]
+    assert [o.title for o in options] == ["Ep A", "a_seed", "enter a path manually"]
 
 
 def test_prompt_path_empty_library_asks_for_a_path() -> None:

@@ -18,6 +18,7 @@ from rich.console import Console
 
 from partio.cli.commands.library._store import default_store
 from partio.cli.select import GO_BACK, GoBack, Option, bind_back, select_one
+from partio.core.ports import AudioPathKind
 
 if TYPE_CHECKING:
     from partio.cli.registry import CommandEntry
@@ -157,24 +158,40 @@ def _library_entries() -> list[AudioPathEntry]:
         return []
 
 
+def _kind_for(prompt_text: str) -> AudioPathKind | None:
+    """The library kind a prompt wants, inferred from its flag name.
+
+    The audio commands name their options after the thing they take --
+    ``--source`` / ``--sample`` -- which is exactly the ``AudioPathKind``
+    vocabulary, so the mapping needs no separate table. Any other flag name
+    yields ``None``, meaning "offer everything".
+    """
+    try:
+        return AudioPathKind(prompt_text)
+    except ValueError:
+        return None
+
+
 def _prompt_path(prompt_text: str) -> str | GoBack | None:
     """Prompt for a filesystem path, offering the remembered library as a picker.
 
-    When the library has entries, they become an arrow-key menu so the user can
-    pick a remembered file (e.g. an episode just downloaded) instead of typing a
-    path. Choosing "enter a path manually" -- or an empty library -- falls back
-    to a plain text prompt.
+    Entries are narrowed to the kind the flag asks for, so ``--sample`` offers
+    bootstrapped seed clips rather than whole episodes. With nothing suitable
+    remembered -- or on choosing "enter a path manually" -- this falls back to a
+    plain path prompt.
     """
-    entries = _library_entries()
+    kind = _kind_for(prompt_text)
+    entries = [e for e in _library_entries() if kind is None or e.kind is kind]
     if not entries:
         return bind_back(questionary.path(prompt_text)).ask()
 
+    heading = f"remembered {kind.value}s" if kind is not None else "remembered audio"
     options = [
         Option(
             title=entry.label,
             value=str(entry.path),
             help=f"({entry.kind.value}) {entry.path}",
-            group="remembered audio",
+            group=heading,
         )
         for entry in entries
     ]
