@@ -144,6 +144,8 @@ ignore_names = [
     "_library_path",
     "_feeds_path",
     "_stores",
+    "_isolate_stores",
+    "_guard_static_dir",
     "ratio",
     "my_arg",
     "pytest_sessionstart",

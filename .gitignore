@@ -213,3 +213,17 @@ docs/**/.*
 editors/
 static/**/.*
 CLAUDE.md
+
+# Generated audio artifacts
+#   `partio feed download` writes episodes into static/downloads (already
+#   covered by the `downloads/` rule above); `partio audio bootstrap` writes
+#   seed clips into static/jingles. Both are generated audio, kept on disk but
+#   out of version control.
+static/jingles/
+
+# Local CLI state
+#   Written by `partio feed add` / `library add` / `feed download`. These hold
+#   one user's own feeds and downloaded episodes (whose paths point at ignored
+#   files), so they are per-machine state rather than project content.
+static/library.json
+static/feeds.json
