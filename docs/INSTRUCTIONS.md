@@ -26,18 +26,23 @@ You always start with a long episode recording and no reference clip. The comman
 1. **`partio audio search`** / **`partio audio locate`** -- once you have a seed clip, find every place (or the single best place) it recurs across the same or other episodes.
 1. **`partio audio review`** -- generate an extracted-clip bundle plus a manifest so you can sanity-check matches by ear before trusting them.
 
-### Step 0 (optional): Grab episodes from an RSS feed
+### Step 0 (optional): Remember a podcast feed
 
-If you don't already have an episode on disk, pull the latest ones straight from a podcast feed. Each episode is downloaded into `static/downloads/` and remembered in the library as a `source`, ready for the steps below.
+If you don't already have an episode on disk, remember a feed and every one of its episodes becomes selectable:
 
 ```bash
-uv run partio library download --feed https://example.com/podcast/rss --count 3
+uv run partio feed add --url https://example.com/podcast/rss
 ```
 
-- `--count` -- how many of the latest episodes to fetch (default `1`).
-- `--dest` -- download directory (default `static/downloads`).
+Nothing is downloaded here. From now on, any command that asks for a `--source` opens a picker listing that feed's entire back catalogue -- `●` for episodes already on disk, `○` for ones that aren't. Picking a `○` downloads it right there into `static/downloads/` and hands the local path to the command. Picking it again later costs nothing.
 
-Re-running the same command is safe: episodes already downloaded (matched by their slugified filename) are skipped. Use `partio library list` to see everything you've remembered.
+That is the whole of feed management:
+
+- `partio feed add` -- remember a feed.
+- `partio feed list` -- see the feeds and their episodes, newest first.
+- `partio feed remove` -- forget a feed (pick it by name; downloads stay on disk).
+
+There is no separate library to curate. Bootstrapped seed clips join the same picker automatically, under `on disk`.
 
 ### Step 1: Bootstrap a seed clip
 
@@ -94,6 +99,9 @@ uv run partio audio review --source episode.mp3 \
 | `partio audio search` | List every match of a seed clip above a threshold |
 | `partio audio locate` | Find the single best/strongest match |
 | `partio audio review` | Extract clips + manifest for manual verification |
+| `partio feed add` | Remember a feed so its episodes become selectable |
+| `partio feed list` | See every feed and the episodes it offers |
+| `partio feed remove` | Forget a feed |
 
 All commands are accessible through the unified `partio` entry point. Running `partio` with no arguments opens an interactive picker.
 

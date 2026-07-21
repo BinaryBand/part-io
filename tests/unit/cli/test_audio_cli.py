@@ -11,7 +11,7 @@ from partio.cli.commands.audio import bootstrap as audio_bootstrap
 from partio.cli.commands.audio import locate as audio_locate
 from partio.cli.commands.audio import review as audio_review
 from partio.cli.commands.audio import search as audio_search
-from partio.cli.commands.library import _store as library_store
+from partio.cli.library import _cache as library_store
 
 _STUB_DURATION = 1800.0
 
@@ -239,7 +239,7 @@ def test_audio_bootstrap_registers_the_seed_as_a_sample(monkeypatch, tmp_path):
 
     audio_bootstrap.bootstrap(ctx=None, source=source, output=output)
 
-    entries = library_store.default_store().list_items()
+    entries = library_store.cache_store().list_items()
     assert [(e.path, e.kind) for e in entries] == [(output, AudioPathKind.SAMPLE)]
     assert entries[0].label == "episode_seed"
 
@@ -256,7 +256,7 @@ def test_audio_bootstrap_does_not_duplicate_an_existing_seed(monkeypatch, tmp_pa
     audio_bootstrap.bootstrap(ctx=None, source=source, output=output)
     audio_bootstrap.bootstrap(ctx=None, source=source, output=output)
 
-    assert len(library_store.default_store().list_items()) == 1
+    assert len(library_store.cache_store().list_items()) == 1
 
 
 def test_audio_bootstrap_registers_every_seed_of_a_multi_run(monkeypatch, tmp_path):
@@ -271,7 +271,7 @@ def test_audio_bootstrap_registers_every_seed_of_a_multi_run(monkeypatch, tmp_pa
 
     audio_bootstrap.bootstrap(ctx=None, source=source, output=tmp_path / "seeds", max_occurrences=2)
 
-    labels = [e.label for e in library_store.default_store().list_items()]
+    labels = [e.label for e in library_store.cache_store().list_items()]
     assert labels == ["episode_seed_01", "episode_seed_02"]
 
 

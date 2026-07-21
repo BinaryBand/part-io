@@ -16,13 +16,12 @@ import questionary
 import typer
 from rich.console import Console
 
-from partio.cli.commands.library._store import default_store
+from partio.cli.library import MARK_LEGEND, Track, ensure_local, tracks
 from partio.cli.select import GO_BACK, GoBack, Option, bind_back, select_one
 from partio.core.ports import AudioPathKind
 
 if TYPE_CHECKING:
     from partio.cli.registry import CommandEntry
-    from partio.core.ports import AudioPathEntry
 
 console = Console()
 
@@ -72,7 +71,7 @@ def prompt_for_args(entry: CommandEntry) -> list[str] | GoBack | None:
 
     For each required option, prints its ``help`` text, then prompts with a
     questionary helper matching the annotation type (``Path`` also offers the
-    remembered library as a picker).
+    library as a picker).
 
     ``esc`` steps back to the previous option; pressing it on the first option
     returns :data:`GO_BACK` so the caller can redisplay whatever came before.
@@ -150,14 +149,6 @@ def _ask_number(
     return cast(answer)
 
 
-def _library_entries() -> list[AudioPathEntry]:
-    """Return remembered audio paths, or an empty list if the store is unreadable."""
-    try:
-        return default_store().list_items()
-    except (OSError, ValueError):  # A broken/missing library never blocks a prompt.
-        return []
-
-
 def _kind_for(prompt_text: str) -> AudioPathKind | None:
     """The library kind a prompt wants, inferred from its flag name.
 
@@ -173,33 +164,50 @@ def _kind_for(prompt_text: str) -> AudioPathKind | None:
 
 
 def _prompt_path(prompt_text: str) -> str | GoBack | None:
-    """Prompt for a filesystem path, offering the remembered library as a picker.
+    """Prompt for a filesystem path, offering the whole library as a picker.
 
-    Entries are narrowed to the kind the flag asks for, so ``--sample`` offers
-    bootstrapped seed clips rather than whole episodes. With nothing suitable
-    remembered -- or on choosing "enter a path manually" -- this falls back to a
-    plain path prompt.
+    The library is virtual: the picker lists every episode of every remembered
+    feed next to what is already on disk, narrowed to the kind the flag asks
+    for, so ``--sample`` offers bootstrapped seed clips rather than episodes.
+    Choosing an episode that has not been downloaded downloads it here and now,
+    so the command behind the prompt only ever receives a local path.  With
+    nothing suitable to offer -- or on choosing "enter a path manually" -- this
+    falls back to a plain path prompt.
     """
     kind = _kind_for(prompt_text)
-    entries = [e for e in _library_entries() if kind is None or e.kind is kind]
-    if not entries:
+    with console.status("Loading library"):
+        available = tracks(kind)
+    if not available:
         return bind_back(questionary.path(prompt_text)).ask()
 
-    heading = f"remembered {kind.value}s" if kind is not None else "remembered audio"
-    options = [
-        Option(
-            title=entry.label,
-            value=str(entry.path),
-            help=f"({entry.kind.value}) {entry.path}",
-            group=heading,
-        )
-        for entry in entries
-    ]
-    options.append(Option(title="enter a path manually", value=_CUSTOM_PATH_CHOICE))
-
-    chosen = select_one(prompt_text, options, console=console)
-    if chosen == _CUSTOM_PATH_CHOICE:
-        # esc at the manual prompt returns to this picker rather than skipping past it.
+    if any(not track.on_disk for track in available):
+        console.print(f"[dim]{MARK_LEGEND}[/dim]")
+    chosen = select_one(prompt_text, _track_options(available), console=console)
+    if chosen is None or isinstance(chosen, GoBack):
+        return chosen
+    if not isinstance(chosen, Track):
+        # The only non-track row is "enter a path manually"; esc while typing
+        # returns to this picker rather than skipping past it.
         typed = bind_back(questionary.path("path")).ask()
         return _prompt_path(prompt_text) if isinstance(typed, GoBack) else typed
-    return chosen
+
+    local = ensure_local(chosen)
+    # A download that failed leaves no path to hand on, so ask again.
+    return str(local) if local is not None else _prompt_path(prompt_text)
+
+
+def _track_options(available: list[Track]) -> list[Option[Track | str]]:
+    """Rows for the library picker, grouped by feed and marked by availability."""
+    options: list[Option[Track | str]] = [
+        Option(
+            title=f"{track.mark} {track.label}",
+            value=track,
+            help=track.detail,
+            group=track.group,
+        )
+        for track in available
+    ]
+    options.append(
+        Option(title="enter a path manually", value=_CUSTOM_PATH_CHOICE, group="elsewhere")
+    )
+    return options

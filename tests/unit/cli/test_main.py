@@ -69,7 +69,11 @@ def test_audio_bootstrap_subcommand_help() -> None:
 
 
 def test_registry_contains_all_commands() -> None:
-    """The registry should list exactly the audio, feed, and library commands."""
+    """The registry should list exactly the audio and feed commands.
+
+    The library is virtual -- it has no commands of its own, because every
+    picker already offers all of it.
+    """
     commands = get_commands()
     names = {(entry.group, entry.name) for entry in commands}
     assert names == {
@@ -78,12 +82,8 @@ def test_registry_contains_all_commands() -> None:
         ("audio", "review"),
         ("audio", "bootstrap"),
         ("feed", "add"),
-        ("feed", "download"),
         ("feed", "list"),
         ("feed", "remove"),
-        ("library", "add"),
-        ("library", "list"),
-        ("library", "remove"),
     }
 
 
@@ -107,7 +107,7 @@ def test_esc_during_arg_walkthrough_redisplays_the_menu() -> None:
     with (
         patch(
             "partio.cli.main.select_one",
-            side_effect=["audio bootstrap", "library list", _QUIT],
+            side_effect=["audio bootstrap", "feed list", _QUIT],
         ) as pick,
         patch("partio.cli.prompting.prompt_for_args", side_effect=[GO_BACK, []]) as walk,
         patch("partio.cli.main.app") as app_mock,
@@ -120,15 +120,13 @@ def test_esc_during_arg_walkthrough_redisplays_the_menu() -> None:
     assert pick.call_count == 3
     assert walk.call_count == 2
     app_mock.assert_called_once()
-    assert app_mock.call_args.args[0][:2] == ["library", "list"]
+    assert app_mock.call_args.args[0][:2] == ["feed", "list"]
 
 
 def test_finished_command_returns_to_the_menu() -> None:
     """A command that runs to completion reopens the menu instead of exiting."""
     with (
-        patch(
-            "partio.cli.main.select_one", side_effect=["library list", "library list", _QUIT]
-        ) as pick,
+        patch("partio.cli.main.select_one", side_effect=["feed list", "feed list", _QUIT]) as pick,
         patch("partio.cli.prompting.prompt_for_args", return_value=[]),
         patch("partio.cli.main.app") as app_mock,
         patch("partio.cli.main.Console.print"),
@@ -143,7 +141,7 @@ def test_finished_command_returns_to_the_menu() -> None:
 def test_command_that_exits_returns_to_the_menu() -> None:
     """SystemExit from a command (output.fail, "nothing to do") is not fatal."""
     with (
-        patch("partio.cli.main.select_one", side_effect=["library list", _QUIT]) as pick,
+        patch("partio.cli.main.select_one", side_effect=["feed list", _QUIT]) as pick,
         patch("partio.cli.prompting.prompt_for_args", return_value=[]),
         patch("partio.cli.main.app", side_effect=SystemExit(ExitCode.USER_ERROR)) as app_mock,
         patch("partio.cli.main.Console.print"),
@@ -158,7 +156,7 @@ def test_command_that_exits_returns_to_the_menu() -> None:
 def test_ctrl_c_inside_a_command_still_stops_partio() -> None:
     """Abort is the one interrupt the menu loop does not swallow."""
     with (
-        patch("partio.cli.main.select_one", return_value="library list"),
+        patch("partio.cli.main.select_one", return_value="feed list"),
         patch("partio.cli.prompting.prompt_for_args", return_value=[]),
         patch("partio.cli.main.app", side_effect=typer_mod.Abort()),
         patch("partio.cli.main.Console.print"),

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime  # noqa: TC003
-from pathlib import Path  # noqa: TC003
 
 
 @dataclass(frozen=True)
@@ -24,13 +23,4 @@ class FeedEpisode:
     size_bytes: int | None = None
 
 
-@dataclass(frozen=True)
-class DownloadPlan:
-    """A resolved intent to download one *episode* to *destination_path*."""
-
-    episode: FeedEpisode
-    destination_path: Path
-    label: str
-
-
-__all__ = ["DownloadPlan", "FeedEpisode"]
+__all__ = ["FeedEpisode"]

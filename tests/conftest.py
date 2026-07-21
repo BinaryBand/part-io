@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from partio.cli.commands.feed import _store as feed_store
-from partio.cli.commands.library import _store as library_store
+from partio.cli.library import _cache as cache_module
+from partio.cli.library import _feeds as feeds_module
+from partio.cli.library import refresh
 from partio.utils.coverage import cleanup_coverage_temp_files
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -34,9 +35,16 @@ def _isolate_stores(tmp_path, monkeypatch):
     repository library.  Applied globally rather than per module because
     forgetting it fails silently: a suite run once left 16 junk entries in the
     committed ``static/library.json`` before this existed.
+
+    Feed fetches are memoized for the life of the process, so the memo is
+    dropped here too -- otherwise one test's stubbed episodes would leak into
+    the next test's library.
     """
-    monkeypatch.setattr(library_store, "DEFAULT_LIBRARY_PATH", tmp_path / "library.json")
-    monkeypatch.setattr(feed_store, "DEFAULT_FEEDS_PATH", tmp_path / "feeds.json")
+    monkeypatch.setattr(cache_module, "DEFAULT_LIBRARY_PATH", tmp_path / "library.json")
+    monkeypatch.setattr(feeds_module, "DEFAULT_FEEDS_PATH", tmp_path / "feeds.json")
+    refresh()
+    yield
+    refresh()
 
 
 def _static_snapshot() -> dict[str, tuple[int, int]]:

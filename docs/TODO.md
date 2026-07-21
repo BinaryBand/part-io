@@ -2,7 +2,8 @@
 
 ## Features
 
-- [x] Auto-download sample episode(s) from RSS feeds. Added `partio library download --feed <url> --count N`: `adapters/feed/` fetches (httpx) and parses (feedparser) the feed, `app/feed_ingest.plan_downloads` selects the latest N (deduping against the library), and each episode is downloaded into `static/downloads/` and remembered as a `SOURCE` entry.
+- [x] Auto-download sample episode(s) from RSS feeds. `adapters/feed/` fetches (httpx) and parses (feedparser) the feed; episodes land in `static/downloads/`.
+- [x] Collapse `feed` and `library` into `feed` alone. The library is now virtual: `cli/library/` enumerates every episode of every remembered feed as a `Track` whether or not it is downloaded, and `ensure_local` fetches only the one a picker actually returns. That deleted the whole `library` command group and `feed download` -- 7 menu entries became 3 -- and left `static/library.json` as an internal cache index nothing addresses directly.
 - [ ] Tweak CLI to be more guided.
 
 ## Cleanup

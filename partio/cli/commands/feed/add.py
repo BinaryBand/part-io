@@ -9,7 +9,7 @@ import httpx
 import typer
 
 from partio.adapters.feed import fetch_feed_title
-from partio.cli.commands.feed._store import default_store
+from partio.cli.library import feed_store
 from partio.cli.output import _json_flag, emit, fail
 from partio.cli.registry import command
 from partio.core.ports import FeedEntry
@@ -27,12 +27,14 @@ def add(
         typer.Option(help="Friendly name (defaults to the feed's own title)."),
     ] = None,
 ) -> None:
-    """Remember a podcast feed so it can be reused across commands.
+    """Remember a podcast feed so its episodes join the library.
 
     The feed is fetched once to confirm it resolves and to pick up its title,
-    so a typo fails here rather than at download time.
+    so a typo fails here rather than at download time.  Nothing is downloaded:
+    every episode simply becomes selectable, and only the ones actually chosen
+    are ever fetched.
     """
-    store = default_store()
+    store = feed_store()
     if any(entry.url == url for entry in store.list_items()):
         fail(ValueError(f"Feed already remembered: {url}"))
 

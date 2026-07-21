@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from partio.core.models.feed import DownloadPlan, FeedEpisode
+from partio.core.models.feed import FeedEpisode
 
-__all__ = ["DownloadPlan", "FeedEpisode"]
+__all__ = ["FeedEpisode"]
