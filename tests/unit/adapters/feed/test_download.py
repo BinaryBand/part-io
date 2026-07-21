@@ -10,16 +10,20 @@ from partio.adapters.feed import download_file
 
 
 class _FakeResponse:
-    def __init__(self, chunks, *, status_error=False):
+    def __init__(self, chunks, *, status_error=False, headers=None):
         self._chunks = chunks
         self._status_error = status_error
+        self.headers = headers or {}
+        self.num_bytes_downloaded = 0
 
     def raise_for_status(self):
         if self._status_error:
             raise httpx.HTTPError("bad status")
 
     def iter_bytes(self):
-        yield from self._chunks
+        for chunk in self._chunks:
+            self.num_bytes_downloaded += len(chunk)
+            yield chunk
 
 
 class _FakeStream:
@@ -54,3 +58,19 @@ def test_download_file_leaves_no_file_on_error(monkeypatch, tmp_path):
         download_file(url="https://x/e.mp3", destination_path=dest)
 
     assert not dest.exists()
+
+
+def test_download_file_reports_progress(monkeypatch, tmp_path):
+    """on_progress receives cumulative bytes and the Content-Length total per chunk."""
+    response = _FakeResponse([b"ab", b"cd"], headers={"content-length": "4"})
+    monkeypatch.setattr(download_module.httpx, "stream", lambda *_a, **_k: _FakeStream(response))
+    dest = tmp_path / "episode.mp3"
+    events: list[tuple[int, int | None]] = []
+
+    download_file(
+        url="https://x/e.mp3",
+        destination_path=dest,
+        on_progress=lambda downloaded, total: events.append((downloaded, total)),
+    )
+
+    assert events == [(2, 4), (4, 4)]

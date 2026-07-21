@@ -117,6 +117,7 @@ def test_prompt_for_args_returns_flat_flag_list() -> None:
     """prompt_for_args should return ["--flag", "value", ...] pairs."""
     entry = CommandEntry(name="search", group="audio", help="Search.", fn=_stub_search)
     with (
+        patch("partio.cli.prompting._library_entries", return_value=[]),
         patch("partio.cli.prompting.Prompt.ask", return_value="./source.mp3"),
         patch("partio.cli.prompting.Console.print"),
     ):
@@ -138,6 +139,7 @@ def test_prompt_for_args_uses_correct_prompt_for_int() -> None:
     """IntPrompt.ask should be called for int-typed required options."""
     entry = CommandEntry(name="all-types", group="test", help="All types.", fn=_stub_all_types)
     with (
+        patch("partio.cli.prompting._library_entries", return_value=[]),
         patch("partio.cli.prompting.IntPrompt.ask", return_value=42),
         patch("partio.cli.prompting.Prompt.ask", side_effect=["name", "./path"]),
         patch("partio.cli.prompting.FloatPrompt.ask", return_value=1.5),
@@ -155,6 +157,7 @@ def test_prompt_for_args_uses_confirm_for_bool() -> None:
     """Confirm.ask should be called for bool-typed required options."""
     entry = CommandEntry(name="all-types", group="test", help="All types.", fn=_stub_all_types)
     with (
+        patch("partio.cli.prompting._library_entries", return_value=[]),
         patch("partio.cli.prompting.Prompt.ask", side_effect=["name", "./path"]),
         patch("partio.cli.prompting.IntPrompt.ask", return_value=1),
         patch("partio.cli.prompting.FloatPrompt.ask", return_value=0.5),
@@ -172,6 +175,7 @@ def test_prompt_for_args_uses_float_prompt_for_float() -> None:
     """FloatPrompt.ask should be called for float-typed required options."""
     entry = CommandEntry(name="all-types", group="test", help="All types.", fn=_stub_all_types)
     with (
+        patch("partio.cli.prompting._library_entries", return_value=[]),
         patch("partio.cli.prompting.Prompt.ask", side_effect=["name", "./path"]),
         patch("partio.cli.prompting.IntPrompt.ask", return_value=1),
         patch("partio.cli.prompting.FloatPrompt.ask", return_value=3.14),
@@ -183,3 +187,46 @@ def test_prompt_for_args_uses_float_prompt_for_float() -> None:
     assert "--ratio" in result
     ratio_idx = result.index("--ratio")
     assert result[ratio_idx + 1] == "3.14"
+
+
+# -- tests for the library path picker --------------------------------------
+
+
+def _entry(label: str, path: str):
+    from partio.core.ports import AudioPathEntry, AudioPathKind
+
+    return AudioPathEntry(id=label, path=Path(path), label=label, kind=AudioPathKind.SOURCE)
+
+
+def test_prompt_path_picks_remembered_entry() -> None:
+    """Selecting a number returns the matching remembered path, not the raw input."""
+    entry = CommandEntry(name="search", group="audio", help="Search.", fn=_stub_search)
+    library = [_entry("Ep A", "static/downloads/a.mp3"), _entry("Ep B", "static/downloads/b.mp3")]
+    with (
+        patch("partio.cli.prompting._library_entries", return_value=library),
+        patch("partio.cli.prompting.Prompt.ask", return_value="2"),
+        patch("partio.cli.prompting.Console.print"),
+    ):
+        result = prompt_for_args(entry)
+
+    # Both --source and --sample resolve to the 2nd remembered entry's path.
+    assert result == [
+        "--source",
+        "static/downloads/b.mp3",
+        "--sample",
+        "static/downloads/b.mp3",
+    ]
+
+
+def test_prompt_path_custom_falls_back_to_free_text() -> None:
+    """Choosing 'c' prompts for a manually typed path."""
+    entry = CommandEntry(name="search", group="audio", help="Search.", fn=_stub_search)
+    library = [_entry("Ep A", "static/downloads/a.mp3")]
+    with (
+        patch("partio.cli.prompting._library_entries", return_value=library),
+        patch("partio.cli.prompting.Prompt.ask", side_effect=["c", "/my/own.mp3", "c", "/two.mp3"]),
+        patch("partio.cli.prompting.Console.print"),
+    ):
+        result = prompt_for_args(entry)
+
+    assert result == ["--source", "/my/own.mp3", "--sample", "/two.mp3"]

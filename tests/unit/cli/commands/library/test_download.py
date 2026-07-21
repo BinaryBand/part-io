@@ -26,10 +26,12 @@ def _fake_download(monkeypatch):
     """Replace download_file with a stub that writes a placeholder file."""
     calls: list[str] = []
 
-    def _download(*, url, destination_path):
+    def _download(*, url, destination_path, on_progress=None):
         calls.append(url)
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         destination_path.write_bytes(b"audio")
+        if on_progress is not None:
+            on_progress(5, 5)
 
     monkeypatch.setattr(library_download, "download_file", _download)
     return calls

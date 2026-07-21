@@ -15,13 +15,17 @@ import typer
 from rich.console import Console
 from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
+from partio.cli.commands.library._store import default_store
+
 if TYPE_CHECKING:
     from partio.cli.registry import CommandEntry
+    from partio.core.ports import AudioPathEntry
 
 console = Console()
 
 _REQUIRED = inspect.Parameter.empty
 _MIN_ANNOTATION_ARGS = 2
+_CUSTOM_PATH_CHOICE = "c"
 
 
 def required_options(fn: Callable[..., Any]) -> list[tuple[str, type, typer.models.OptionInfo]]:
@@ -98,6 +102,8 @@ def _extract_flag(
 
 def _rich_prompt(inner_type: type, flag_name: str) -> str | bool | int | float:
     """Dispatch to the correct Rich prompt class for *inner_type*."""
+    from pathlib import Path
+
     prompt_text = flag_name.lstrip("-").replace("-", " ")
     if inner_type is bool:
         return Confirm.ask(f"{prompt_text}?", console=console)
@@ -105,5 +111,49 @@ def _rich_prompt(inner_type: type, flag_name: str) -> str | bool | int | float:
         return IntPrompt.ask(prompt_text, console=console)
     if inner_type is float:
         return FloatPrompt.ask(prompt_text, console=console)
-    # Path and str both resolve to a plain text prompt.
+    if inner_type is Path:
+        return _prompt_path(prompt_text)
+    # Plain string prompt.
     return Prompt.ask(prompt_text, console=console)
+
+
+def _library_entries() -> list[AudioPathEntry]:
+    """Return remembered audio paths, or an empty list if the store is unreadable."""
+    try:
+        return default_store().list_items()
+    except (OSError, ValueError):  # A broken/missing library never blocks a prompt.
+        return []
+
+
+def _prompt_path(prompt_text: str) -> str:
+    """Prompt for a filesystem path, offering the remembered library as a picker.
+
+    When the library has entries, they are listed as a numbered menu so the user
+    can pick a remembered file (e.g. an episode just downloaded) instead of
+    typing a path. Choosing ``c`` -- or an empty library -- falls back to a plain
+    text prompt.
+    """
+    entries = _library_entries()
+    if not entries:
+        return Prompt.ask(prompt_text, console=console)
+
+    console.print("[dim]Remembered audio (from your library):[/dim]")
+    for idx, entry in enumerate(entries, start=1):
+        console.print(
+            f"  [bold]{idx}[/bold]. [green]{entry.label}[/green] "
+            f"[dim]({entry.kind.value}) {entry.path}[/dim]"
+        )
+    console.print(f"  [bold]{_CUSTOM_PATH_CHOICE}[/bold]. [yellow]enter a path manually[/yellow]")
+
+    numbers = [str(i) for i in range(1, len(entries) + 1)]
+    choice = Prompt.ask(
+        prompt_text,
+        console=console,
+        choices=[*numbers, _CUSTOM_PATH_CHOICE],
+        default="1",
+        show_choices=False,
+    ).strip()
+
+    if choice == _CUSTOM_PATH_CHOICE:
+        return Prompt.ask("path", console=console)
+    return str(entries[int(choice) - 1].path)
