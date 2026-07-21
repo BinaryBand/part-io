@@ -13,11 +13,23 @@ from partio.cli.commands.audio import review as audio_review
 from partio.cli.commands.audio import search as audio_search
 from partio.cli.commands.library import _store as library_store
 
+_STUB_DURATION = 1800.0
+
 
 @pytest.fixture(autouse=True)
 def _library_path(tmp_path, monkeypatch):
     """Keep `audio bootstrap` from registering its seeds in the real library."""
     monkeypatch.setattr(library_store, "DEFAULT_LIBRARY_PATH", tmp_path / "library.json")
+
+
+@pytest.fixture(autouse=True)
+def _probed_duration(monkeypatch):
+    """Stub the ffprobe duration probe backing the default search region.
+
+    `audio bootstrap` now searches to the end of the file unless told otherwise,
+    and the fixture sources here are stub bytes that no real ffprobe can read.
+    """
+    monkeypatch.setattr(audio_bootstrap, "audio_duration_seconds", lambda _path: _STUB_DURATION)
 
 
 def test_audio_search_main_prints_matches(monkeypatch, capsys, tmp_path):
@@ -261,6 +273,45 @@ def test_audio_bootstrap_registers_every_seed_of_a_multi_run(monkeypatch, tmp_pa
 
     labels = [e.label for e in library_store.default_store().list_items()]
     assert labels == ["episode_seed_01", "episode_seed_02"]
+
+
+def test_audio_bootstrap_searches_the_whole_file_by_default(monkeypatch, tmp_path):
+    """With no --region-end the search region runs to the probed duration."""
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+    tuning: list[dict] = []
+
+    def _spy(**kwargs):
+        tuning.append(kwargs)
+        return (5.0, 6.5)
+
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", _spy)
+    monkeypatch.setattr(audio_bootstrap, "extract_audio_clip", lambda **_kwargs: None)
+
+    audio_bootstrap.bootstrap(ctx=None, source=source, output=tmp_path / "seed.mp3")
+
+    assert tuning[0]["region_start"] == 0.0
+    assert tuning[0]["region_end"] == _STUB_DURATION
+
+
+def test_audio_bootstrap_region_end_still_narrows_the_search(monkeypatch, tmp_path):
+    """An explicit --region-end wins over the probed duration."""
+    source = tmp_path / "episode.opus"
+    source.write_bytes(b"source")
+    tuning: list[dict] = []
+
+    def _spy(**kwargs):
+        tuning.append(kwargs)
+        return (5.0, 6.5)
+
+    monkeypatch.setattr(audio_bootstrap, "locate_jingle_span", _spy)
+    monkeypatch.setattr(audio_bootstrap, "extract_audio_clip", lambda **_kwargs: None)
+
+    audio_bootstrap.bootstrap(
+        ctx=None, source=source, output=tmp_path / "seed.mp3", region_end=90.0
+    )
+
+    assert tuning[0]["region_end"] == 90.0
 
 
 def test_audio_bootstrap_main_exits_when_no_jingle_found(monkeypatch, capsys, tmp_path):

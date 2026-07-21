@@ -142,6 +142,7 @@ ignore_names = [
     "validate_*",
     "_fake_*",
     "_library_path",
+    "_probed_duration",
     "_feeds_path",
     "_stores",
     "_isolate_stores",

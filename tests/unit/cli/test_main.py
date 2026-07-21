@@ -8,7 +8,8 @@ import pytest
 import typer as typer_mod
 from typer.testing import CliRunner
 
-from partio.cli.main import _show_picker, app
+from partio.cli.main import _QUIT, _show_picker, app
+from partio.cli.output import ExitCode
 from partio.cli.registry import get_commands
 from partio.cli.select import GO_BACK
 
@@ -105,19 +106,65 @@ def test_esc_during_arg_walkthrough_redisplays_the_menu() -> None:
     """GO_BACK from the walkthrough loops back to the command picker."""
     with (
         patch(
-            "partio.cli.main.select_one", side_effect=["audio bootstrap", "library list"]
+            "partio.cli.main.select_one",
+            side_effect=["audio bootstrap", "library list", _QUIT],
         ) as pick,
         patch("partio.cli.prompting.prompt_for_args", side_effect=[GO_BACK, []]) as walk,
         patch("partio.cli.main.app") as app_mock,
         patch("partio.cli.main.Console.print"),
+        pytest.raises(typer_mod.Exit),
     ):
         _show_picker()
 
-    # Menu shown twice, walkthrough run twice, command invoked once.
-    assert pick.call_count == 2
+    # Menu shown three times, walkthrough run twice, command invoked once.
+    assert pick.call_count == 3
     assert walk.call_count == 2
     app_mock.assert_called_once()
     assert app_mock.call_args.args[0][:2] == ["library", "list"]
+
+
+def test_finished_command_returns_to_the_menu() -> None:
+    """A command that runs to completion reopens the menu instead of exiting."""
+    with (
+        patch(
+            "partio.cli.main.select_one", side_effect=["library list", "library list", _QUIT]
+        ) as pick,
+        patch("partio.cli.prompting.prompt_for_args", return_value=[]),
+        patch("partio.cli.main.app") as app_mock,
+        patch("partio.cli.main.Console.print"),
+        pytest.raises(typer_mod.Exit),
+    ):
+        _show_picker()
+
+    assert pick.call_count == 3
+    assert app_mock.call_count == 2
+
+
+def test_command_that_exits_returns_to_the_menu() -> None:
+    """SystemExit from a command (output.fail, "nothing to do") is not fatal."""
+    with (
+        patch("partio.cli.main.select_one", side_effect=["library list", _QUIT]) as pick,
+        patch("partio.cli.prompting.prompt_for_args", return_value=[]),
+        patch("partio.cli.main.app", side_effect=SystemExit(ExitCode.USER_ERROR)) as app_mock,
+        patch("partio.cli.main.Console.print"),
+        pytest.raises(typer_mod.Exit),
+    ):
+        _show_picker()
+
+    assert pick.call_count == 2
+    app_mock.assert_called_once()
+
+
+def test_ctrl_c_inside_a_command_still_stops_partio() -> None:
+    """Abort is the one interrupt the menu loop does not swallow."""
+    with (
+        patch("partio.cli.main.select_one", return_value="library list"),
+        patch("partio.cli.prompting.prompt_for_args", return_value=[]),
+        patch("partio.cli.main.app", side_effect=typer_mod.Abort()),
+        patch("partio.cli.main.Console.print"),
+        pytest.raises(typer_mod.Abort),
+    ):
+        _show_picker()
 
 
 def test_esc_at_the_menu_quits() -> None:

@@ -7,6 +7,7 @@ numbered picker for bare invocation.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Annotated
 
 import typer
@@ -61,11 +62,29 @@ def _label_for(entry: CommandEntry) -> str:
     return f"{entry.group} {entry.name}" if entry.group else entry.name
 
 
+def _run_command(selected: str, extra_args: list[str]) -> None:
+    """Run *selected* as a subcommand and return once it has finished.
+
+    ``standalone_mode=False`` keeps click from calling ``sys.exit`` on the
+    command's behalf, and swallowing ``SystemExit`` turns a command that ends
+    itself -- :func:`~partio.cli.output.fail`, a "nothing to do" exit -- into a
+    return to the menu rather than the end of the session.  The command has
+    already reported whatever it exited over, so nothing is printed here.
+
+    ``Abort`` (ctrl-c outside a prompt) is deliberately left to propagate: it is
+    the one interrupt that should still stop partio.
+    """
+    with contextlib.suppress(SystemExit):
+        app(selected.split() + extra_args, standalone_mode=False)
+
+
 def _show_picker() -> None:
     """Display the arrow-key command menu and dispatch the choice.
 
     Loops rather than running once: pressing esc during the argument
-    walkthrough steps back out to this menu instead of abandoning the session.
+    walkthrough steps back out to this menu instead of abandoning the session,
+    and a finished command returns here too, so the session ends only when the
+    user asks it to.
     """
     commands = discover()
 
@@ -96,8 +115,8 @@ def _show_picker() -> None:
 
         # Re-invoke the app with the chosen subcommand (the prompt= fallback on
         # each Option still covers direct terminal invocation).
-        app(selected.split() + extra_args, standalone_mode=False)
-        return
+        _run_command(selected, extra_args)
+        console.print()
 
 
 # -- callback (runs on every invocation) ------------------------------------

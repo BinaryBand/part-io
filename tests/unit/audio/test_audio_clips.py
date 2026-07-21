@@ -7,15 +7,19 @@ from pathlib import Path
 import pytest
 
 from partio.adapters.audio import clips
-from partio.adapters.audio.clips import extract_audio_clip, play_audio_segment
+from partio.adapters.audio.clips import (
+    audio_duration_seconds,
+    extract_audio_clip,
+    play_audio_segment,
+)
 
 
 class _MockCompletedProcess:
     """Simulate a subprocess result with a given returncode."""
 
-    def __init__(self, returncode: int) -> None:
+    def __init__(self, returncode: int, stdout: bytes | str = b"") -> None:
         self.returncode = returncode
-        self.stdout = b""
+        self.stdout = stdout
 
 
 def test_play_audio_segment_builds_correct_ffplay_command(monkeypatch) -> None:
@@ -93,6 +97,43 @@ def test_play_audio_segment_raises_on_nonzero_returncode(monkeypatch) -> None:
             start_seconds=0.0,
             duration_seconds=1.0,
         )
+
+
+def test_audio_duration_seconds_parses_ffprobe_output(monkeypatch) -> None:
+    """The probed duration comes back as a float."""
+    captured: list[list[str]] = []
+
+    def _mock_run_resolved(cmd: list[str], **_kwargs) -> _MockCompletedProcess:
+        captured.append(cmd)
+        return _MockCompletedProcess(0, "3612.480000\n")
+
+    monkeypatch.setattr(clips, "run_resolved", _mock_run_resolved)
+
+    assert audio_duration_seconds(Path("/media/episode.mp3")) == pytest.approx(3612.48)
+    assert captured[0][0] == "ffprobe"
+    assert "format=duration" in captured[0]
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "match"),
+    [
+        (1, "", "ffprobe failed to read duration"),
+        (0, "N/A\n", "ffprobe reported no duration"),
+        (0, "0.000000\n", "ffprobe reported no duration"),
+    ],
+)
+def test_audio_duration_seconds_raises_when_unreadable(
+    monkeypatch, returncode: int, stdout: str, match: str
+) -> None:
+    """A failed probe or a container with no duration is a ValueError."""
+
+    def _mock_run_resolved(*_args, **_kwargs) -> _MockCompletedProcess:
+        return _MockCompletedProcess(returncode, stdout)
+
+    monkeypatch.setattr(clips, "run_resolved", _mock_run_resolved)
+
+    with pytest.raises(ValueError, match=match):
+        audio_duration_seconds(Path("/media/episode.mp3"))
 
 
 def test_extract_audio_clip_raises_on_nonzero_returncode(monkeypatch) -> None:

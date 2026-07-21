@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from partio.adapters.audio.clips import extract_audio_clip
+from partio.adapters.audio.clips import audio_duration_seconds, extract_audio_clip
 from partio.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
 from partio.cli.commands.audio._auditor import build_interactive_auditor
 from partio.cli.commands.library._store import default_store
@@ -149,7 +149,10 @@ def bootstrap(
         int, typer.Option(help="Maximum number of jingle occurrences to locate in the region.")
     ] = 1,
     region_start: Annotated[float, typer.Option(help="Search region start in seconds.")] = 0.0,
-    region_end: Annotated[float, typer.Option(help="Search region end in seconds.")] = 120.0,
+    region_end: Annotated[
+        float | None,
+        typer.Option(help="Search region end in seconds (default: the end of the file)."),
+    ] = None,
     tile_seconds: Annotated[float, typer.Option(help="Discovery tile width in seconds.")] = 10.0,
     probe_seconds: Annotated[
         float, typer.Option(help="Tuning probe clip length in seconds.")
@@ -162,15 +165,19 @@ def bootstrap(
     try:
         if not source.exists():
             raise FileNotFoundError(f"Source not found: {source}")  # noqa: TRY301
+        # Default to the whole file so a jingle anywhere in the episode is
+        # reachable; --region-end still narrows the search when its position
+        # is already known.
+        search_end = region_end if region_end is not None else audio_duration_seconds(source)
         auditor = build_interactive_auditor(
-            source_path=source, region_start=region_start, region_end=region_end
+            source_path=source, region_start=region_start, region_end=search_end
         )
     except (FileNotFoundError, ValueError) as exc:
         fail(exc)
 
     tuning = _tuning_kwargs(
         region_start=region_start,
-        region_end=region_end,
+        region_end=search_end,
         tile_seconds=tile_seconds,
         probe_seconds=probe_seconds,
         resolution=resolution,
