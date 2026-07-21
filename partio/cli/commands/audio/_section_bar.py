@@ -1,9 +1,11 @@
-"""Pure rendering for the audition section bar.
+"""Pure rendering and navigation geometry for the audition section bar.
 
 Maps a time region onto a fixed number of terminal columns and paints what is
 known about it: territory already ruled out, territory already confirmed, the
-clip currently under question, and the live playhead.  Kept free of
-prompt_toolkit and I/O so the layout can be unit-tested directly.
+clip currently under question, and the live playhead.  The same span geometry
+also drives segment-to-segment jumping and the playback window, so both live
+here.  Kept free of prompt_toolkit and I/O so the layout can be unit-tested
+directly.
 """
 
 from __future__ import annotations
@@ -26,6 +28,11 @@ _STYLE_FOR_GLYPH = {
 }
 
 _MIN_SPAN_SECONDS = 1e-6
+
+# Stops closer together than this collapse into one.  Bisection answers a dozen
+# overlapping probes only fractions of a second apart, and stepping through each
+# of them separately would make a jump feel like it did nothing.
+_STOP_TOLERANCE_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
@@ -95,6 +102,72 @@ def playhead_row(*, position: float, region_start: float, region_end: float, wid
     return " " * column + GLYPH_PLAYHEAD
 
 
+def segment_stops(*, clip_start: float, answered: Sequence[AnsweredSpan] = ()) -> list[float]:
+    """Every point a segment jump may land on, sorted and deduped.
+
+    A stop is the *start* of a judged span or of the clip under question -- the
+    listener jumps somewhere to hear it from the beginning.  Unexplored stretches
+    are not stops.
+
+    >>> segment_stops(clip_start=30.0, answered=[AnsweredSpan(0.0, 10.0, False)])
+    [0.0, 30.0]
+    """
+    stops: list[float] = []
+    for candidate in sorted([span.start for span in answered] + [clip_start]):
+        if not stops or candidate - stops[-1] > _STOP_TOLERANCE_SECONDS:
+            stops.append(candidate)
+    return stops
+
+
+def jump_target(*, position: float, stops: Sequence[float], forward: bool) -> float | None:
+    """The next stop after (or previous stop before) *position*.
+
+    Returns ``None`` when there is nothing further in that direction, which makes
+    the key a silent no-op at either end of the region rather than a jump that
+    lands back where it started.
+
+    >>> jump_target(position=0.0, stops=[0.0, 30.0], forward=True)
+    30.0
+    >>> jump_target(position=0.0, stops=[0.0, 30.0], forward=False) is None
+    True
+    """
+    if forward:
+        later = [stop for stop in stops if stop - position > _STOP_TOLERANCE_SECONDS]
+        return later[0] if later else None
+    earlier = [stop for stop in stops if position - stop > _STOP_TOLERANCE_SECONDS]
+    return earlier[-1] if earlier else None
+
+
+def play_window_end(
+    *,
+    position: float,
+    clip_start: float,
+    clip_end: float,
+    region_end: float,
+    answered: Sequence[AnsweredSpan] = (),
+) -> float:
+    """Where playback started at *position* should stop.
+
+    Inside a segment, playback runs to that segment's end.  In the unexplored gap
+    between segments it runs *through* to the end of the next one, so scrubbing
+    back off the clip still plays the lead-in and then the clip itself instead of
+    stopping at the boundary between them.
+    """
+    segments = [(span.start, span.end) for span in answered] + [(clip_start, clip_end)]
+    # Answered spans overlap heavily during bisection, so a position can sit
+    # inside several at once; the furthest end is the one worth hearing out.
+    containing = [end for start, end in segments if start <= position < end]
+    if containing:
+        return max(containing)
+    ahead = [(start, end) for start, end in segments if start > position]
+    if not ahead:
+        return region_end
+    # The *nearest* segment ahead, not the soonest-ending one: a short probe span
+    # nested inside the clip would otherwise cut playback off mid-clip.
+    nearest_start = min(start for start, _end in ahead)
+    return max(end for start, end in ahead if start == nearest_start)
+
+
 __all__ = [
     "GLYPH_BASE",
     "GLYPH_CLIP",
@@ -105,5 +178,8 @@ __all__ = [
     "bar_cells",
     "bar_fragments",
     "format_timestamp",
+    "jump_target",
+    "play_window_end",
     "playhead_row",
+    "segment_stops",
 ]

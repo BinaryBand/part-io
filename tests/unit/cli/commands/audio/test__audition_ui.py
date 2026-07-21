@@ -12,9 +12,16 @@ from partio.cli.commands.audio._section_bar import GLYPH_CLIP, GLYPH_NO, GLYPH_P
 
 CLIP_START = 30.0
 CLIP_DURATION = 10.0
+REGION_START = 0.0
+REGION_END = 120.0
+# History either side of the clip, so segment jumps have somewhere to land.
+NEIGHBOURS = [
+    AnsweredSpan(start=0.0, end=10.0, answer=False),
+    AnsweredSpan(start=60.0, end=70.0, answer=True),
+]
 
 
-def _run(*, result=True, keys=()):
+def _run(*, result=True, keys=(), answered=()):
     """Drive run_audition with a stubbed Application, optionally pressing *keys*.
 
     Returns ``(returned_value, start_audio_segment_mock, handles)``.
@@ -45,8 +52,9 @@ def _run(*, result=True, keys=()):
             clip_start=CLIP_START,
             clip_duration=CLIP_DURATION,
             question="Is the jingle anywhere in this clip?",
-            region_start=0.0,
-            region_end=120.0,
+            region_start=REGION_START,
+            region_end=REGION_END,
+            answered=answered,
         )
     return returned, start_mock, handles
 
@@ -102,18 +110,18 @@ def test_right_key_advances_the_cursor() -> None:
     assert start_mock.call_args.kwargs["start_seconds"] == CLIP_START + 2.0
 
 
-def test_scrub_back_is_clamped_to_the_lead_in_window() -> None:
-    """Repeated rewinds stop at the lead-in floor, never before the region."""
+def test_scrub_back_is_clamped_to_the_region_start() -> None:
+    """The cursor roams the whole region but never falls out of it."""
     _returned, start_mock, _handles = _run(keys=["left"] * 20)
 
-    assert start_mock.call_args.kwargs["start_seconds"] == CLIP_START - 10.0
+    assert start_mock.call_args.kwargs["start_seconds"] == REGION_START
 
 
-def test_scrub_forward_is_clamped_to_the_clip_end() -> None:
-    """Repeated advances stop at the clip end."""
-    _returned, start_mock, _handles = _run(keys=["right"] * 20)
+def test_scrub_forward_is_clamped_to_the_region_end() -> None:
+    """Advancing past the clip is allowed, up to the region end."""
+    _returned, start_mock, _handles = _run(keys=["right"] * 50)
 
-    assert start_mock.call_args.kwargs["start_seconds"] == CLIP_START + CLIP_DURATION
+    assert start_mock.call_args.kwargs["start_seconds"] == REGION_END
 
 
 def test_scrubbing_stops_the_previous_playback() -> None:
@@ -133,9 +141,66 @@ def test_replay_restarts_from_the_current_cursor() -> None:
 
 def test_short_remainder_still_plays_a_minimum_length() -> None:
     """Scrubbing to the very end still yields an audible clip."""
-    _returned, start_mock, _handles = _run(keys=["right"] * 20)
+    _returned, start_mock, _handles = _run(keys=["right"] * 50)
 
     assert start_mock.call_args.kwargs["duration_seconds"] == 1.0
+
+
+def test_roaming_far_from_the_clip_caps_the_playback_length() -> None:
+    """An unexplored stretch plays a bounded preview, not minutes of audio."""
+    _returned, start_mock, _handles = _run(keys=["left"] * 20)
+
+    # Region start, with nothing judged ahead of the clip: the window would run
+    # all the way to the clip end without the cap.
+    assert start_mock.call_args.kwargs["duration_seconds"] == 30.0
+
+
+def test_the_question_clip_is_never_trimmed_by_the_cap() -> None:
+    """The clip under question plays in full even though the cap is shorter."""
+    _returned, start_mock, _handles = _run()
+
+    assert start_mock.call_args.kwargs["duration_seconds"] == CLIP_DURATION
+
+
+# -- segment jumps -----------------------------------------------------------
+
+
+def test_shift_right_jumps_to_the_next_segment() -> None:
+    """Shift+right lands on the start of the next judged span."""
+    _returned, start_mock, _handles = _run(keys=["s-right"], answered=NEIGHBOURS)
+
+    assert start_mock.call_args.kwargs["start_seconds"] == 60.0
+
+
+def test_shift_left_jumps_to_the_previous_segment() -> None:
+    """Shift+left lands on the start of the previous judged span."""
+    _returned, start_mock, _handles = _run(keys=["s-left"], answered=NEIGHBOURS)
+
+    assert start_mock.call_args.kwargs["start_seconds"] == 0.0
+
+
+def test_jumping_to_a_judged_span_plays_only_that_span() -> None:
+    """The span you jumped to plays out and then stops, rather than running on."""
+    _returned, start_mock, _handles = _run(keys=["s-right"], answered=NEIGHBOURS)
+
+    assert start_mock.call_args.kwargs["duration_seconds"] == 10.0
+
+
+def test_shift_left_returns_to_the_clip_start_from_a_scrub() -> None:
+    """After nudging off the clip, a back-jump snaps to the clip's own start."""
+    _returned, start_mock, _handles = _run(keys=["right", "s-left"], answered=NEIGHBOURS)
+
+    assert start_mock.call_args.kwargs["start_seconds"] == CLIP_START
+
+
+def test_jumping_is_a_no_op_at_the_ends() -> None:
+    """With nothing judged, the clip is the only stop and jumps do nothing.
+
+    Playback must be left alone rather than restarted in place.
+    """
+    _returned, start_mock, _handles = _run(keys=["s-left", "s-right"])
+
+    assert start_mock.call_count == 1
 
 
 # -- screen ------------------------------------------------------------------
@@ -148,8 +213,8 @@ def _screen_text(**overrides) -> str:
         "question": "Is the jingle anywhere in this clip?",
         "clip_start": CLIP_START,
         "clip_end": CLIP_START + CLIP_DURATION,
-        "region_start": 0.0,
-        "region_end": 120.0,
+        "region_start": REGION_START,
+        "region_end": REGION_END,
         "answered": [],
         "playback": playback,
     }
@@ -171,20 +236,22 @@ def test_screen_shows_the_key_legend() -> None:
     """Every action is advertised on screen."""
     text = _screen_text()
 
-    for hint in ("[y]", "[n]", "[←/→]", "[r]", "[q]"):
+    for hint in ("[y]", "[n]", "[←/→]", "[⇧←/⇧→]", "[r]", "[q]"):
         assert hint in text
 
 
-def test_screen_flags_lead_in_when_scrubbed_before_the_clip() -> None:
-    """Scrubbing before the clip is called out, so the question stays unambiguous."""
-    text = _screen_text(playback=_Playback(cursor=CLIP_START - 4.0))
+def test_screen_flags_a_cursor_outside_the_clip() -> None:
+    """Roaming off the clip is called out, so the question stays unambiguous."""
+    before = _screen_text(playback=_Playback(cursor=CLIP_START - 4.0))
+    after = _screen_text(playback=_Playback(cursor=CLIP_START + CLIP_DURATION + 20.0))
 
-    assert "lead-in" in text
+    assert "outside this clip" in before
+    assert "outside this clip" in after
 
 
-def test_screen_omits_lead_in_note_inside_the_clip() -> None:
-    """No lead-in note while the cursor sits inside the clip."""
-    assert "lead-in" not in _screen_text()
+def test_screen_omits_the_outside_note_inside_the_clip() -> None:
+    """No note while the cursor sits inside the clip under question."""
+    assert "outside this clip" not in _screen_text()
 
 
 def test_screen_fits_the_terminal_width() -> None:
