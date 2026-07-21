@@ -319,7 +319,7 @@ def test_sample_prompts_ask_the_library_for_samples() -> None:
     with tracks_patch as tracks_mock, select_patch, fetch_patch:
         _ask(Path, "--sample")
 
-    tracks_mock.assert_called_once_with(AudioPathKind.SAMPLE)
+    tracks_mock.assert_called_once_with(AudioPathKind.SAMPLE, full=False)
 
 
 def test_source_prompts_ask_the_library_for_sources() -> None:
@@ -330,7 +330,7 @@ def test_source_prompts_ask_the_library_for_sources() -> None:
     with tracks_patch as tracks_mock, select_patch, fetch_patch:
         _ask(Path, "--source")
 
-    tracks_mock.assert_called_once_with(AudioPathKind.SOURCE)
+    tracks_mock.assert_called_once_with(AudioPathKind.SOURCE, full=False)
 
 
 def test_unknown_flag_names_are_not_narrowed() -> None:
@@ -339,7 +339,7 @@ def test_unknown_flag_names_are_not_narrowed() -> None:
     with tracks_patch as tracks_mock, select_patch, fetch_patch:
         _ask(Path, "--reference-clip")
 
-    tracks_mock.assert_called_once_with(None)
+    tracks_mock.assert_called_once_with(None, full=False)
 
 
 def test_prompt_path_empty_library_asks_for_a_path() -> None:

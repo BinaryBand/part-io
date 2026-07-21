@@ -16,7 +16,7 @@ import questionary
 import typer
 from rich.console import Console
 
-from partio.cli.library import MARK_LEGEND, Track, ensure_local, tracks
+from partio.cli.library import MARK_LEGEND, Track, ensure_local, has_more, tracks
 from partio.cli.select import GO_BACK, GoBack, Option, bind_back, select_one
 from partio.core.ports import AudioPathKind
 
@@ -28,6 +28,7 @@ console = Console()
 _REQUIRED = inspect.Parameter.empty
 _MIN_ANNOTATION_ARGS = 2
 _CUSTOM_PATH_CHOICE = "c"
+_LOAD_ALL_CHOICE = "load-all"
 
 
 def required_options(fn: Callable[..., Any]) -> list[tuple[str, type, typer.models.OptionInfo]]:
@@ -163,40 +164,48 @@ def _kind_for(prompt_text: str) -> AudioPathKind | None:
         return None
 
 
-def _prompt_path(prompt_text: str) -> str | GoBack | None:
-    """Prompt for a filesystem path, offering the whole library as a picker.
+def _prompt_path(prompt_text: str, *, full: bool = False) -> str | GoBack | None:
+    """Prompt for a filesystem path, offering the library as a picker.
 
-    The library is virtual: the picker lists every episode of every remembered
+    The library is virtual: the picker lists episodes from every remembered
     feed next to what is already on disk, narrowed to the kind the flag asks
     for, so ``--sample`` offers bootstrapped seed clips rather than episodes.
     Choosing an episode that has not been downloaded downloads it here and now,
-    so the command behind the prompt only ever receives a local path.  With
-    nothing suitable to offer -- or on choosing "enter a path manually" -- this
-    falls back to a plain path prompt.
+    so the command behind the prompt only ever receives a local path.
+
+    Only each feed's newest episodes are read, since reading a whole back
+    catalogue costs seconds; *full* is the "load every episode" row asking for
+    the rest.  With nothing suitable to offer -- or on choosing "enter a path
+    manually" -- this falls back to a plain path prompt.
     """
     kind = _kind_for(prompt_text)
     with console.status("Loading library"):
-        available = tracks(kind)
+        available = tracks(kind, full=full)
     if not available:
         return bind_back(questionary.path(prompt_text)).ask()
 
     if any(not track.on_disk for track in available):
         console.print(f"[dim]{MARK_LEGEND}[/dim]")
-    chosen = select_one(prompt_text, _track_options(available), console=console)
+    expandable = kind is not AudioPathKind.SAMPLE and not full and has_more()
+    chosen = select_one(
+        prompt_text, _track_options(available, expandable=expandable), console=console
+    )
     if chosen is None or isinstance(chosen, GoBack):
         return chosen
+    if chosen == _LOAD_ALL_CHOICE:
+        return _prompt_path(prompt_text, full=True)
     if not isinstance(chosen, Track):
-        # The only non-track row is "enter a path manually"; esc while typing
-        # returns to this picker rather than skipping past it.
+        # The only other non-track row is "enter a path manually"; esc while
+        # typing returns to this picker rather than skipping past it.
         typed = bind_back(questionary.path("path")).ask()
-        return _prompt_path(prompt_text) if isinstance(typed, GoBack) else typed
+        return _prompt_path(prompt_text, full=full) if isinstance(typed, GoBack) else typed
 
     local = ensure_local(chosen)
     # A download that failed leaves no path to hand on, so ask again.
-    return str(local) if local is not None else _prompt_path(prompt_text)
+    return str(local) if local is not None else _prompt_path(prompt_text, full=full)
 
 
-def _track_options(available: list[Track]) -> list[Option[Track | str]]:
+def _track_options(available: list[Track], *, expandable: bool) -> list[Option[Track | str]]:
     """Rows for the library picker, grouped by feed and marked by availability."""
     options: list[Option[Track | str]] = [
         Option(
@@ -207,6 +216,15 @@ def _track_options(available: list[Track]) -> list[Option[Track | str]]:
         )
         for track in available
     ]
+    if expandable:
+        options.append(
+            Option(
+                title="load every episode",
+                value=_LOAD_ALL_CHOICE,
+                help="reads each feed's full back catalogue -- slower",
+                group="elsewhere",
+            )
+        )
     options.append(
         Option(title="enter a path manually", value=_CUSTOM_PATH_CHOICE, group="elsewhere")
     )

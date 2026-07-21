@@ -27,9 +27,21 @@ def _remember_feed(url: str = "https://feed", label: str = "Show") -> None:
     feed_store().add_item(FeedEntry(id=url, url=url, label=label))
 
 
+def _rss(titles) -> bytes:
+    """A minimal but genuinely parseable feed document, newest first."""
+    items = "".join(
+        f"<item><title>{title}</title><guid>{title}</guid>"
+        f'<enclosure url="https://x/{title}.mp3" type="audio/mpeg" length="1000"/>'
+        "</item>"
+        for title in titles
+    )
+    return f"<rss version='2.0'><channel><title>Show</title>{items}</channel></rss>".encode()
+
+
 def _stub_feed(monkeypatch, episodes, *, dest=None) -> None:
-    """Serve *episodes* for any feed URL and land downloads under *dest*."""
-    monkeypatch.setattr(_tracks, "fetch_episodes", lambda _url: list(episodes))
+    """Serve *episodes* as a real feed document and land downloads under *dest*."""
+    document = _rss(episode.title for episode in episodes)
+    monkeypatch.setattr(_tracks, "fetch_feed_content", lambda _url, **_kw: document)
     if dest is not None:
         monkeypatch.setattr(_tracks, "DOWNLOAD_DIR", dest)
     _tracks.refresh()
@@ -126,11 +138,11 @@ def test_feeds_are_fetched_once_per_session(monkeypatch, tmp_path) -> None:
     _remember_feed()
     calls: list[str] = []
 
-    def _fetch(url):
+    def _fetch(url, **_kwargs):
         calls.append(url)
-        return [_episode("Ep 1")]
+        return _rss(["Ep 1"])
 
-    monkeypatch.setattr(_tracks, "fetch_episodes", _fetch)
+    monkeypatch.setattr(_tracks, "fetch_feed_content", _fetch)
     monkeypatch.setattr(_tracks, "DOWNLOAD_DIR", tmp_path)
     _tracks.refresh()
 
@@ -145,11 +157,11 @@ def test_refresh_forces_a_re_fetch(monkeypatch, tmp_path) -> None:
     _remember_feed()
     calls: list[str] = []
 
-    def _fetch(url):
+    def _fetch(url, **_kwargs):
         calls.append(url)
-        return []
+        return _rss([])
 
-    monkeypatch.setattr(_tracks, "fetch_episodes", _fetch)
+    monkeypatch.setattr(_tracks, "fetch_feed_content", _fetch)
     monkeypatch.setattr(_tracks, "DOWNLOAD_DIR", tmp_path)
     _tracks.refresh()
 
@@ -167,14 +179,70 @@ def test_an_unreachable_feed_does_not_break_the_library(monkeypatch, tmp_path) -
     local.write_bytes(b"audio")
     _cache.remember(local, label="Local", kind=AudioPathKind.SOURCE)
 
-    def _boom(_url):
+    def _boom(_url, **_kwargs):
         raise httpx.ConnectError("no network")
 
-    monkeypatch.setattr(_tracks, "fetch_episodes", _boom)
+    monkeypatch.setattr(_tracks, "fetch_feed_content", _boom)
     monkeypatch.setattr(_tracks, "DOWNLOAD_DIR", tmp_path)
     _tracks.refresh()
 
     assert [track.label for track in _tracks.tracks()] == ["Local"]
+
+
+# -- partial reads -----------------------------------------------------------
+
+
+def test_only_the_newest_episodes_are_read_by_default(monkeypatch, tmp_path) -> None:
+    """Parsing is linear in bytes, so a prompt reads the head of a feed, not all of it."""
+    _remember_feed()
+    _stub_feed(monkeypatch, [_episode(f"Ep {n}") for n in range(40)], dest=tmp_path)
+    monkeypatch.setattr(_tracks, "HEAD_BYTES", 400)
+
+    listed = _tracks.tracks()
+
+    assert 0 < len(listed) < 40
+    assert listed[0].label == "Ep 0"
+
+
+def test_full_reads_the_whole_back_catalogue(monkeypatch, tmp_path) -> None:
+    """Asking to expand gets every episode the feed declares."""
+    _remember_feed()
+    _stub_feed(monkeypatch, [_episode(f"Ep {n}") for n in range(40)], dest=tmp_path)
+    monkeypatch.setattr(_tracks, "HEAD_BYTES", 400)
+
+    assert len(_tracks.tracks(full=True)) == 40
+
+
+def test_has_more_is_true_only_when_a_feed_was_cut_short(monkeypatch, tmp_path) -> None:
+    """The expand row is offered exactly when there is something left to load."""
+    _remember_feed()
+    _stub_feed(monkeypatch, [_episode(f"Ep {n}") for n in range(40)], dest=tmp_path)
+
+    monkeypatch.setattr(_tracks, "HEAD_BYTES", 400)
+    assert _tracks.has_more() is True
+
+    monkeypatch.setattr(_tracks, "HEAD_BYTES", 1_000_000)
+    assert _tracks.has_more() is False
+
+
+def test_the_default_read_asks_the_server_for_only_its_budget(monkeypatch, tmp_path) -> None:
+    """The saving has to reach the wire too -- 17 MB moved is 17 MB waited on."""
+    _remember_feed()
+    budgets: list[int | None] = []
+
+    def _fetch(url, *, max_bytes=None):
+        budgets.append(max_bytes)
+        return _rss([f"Ep {n}" for n in range(40)])
+
+    monkeypatch.setattr(_tracks, "fetch_feed_content", _fetch)
+    monkeypatch.setattr(_tracks, "DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr(_tracks, "HEAD_BYTES", 400)
+    _tracks.refresh()
+
+    _tracks.tracks()
+    _tracks.tracks(full=True)
+
+    assert budgets == [400, None]
 
 
 # -- rendering ---------------------------------------------------------------

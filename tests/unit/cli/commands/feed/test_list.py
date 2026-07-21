@@ -23,7 +23,13 @@ def _episode(title: str) -> FeedEpisode:
 
 
 def _stub_feed(monkeypatch, episodes) -> None:
-    monkeypatch.setattr(_tracks, "fetch_episodes", lambda _url: list(episodes))
+    items = "".join(
+        f"<item><title>{e.title}</title><guid>{e.title}</guid>"
+        f'<enclosure url="{e.audio_url}" type="audio/mpeg" length="1000"/></item>'
+        for e in episodes
+    )
+    document = f"<rss version='2.0'><channel><title>S</title>{items}</channel></rss>".encode()
+    monkeypatch.setattr(_tracks, "fetch_feed_content", lambda _url, **_kw: document)
     _tracks.refresh()
 
 

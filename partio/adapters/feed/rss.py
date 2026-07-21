@@ -61,11 +61,30 @@ def parse_feed(content: bytes) -> list[FeedEpisode]:
     return episodes
 
 
-def fetch_episodes(feed_url: str) -> list[FeedEpisode]:
-    """Download the feed at *feed_url* and parse it into episodes."""
-    response = httpx.get(feed_url, follow_redirects=True, timeout=_FEED_TIMEOUT_SECONDS)
+def fetch_feed_content(feed_url: str, *, max_bytes: int | None = None) -> bytes:
+    """Download the raw feed document at *feed_url*.
+
+    Exposed separately from :func:`parse_feed` so a caller that only wants the
+    recent episodes can bound both costs, which are wildly different: a
+    long-running podcast feed is tens of megabytes to move and seconds to
+    parse.
+
+    *max_bytes* asks the server for just that much via a ranged request.
+    Servers that do not honour ranges reply with the whole document instead, so
+    this is a best-effort saving, never a correctness assumption -- the caller
+    still has to treat what comes back as possibly complete.
+    """
+    headers = {} if max_bytes is None else {"Range": f"bytes=0-{max_bytes - 1}"}
+    response = httpx.get(
+        feed_url, follow_redirects=True, timeout=_FEED_TIMEOUT_SECONDS, headers=headers
+    )
     response.raise_for_status()
-    return parse_feed(response.content)
+    return response.content
+
+
+def fetch_episodes(feed_url: str) -> list[FeedEpisode]:
+    """Download the feed at *feed_url* and parse all of it into episodes."""
+    return parse_feed(fetch_feed_content(feed_url))
 
 
 def parse_feed_title(content: bytes) -> str:

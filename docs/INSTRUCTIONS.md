@@ -34,7 +34,9 @@ If you don't already have an episode on disk, remember a feed and every one of i
 uv run partio feed add --url https://example.com/podcast/rss
 ```
 
-Nothing is downloaded here. From now on, any command that asks for a `--source` opens a picker listing that feed's entire back catalogue -- `●` for episodes already on disk, `○` for ones that aren't. Picking a `○` downloads it right there into `static/downloads/` and hands the local path to the command. Picking it again later costs nothing.
+Nothing is downloaded here. From now on, any command that asks for a `--source` opens a picker listing that feed's episodes -- `●` for ones already on disk, `○` for ones that aren't. Picking a `○` downloads it right there into `static/downloads/` and hands the local path to the command. Picking it again later costs nothing.
+
+The picker reads only each feed's newest episodes (roughly the last 40), because a long-running podcast feed is tens of megabytes and takes seconds to parse in full. If you need something older, the `load every episode` row at the bottom reads the whole back catalogue, and `partio feed list` always does.
 
 That is the whole of feed management:
 
@@ -94,7 +96,7 @@ uv run partio audio review --source episode.mp3 \
 ## 3. Quick reference
 
 | Command | Purpose |
-|---|---|
+| --- | --- |
 | `partio audio bootstrap` | Find a jingle with no reference clip yet |
 | `partio audio search` | List every match of a seed clip above a threshold |
 | `partio audio locate` | Find the single best/strongest match |

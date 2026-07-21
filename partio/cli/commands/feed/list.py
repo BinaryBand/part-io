@@ -6,10 +6,14 @@ from itertools import groupby
 from typing import TYPE_CHECKING
 
 import typer  # noqa: TC002
+from rich.console import Console
 
 from partio.cli.library import MARK_LEGEND, feeds, tracks
 from partio.cli.output import ExitCode, _json_flag, emit
 from partio.cli.registry import command
+
+# The spinner is drawn on stderr so it never mingles with --json output.
+console = Console(stderr=True)
 
 if TYPE_CHECKING:
     from partio.cli.library import Track
@@ -28,10 +32,13 @@ def list_feeds(ctx: typer.Context) -> None:
 
     Episodes are listed whether or not they have been downloaded, because that
     is what the pickers offer; the glyph says which ones are already here.
+    This is the one place that reads each feed in full -- showing everything is
+    the product here, where in a prompt it would just be a wait.
     """
     as_json = _json_flag(ctx)
     remembered = feeds()
-    available = tracks()
+    with console.status("Reading feeds"):
+        available = tracks(full=True)
     if not remembered and not available:
         emit("Nothing in the library yet -- add a feed with `partio feed add`.", as_json=as_json)
         raise SystemExit(ExitCode.NO_RESULT)
