@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+import pytest
+import typer as typer_mod
 from typer.testing import CliRunner
 
-from partio.cli.main import app
+from partio.cli.main import _show_picker, app
 from partio.cli.registry import get_commands
+from partio.cli.select import GO_BACK
 
 runner = CliRunner()
 
@@ -91,3 +96,46 @@ def test_registry_entries_have_group() -> None:
     """Every registered command must have a group."""
     for entry in get_commands():
         assert entry.group, f"{entry.name} is missing a group"
+
+
+# -- picker navigation -----------------------------------------------------
+
+
+def test_esc_during_arg_walkthrough_redisplays_the_menu() -> None:
+    """GO_BACK from the walkthrough loops back to the command picker."""
+    with (
+        patch(
+            "partio.cli.main.select_one", side_effect=["audio bootstrap", "library list"]
+        ) as pick,
+        patch("partio.cli.prompting.prompt_for_args", side_effect=[GO_BACK, []]) as walk,
+        patch("partio.cli.main.app") as app_mock,
+        patch("partio.cli.main.Console.print"),
+    ):
+        _show_picker()
+
+    # Menu shown twice, walkthrough run twice, command invoked once.
+    assert pick.call_count == 2
+    assert walk.call_count == 2
+    app_mock.assert_called_once()
+    assert app_mock.call_args.args[0][:2] == ["library", "list"]
+
+
+def test_esc_at_the_menu_quits() -> None:
+    """The top-level menu has nothing to go back to, so esc exits."""
+    with (
+        patch("partio.cli.main.select_one", return_value=GO_BACK),
+        patch("partio.cli.main.Console.print"),
+        pytest.raises(typer_mod.Exit),
+    ):
+        _show_picker()
+
+
+def test_cancelling_the_walkthrough_quits() -> None:
+    """ctrl-c during the walkthrough exits rather than looping forever."""
+    with (
+        patch("partio.cli.main.select_one", return_value="audio bootstrap"),
+        patch("partio.cli.prompting.prompt_for_args", return_value=None),
+        patch("partio.cli.main.Console.print"),
+        pytest.raises(typer_mod.Exit),
+    ):
+        _show_picker()

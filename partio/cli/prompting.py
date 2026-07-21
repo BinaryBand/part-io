@@ -1,22 +1,23 @@
 """Per-arg walkthrough prompting for the interactive picker.
 
 Introspects command functions to discover required options, then walks the
-user through each one with a Rich prompt that matches the option's type
-annotation.
+user through each one with a questionary prompt that matches the option's
+type annotation.  ``esc`` steps back through the walkthrough.
 """
 
 from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin, get_type_hints
 
+import questionary
 import typer
 from rich.console import Console
-from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
 from partio.cli.commands.library._store import default_store
-from partio.cli.select import Option, select_one
+from partio.cli.select import GO_BACK, GoBack, Option, bind_back, select_one
 
 if TYPE_CHECKING:
     from partio.cli.registry import CommandEntry
@@ -65,28 +66,39 @@ def required_options(fn: Callable[..., Any]) -> list[tuple[str, type, typer.mode
     return results
 
 
-def prompt_for_args(entry: CommandEntry) -> list[str]:
+def prompt_for_args(entry: CommandEntry) -> list[str] | GoBack | None:
     """Walk the user through every required option of *entry*.
 
     For each required option, prints its ``help`` text, then prompts with a
-    Rich helper that matches the annotation type:
+    questionary helper matching the annotation type (``Path`` also offers the
+    remembered library as a picker).
 
-    * ``Path`` / ``str`` → ``Prompt.ask``
-    * ``int``             → ``IntPrompt.ask``
-    * ``float``           → ``FloatPrompt.ask``
-    * ``bool``            → ``Confirm.ask``
-
-    Returns a flat ``["--flag", "value", ...]`` list ready to be appended
-    to a Typer invocation.
+    ``esc`` steps back to the previous option; pressing it on the first option
+    returns :data:`GO_BACK` so the caller can redisplay whatever came before.
+    ``ctrl-c`` returns ``None`` to abandon the command outright.  Otherwise
+    returns a flat ``["--flag", "value", ...]`` list ready to be appended to a
+    Typer invocation.
     """
-    args: list[str] = []
-    for flag_name, inner_type, option_info in required_options(entry.fn):
-        label = option_info.help or flag_name
-        console.print(f"[bold]{label}[/bold]")
-        value = _rich_prompt(inner_type, flag_name)
-        args.append(flag_name)
-        args.append(str(value))
-    return args
+    options = required_options(entry.fn)
+    answers: list[str] = [""] * len(options)
+    index = 0
+
+    while index < len(options):
+        flag_name, inner_type, option_info = options[index]
+        console.print(f"[bold]{option_info.help or flag_name}[/bold]")
+        value = _ask(inner_type, flag_name)
+        if value is None:
+            return None
+        if isinstance(value, GoBack):
+            if index == 0:
+                return GO_BACK
+            index -= 1
+            continue
+        answers[index] = str(value)
+        index += 1
+
+    flags = [flag for flag, _type, _info in options]
+    return [part for pair in zip(flags, answers, strict=True) for part in pair]
 
 
 def _extract_flag(
@@ -101,21 +113,40 @@ def _extract_flag(
     return f"--{param_name.replace('_', '-')}"
 
 
-def _rich_prompt(inner_type: type, flag_name: str) -> str | bool | int | float:
-    """Dispatch to the correct Rich prompt class for *inner_type*."""
-    from pathlib import Path
+def _ask(inner_type: type, flag_name: str) -> str | bool | int | float | GoBack | None:
+    """Dispatch to the questionary prompt matching *inner_type*.
 
+    Returns :data:`GO_BACK` when the user pressed esc and ``None`` when they
+    cancelled.
+    """
     prompt_text = flag_name.lstrip("-").replace("-", " ")
     if inner_type is bool:
-        return Confirm.ask(f"{prompt_text}?", console=console)
+        return bind_back(questionary.confirm(f"{prompt_text}?")).ask()
     if inner_type is int:
-        return IntPrompt.ask(prompt_text, console=console)
+        return _ask_number(prompt_text, cast=int, name="integer")
     if inner_type is float:
-        return FloatPrompt.ask(prompt_text, console=console)
+        return _ask_number(prompt_text, cast=float, name="number")
     if inner_type is Path:
         return _prompt_path(prompt_text)
-    # Plain string prompt.
-    return Prompt.ask(prompt_text, console=console)
+    return bind_back(questionary.text(prompt_text)).ask()
+
+
+def _ask_number(
+    prompt_text: str, *, cast: Callable[[str], int | float], name: str
+) -> int | float | GoBack | None:
+    """Prompt for a number, re-asking until the text parses."""
+
+    def _validate(text: str) -> bool | str:
+        try:
+            cast(text)
+        except ValueError:
+            return f"Enter a valid {name}"
+        return True
+
+    answer = bind_back(questionary.text(prompt_text, validate=_validate)).ask()
+    if answer is None or isinstance(answer, GoBack):
+        return answer
+    return cast(answer)
 
 
 def _library_entries() -> list[AudioPathEntry]:
@@ -126,7 +157,7 @@ def _library_entries() -> list[AudioPathEntry]:
         return []
 
 
-def _prompt_path(prompt_text: str) -> str:
+def _prompt_path(prompt_text: str) -> str | GoBack | None:
     """Prompt for a filesystem path, offering the remembered library as a picker.
 
     When the library has entries, they become an arrow-key menu so the user can
@@ -136,7 +167,7 @@ def _prompt_path(prompt_text: str) -> str:
     """
     entries = _library_entries()
     if not entries:
-        return Prompt.ask(prompt_text, console=console)
+        return bind_back(questionary.path(prompt_text)).ask()
 
     options = [
         Option(
@@ -150,6 +181,8 @@ def _prompt_path(prompt_text: str) -> str:
     options.append(Option(title="enter a path manually", value=_CUSTOM_PATH_CHOICE))
 
     chosen = select_one(prompt_text, options, console=console)
-    if chosen is None or chosen == _CUSTOM_PATH_CHOICE:
-        return Prompt.ask("path", console=console)
+    if chosen == _CUSTOM_PATH_CHOICE:
+        # esc at the manual prompt returns to this picker rather than skipping past it.
+        typed = bind_back(questionary.path("path")).ask()
+        return _prompt_path(prompt_text) if isinstance(typed, GoBack) else typed
     return chosen

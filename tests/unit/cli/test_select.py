@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 
-from partio.cli.select import Option, select_many, select_one
+from partio.cli.select import GO_BACK, GoBack, Option, select_many, select_one
 
 CONSOLE = Console()
 
@@ -69,6 +70,7 @@ def test_tty_uses_questionary_select() -> None:
         patch("partio.cli.select.sys.stdout.isatty", return_value=True),
         patch("partio.cli.select.questionary.select") as select_mock,
     ):
+        select_mock.return_value.application.key_bindings = KeyBindings()
         select_mock.return_value.ask.return_value = "library list"
         result = select_one("Pick", _options(), console=CONSOLE)
 
@@ -83,6 +85,7 @@ def test_tty_cancel_returns_none() -> None:
         patch("partio.cli.select.sys.stdout.isatty", return_value=True),
         patch("partio.cli.select.questionary.select") as select_mock,
     ):
+        select_mock.return_value.application.key_bindings = KeyBindings()
         select_mock.return_value.ask.return_value = None
         assert select_one("Pick", _options(), console=CONSOLE) is None
 
@@ -96,6 +99,7 @@ def test_tty_inserts_group_separators() -> None:
         patch("partio.cli.select.sys.stdout.isatty", return_value=True),
         patch("partio.cli.select.questionary.select") as select_mock,
     ):
+        select_mock.return_value.application.key_bindings = KeyBindings()
         select_mock.return_value.ask.return_value = "audio bootstrap"
         select_one("Pick", _options(), console=CONSOLE)
 
@@ -116,6 +120,7 @@ def test_tty_titles_carry_dimmed_help() -> None:
         patch("partio.cli.select.sys.stdout.isatty", return_value=True),
         patch("partio.cli.select.questionary.select") as select_mock,
     ):
+        select_mock.return_value.application.key_bindings = KeyBindings()
         select_mock.return_value.ask.return_value = "audio bootstrap"
         select_one("Pick", _options(), console=CONSOLE)
 
@@ -144,6 +149,7 @@ def test_long_titles_do_not_starve_the_metadata_column() -> None:
         ),
         patch("partio.cli.select.questionary.checkbox") as checkbox,
     ):
+        checkbox.return_value.application.key_bindings = KeyBindings()
         checkbox.return_value.ask.return_value = []
         select_many("Select episodes to download", options, console=CONSOLE)
 
@@ -164,6 +170,7 @@ def test_short_rows_keep_their_full_help() -> None:
         ),
         patch("partio.cli.select.questionary.select") as select_mock,
     ):
+        select_mock.return_value.application.key_bindings = KeyBindings()
         select_mock.return_value.ask.return_value = "audio bootstrap"
         select_one("Pick a command", _options(), console=CONSOLE)
 
@@ -171,6 +178,92 @@ def test_short_rows_keep_their_full_help() -> None:
     assert title[0][1].startswith("bootstrap")
     assert "Locate a jingle." in title[1][1]
     assert "..." not in title[1][1]
+
+
+# -- esc / go back -----------------------------------------------------------
+
+
+def _press_escape(prompt_mock) -> MagicMock:
+    """Fire the esc binding registered on a mocked questionary prompt."""
+    bindings = prompt_mock.return_value.application.key_bindings
+    binding = next(b for b in bindings.bindings if getattr(b.keys[0], "value", None) == "escape")
+    event = MagicMock()
+    event.app.is_done = False
+    binding.handler(event)
+    return event
+
+
+def test_esc_binding_is_registered_on_select() -> None:
+    """select_one binds esc so the caller can tell "back" from "cancel"."""
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=True),
+        patch("partio.cli.select.sys.stdout.isatty", return_value=True),
+        patch("partio.cli.select.questionary.select") as select_mock,
+    ):
+        select_mock.return_value.application.key_bindings = KeyBindings()
+        select_mock.return_value.ask.return_value = "audio locate"
+        select_one("Pick", _options(), console=CONSOLE)
+
+    event = _press_escape(select_mock)
+    event.app.exit.assert_called_once_with(result=GO_BACK)
+
+
+def test_esc_binding_is_registered_on_checkbox() -> None:
+    """select_many binds esc the same way."""
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=True),
+        patch("partio.cli.select.sys.stdout.isatty", return_value=True),
+        patch("partio.cli.select.questionary.checkbox") as checkbox,
+    ):
+        checkbox.return_value.application.key_bindings = KeyBindings()
+        checkbox.return_value.ask.return_value = []
+        select_many("Pick", _options(), console=CONSOLE)
+
+    event = _press_escape(checkbox)
+    event.app.exit.assert_called_once_with(result=GO_BACK)
+
+
+def test_esc_is_not_bound_eagerly() -> None:
+    """A non-eager binding lets prompt_toolkit still assemble arrow-key sequences."""
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=True),
+        patch("partio.cli.select.sys.stdout.isatty", return_value=True),
+        patch("partio.cli.select.questionary.select") as select_mock,
+    ):
+        select_mock.return_value.application.key_bindings = KeyBindings()
+        select_mock.return_value.ask.return_value = "audio locate"
+        select_one("Pick", _options(), console=CONSOLE)
+
+    bindings = select_mock.return_value.application.key_bindings
+    binding = next(b for b in bindings.bindings if getattr(b.keys[0], "value", None) == "escape")
+    assert binding.eager() is False
+
+
+def test_repeat_escape_during_teardown_is_ignored() -> None:
+    """A second esc while the prompt is already finishing must not re-exit."""
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=True),
+        patch("partio.cli.select.sys.stdout.isatty", return_value=True),
+        patch("partio.cli.select.questionary.select") as select_mock,
+    ):
+        select_mock.return_value.application.key_bindings = KeyBindings()
+        select_mock.return_value.ask.return_value = "audio locate"
+        select_one("Pick", _options(), console=CONSOLE)
+
+    bindings = select_mock.return_value.application.key_bindings
+    binding = next(b for b in bindings.bindings if getattr(b.keys[0], "value", None) == "escape")
+    event = MagicMock()
+    event.app.is_done = True
+    binding.handler(event)
+
+    event.app.exit.assert_not_called()
+
+
+def test_go_back_sentinel_is_falsy_and_readable() -> None:
+    """GO_BACK is falsy so a missed check cannot pass for a real answer."""
+    assert not GO_BACK
+    assert repr(GO_BACK) == "GO_BACK"
+    assert isinstance(GO_BACK, GoBack)
 
 
 def test_multi_select_empty_options_returns_empty_list() -> None:
@@ -185,6 +278,7 @@ def test_multi_select_tty_returns_checked_values() -> None:
         patch("partio.cli.select.sys.stdout.isatty", return_value=True),
         patch("partio.cli.select.questionary.checkbox") as checkbox,
     ):
+        checkbox.return_value.application.key_bindings = KeyBindings()
         checkbox.return_value.ask.return_value = ["audio locate", "library list"]
         result = select_many("Pick", _options(), console=CONSOLE)
 
@@ -202,6 +296,7 @@ def test_multi_select_passes_disabled_reason_through() -> None:
         patch("partio.cli.select.sys.stdout.isatty", return_value=True),
         patch("partio.cli.select.questionary.checkbox") as checkbox,
     ):
+        checkbox.return_value.application.key_bindings = KeyBindings()
         checkbox.return_value.ask.return_value = []
         select_many("Pick", options, console=CONSOLE)
 
@@ -267,6 +362,7 @@ def test_option_without_help_renders_bare_title() -> None:
         patch("partio.cli.select.sys.stdout.isatty", return_value=True),
         patch("partio.cli.select.questionary.select") as select_mock,
     ):
+        select_mock.return_value.application.key_bindings = KeyBindings()
         select_mock.return_value.ask.return_value = "q"
         select_one("Pick", [Option(title="quit", value="q")], console=CONSOLE)
 

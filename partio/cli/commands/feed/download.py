@@ -26,7 +26,7 @@ from partio.cli.commands.feed._store import default_store as feed_store
 from partio.cli.commands.library._store import default_store as library_store
 from partio.cli.output import ExitCode, _json_flag, emit, fail, no_match
 from partio.cli.registry import command
-from partio.cli.select import Option, select_many, select_one
+from partio.cli.select import GoBack, Option, select_many, select_one
 from partio.core.models import DownloadPlan, FeedEpisode  # noqa: TC001
 from partio.core.ports import AudioPathEntry, AudioPathKind, ItemStore
 
@@ -54,23 +54,37 @@ def download(
 ) -> None:
     """Download episodes from a feed and remember them as library sources."""
     as_json = _json_flag(ctx)
-    feed_url = url if url is not None else _pick_feed(as_json=as_json)
-
-    try:
-        with _status(f"Fetching feed {feed_url}", show=not as_json):
-            episodes = fetch_episodes(feed_url)
-    except httpx.HTTPError as exc:
-        fail(exc)
-
-    if not episodes:
-        emit(no_match("feed episodes"), as_json=as_json)
-        raise SystemExit(ExitCode.NO_RESULT)
-
     store = library_store()
-    existing_paths = {entry.path for entry in store.list_items()}
 
-    if count is None:
-        episodes = _pick_episodes(episodes, dest=dest, existing_paths=existing_paths)
+    # Loop so esc in the episode list steps back to the feed picker, rather
+    # than dropping the user out of the command entirely.
+    while True:
+        feed_url = url if url is not None else _pick_feed(as_json=as_json)
+
+        try:
+            with _status(f"Fetching feed {feed_url}", show=not as_json):
+                episodes = fetch_episodes(feed_url)
+        except httpx.HTTPError as exc:
+            fail(exc)
+
+        if not episodes:
+            emit(no_match("feed episodes"), as_json=as_json)
+            raise SystemExit(ExitCode.NO_RESULT)
+
+        existing_paths = {entry.path for entry in store.list_items()}
+        if count is not None:
+            break
+
+        chosen = _pick_episodes(episodes, dest=dest, existing_paths=existing_paths)
+        if isinstance(chosen, GoBack):
+            if url is not None:
+                # An explicit --url means there is no feed picker to return to.
+                emit("Cancelled.", as_json=as_json)
+                raise SystemExit(ExitCode.OK)
+            continue
+        episodes = chosen
+        break
+
     plans = plan_downloads(
         episodes,
         count=count if count is not None else len(episodes),
@@ -96,7 +110,8 @@ def _pick_feed(*, as_json: bool) -> str:
         for entry in feeds
     ]
     chosen = select_one("Pick a feed", options, console=console)
-    if chosen is None:
+    if chosen is None or isinstance(chosen, GoBack):
+        # The feed picker is this command's first screen: esc backs out of it.
         emit("Cancelled.", as_json=as_json)
         raise SystemExit(ExitCode.OK)
     return chosen
@@ -104,8 +119,12 @@ def _pick_feed(*, as_json: bool) -> str:
 
 def _pick_episodes(
     episodes: list[FeedEpisode], *, dest: Path, existing_paths: set[Path]
-) -> list[FeedEpisode]:
-    """Let the user check which episodes to download."""
+) -> list[FeedEpisode] | GoBack:
+    """Let the user check which episodes to download.
+
+    Returns :data:`GO_BACK` when the user pressed esc, so the caller can
+    redisplay the feed picker.
+    """
     options = [
         Option(
             title=episode.title or "(untitled)",

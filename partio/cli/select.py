@@ -1,9 +1,13 @@
-"""Interactive single-choice selection for the CLI.
+"""Interactive selection for the CLI.
 
 Wraps :mod:`questionary` so the user navigates a list with the arrow keys
 instead of typing an index.  When stdin/stdout is not a TTY -- pipes, CI,
 tests -- selection degrades to a numbered Rich prompt so every menu stays
 scriptable.
+
+Every interactive prompt binds ``esc`` to :data:`GO_BACK` via :func:`bind_back`,
+so callers can distinguish "step back one screen" (esc) from "abandon the whole
+command" (ctrl-c, which yields ``None``).
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 import questionary
+from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.styles import Style
 from rich.prompt import Prompt
 
@@ -23,6 +28,50 @@ if TYPE_CHECKING:
     from rich.console import Console
 
 T = TypeVar("T")
+
+
+class GoBack:
+    """Sentinel type for the "step back one screen" answer."""
+
+    def __repr__(self) -> str:
+        return "GO_BACK"
+
+    def __bool__(self) -> bool:
+        """Falsy, so a forgotten ``is GO_BACK`` check cannot read as a real answer."""
+        return False
+
+
+GO_BACK = GoBack()
+"""Returned by any interactive prompt when the user pressed ``esc``."""
+
+
+def bind_back(question: questionary.Question) -> questionary.Question:
+    """Bind ``esc`` on *question* so answering it can yield :data:`GO_BACK`.
+
+    The new binding is *merged* rather than added in place: list prompts expose
+    a mutable ``KeyBindings``, but text-style prompts (text/path/confirm) expose
+    an immutable ``_MergedKeyBindings`` that has no ``add``.  Merging covers
+    both, and putting ours last gives esc priority over any default binding.
+
+    Bound non-eagerly on purpose: ``esc`` also opens the escape sequences that
+    encode arrow keys, so prompt_toolkit must be free to wait a moment and see
+    whether more bytes follow before treating it as a bare keypress.
+    """
+    extra = KeyBindings()
+
+    @extra.add("escape")
+    def _on_escape(event) -> None:  # noqa: ANN001 - prompt_toolkit event object
+        # A second exit() on an application that is already finishing raises,
+        # so ignore repeat presses arriving during teardown.
+        if not event.app.is_done:
+            event.app.exit(result=GO_BACK)
+
+    existing = question.application.key_bindings
+    question.application.key_bindings = (
+        merge_key_bindings([existing, extra]) if existing is not None else extra
+    )
+    return question
+
 
 _STYLE = Style(
     [
@@ -38,8 +87,8 @@ _STYLE = Style(
 )
 
 _HELP_STYLE = "fg:#6c6c6c"
-_INSTRUCTION = "(arrow keys, type to filter, ctrl-c to quit)"
-_MULTI_INSTRUCTION = "(space toggles, a toggles all, enter confirms, ctrl-c to quit)"
+_INSTRUCTION = "(arrow keys, type to filter, esc to go back)"
+_MULTI_INSTRUCTION = "(space toggles, a toggles all, enter confirms, esc to go back)"
 
 # Width taken by the "? " prefix, the title/help gap, and a right-hand safety margin.
 # Answering echoes "? <message> <title>", so that line -- not the pointer row -- is
@@ -75,10 +124,11 @@ def select_one(
     options: Sequence[Option[T]],
     *,
     console: Console,
-) -> T | None:
+) -> T | GoBack | None:
     """Ask the user to choose one of *options*.
 
-    Returns the chosen option's ``value``, or ``None`` if the user cancelled.
+    Returns the chosen option's ``value``, :data:`GO_BACK` if the user pressed
+    esc, or ``None`` if they cancelled outright.
     """
     if not options:
         return None
@@ -87,7 +137,7 @@ def select_one(
     return _numbered_select(message, options, console=console)
 
 
-def _arrow_key_select(message: str, options: Sequence[Option[T]]) -> T | None:
+def _arrow_key_select(message: str, options: Sequence[Option[T]]) -> T | GoBack | None:
     """Render the questionary arrow-key menu."""
     width, help_width = _column_widths(message, options)
     choices: list[questionary.Choice | questionary.Separator] = []
@@ -104,13 +154,15 @@ def _arrow_key_select(message: str, options: Sequence[Option[T]]) -> T | None:
             questionary.Choice(title=_title(option, width, help_width), value=option.value)
         )
 
-    return questionary.select(
-        message,
-        choices=choices,
-        style=_STYLE,
-        instruction=_INSTRUCTION,
-        use_search_filter=True,
-        use_jk_keys=False,
+    return bind_back(
+        questionary.select(
+            message,
+            choices=choices,
+            style=_STYLE,
+            instruction=_INSTRUCTION,
+            use_search_filter=True,
+            use_jk_keys=False,
+        )
     ).ask()
 
 
@@ -119,11 +171,12 @@ def select_many(
     options: Sequence[Option[T]],
     *,
     console: Console,
-) -> list[T] | None:
+) -> list[T] | GoBack | None:
     """Ask the user to check any number of *options*.
 
-    Returns the chosen values in listed order, or ``None`` if the user
-    cancelled.  An empty list means "confirmed, but nothing checked".
+    Returns the chosen values in listed order, :data:`GO_BACK` if the user
+    pressed esc, or ``None`` if they cancelled outright.  An empty list means
+    "confirmed, but nothing checked".
     """
     if not options:
         return []
@@ -132,7 +185,7 @@ def select_many(
     return _numbered_multi_select(message, options, console=console)
 
 
-def _checkbox_select(message: str, options: Sequence[Option[T]]) -> list[T] | None:
+def _checkbox_select(message: str, options: Sequence[Option[T]]) -> list[T] | GoBack | None:
     """Render the questionary checkbox menu."""
     width, help_width = _column_widths(message, options)
     choices = [
@@ -143,13 +196,15 @@ def _checkbox_select(message: str, options: Sequence[Option[T]]) -> list[T] | No
         )
         for option in options
     ]
-    return questionary.checkbox(
-        message,
-        choices=choices,
-        style=_STYLE,
-        instruction=_MULTI_INSTRUCTION,
-        use_search_filter=True,
-        use_jk_keys=False,
+    return bind_back(
+        questionary.checkbox(
+            message,
+            choices=choices,
+            style=_STYLE,
+            instruction=_MULTI_INSTRUCTION,
+            use_search_filter=True,
+            use_jk_keys=False,
+        )
     ).ask()
 
 
@@ -254,4 +309,4 @@ def _numbered_select(
     return options[int(choice) - 1].value
 
 
-__all__ = ["Option", "select_many", "select_one"]
+__all__ = ["GO_BACK", "GoBack", "Option", "bind_back", "select_many", "select_one"]

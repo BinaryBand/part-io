@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from partio.cli.registry import CommandEntry, discover
-from partio.cli.select import Option, select_one
+from partio.cli.select import GoBack, Option, select_one
 
 app = typer.Typer(add_completion=False, invoke_without_command=True, rich_markup_mode="rich")
 console = Console()
@@ -62,7 +62,11 @@ def _label_for(entry: CommandEntry) -> str:
 
 
 def _show_picker() -> None:
-    """Display the arrow-key command menu and dispatch the choice."""
+    """Display the arrow-key command menu and dispatch the choice.
+
+    Loops rather than running once: pressing esc during the argument
+    walkthrough steps back out to this menu instead of abandoning the session.
+    """
     commands = discover()
 
     console.print(Panel("[bold]partio[/bold] -- audio tooling CLI", style="cyan", expand=False))
@@ -72,20 +76,28 @@ def _show_picker() -> None:
         for entry in commands
     ]
     options.append(Option(title="quit", value=_QUIT, help="Exit partio."))
+    labels = [_label_for(entry) for entry in commands]
 
-    selected = select_one("Pick a command", options, console=console)
-    if selected is None or selected == _QUIT:
-        raise typer.Exit(code=0)
-
-    # Re-invoke the app with the chosen subcommand, walking through required
-    # args when the picker is used (non-interactive fallback via prompt= on
-    # each Option still works for direct terminal invocation).
+    # Imported here so the picker only pays for prompting when it is used.
     from partio.cli.prompting import prompt_for_args
 
-    labels = [_label_for(entry) for entry in commands]
-    entry = commands[labels.index(selected)]
-    extra_args = prompt_for_args(entry)
-    app(selected.split() + extra_args, standalone_mode=False)
+    while True:
+        selected = select_one("Pick a command", options, console=console)
+        if selected is None or isinstance(selected, GoBack) or selected == _QUIT:
+            # Nothing to go back to at the top level, so esc quits like ctrl-c.
+            raise typer.Exit(code=0)
+
+        entry = commands[labels.index(selected)]
+        extra_args = prompt_for_args(entry)
+        if isinstance(extra_args, GoBack):
+            continue
+        if extra_args is None:
+            raise typer.Exit(code=0)
+
+        # Re-invoke the app with the chosen subcommand (the prompt= fallback on
+        # each Option still covers direct terminal invocation).
+        app(selected.split() + extra_args, standalone_mode=False)
+        return
 
 
 # -- callback (runs on every invocation) ------------------------------------

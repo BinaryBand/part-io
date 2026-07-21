@@ -47,6 +47,12 @@ def _fake_download(monkeypatch):
     return calls
 
 
+def _sequence(values):
+    """A picker stub answering with *values* in order across calls."""
+    remaining = list(values)
+    return lambda *_a, **_k: remaining.pop(0)
+
+
 def _fake_episodes(monkeypatch, episodes):
     monkeypatch.setattr(feed_download, "fetch_episodes", lambda _url: episodes)
 
@@ -243,3 +249,61 @@ def test_download_dest_defaults_under_static() -> None:
 
     default = inspect.signature(feed_download.download).parameters["dest"].default
     assert default == Path("static") / "downloads"
+
+
+# -- esc / go back -----------------------------------------------------------
+
+
+def test_esc_in_the_episode_picker_returns_to_the_feed_picker(monkeypatch, tmp_path):
+    """GO_BACK from the episode list re-opens the feed picker instead of exiting."""
+    from partio.cli.select import GO_BACK
+
+    store = feed_store_module.default_store()
+    store.add_item(FeedEntry(id="f1", url="https://a", label="Show A"))
+    store.add_item(FeedEntry(id="f2", url="https://b", label="Show B"))
+
+    episodes = [_episode("Ep 1")]
+    fetched: list[str] = []
+
+    def _fetch(url):
+        fetched.append(url)
+        return episodes
+
+    monkeypatch.setattr(feed_download, "fetch_episodes", _fetch)
+    _fake_download(monkeypatch)
+    # First feed picked -> esc out of the episodes -> pick the second feed -> confirm.
+    monkeypatch.setattr(feed_download, "select_one", _sequence(["https://a", "https://b"]))
+    monkeypatch.setattr(feed_download, "select_many", _sequence([GO_BACK, episodes]))
+
+    feed_download.download(ctx=None, dest=tmp_path / "dl")
+
+    assert fetched == ["https://a", "https://b"]
+    assert [e.label for e in library_store_module.default_store().list_items()] == ["Ep 1"]
+
+
+def test_esc_in_the_episode_picker_with_explicit_url_exits(monkeypatch, tmp_path):
+    """With --url there is no feed picker to return to, so esc backs out cleanly."""
+    from partio.cli.select import GO_BACK
+
+    _fake_episodes(monkeypatch, [_episode("Ep 1")])
+    downloads = _fake_download(monkeypatch)
+    monkeypatch.setattr(feed_download, "select_many", _sequence([GO_BACK]))
+
+    with pytest.raises(SystemExit) as exc_info:
+        feed_download.download(ctx=None, url="https://feed", dest=tmp_path / "dl")
+
+    assert exc_info.value.code == ExitCode.OK
+    assert downloads == []
+
+
+def test_esc_in_the_feed_picker_exits_cleanly(monkeypatch, tmp_path):
+    """The feed picker is the command's first screen, so esc backs out of it."""
+    from partio.cli.select import GO_BACK
+
+    feed_store_module.default_store().add_item(FeedEntry(id="f1", url="https://a", label="Show A"))
+    monkeypatch.setattr(feed_download, "select_one", _sequence([GO_BACK]))
+
+    with pytest.raises(SystemExit) as exc_info:
+        feed_download.download(ctx=None, dest=tmp_path / "dl")
+
+    assert exc_info.value.code == ExitCode.OK
