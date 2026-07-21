@@ -17,7 +17,7 @@ import typer
 from partio.adapters.audio.clips import extract_audio_clip
 from partio.adapters.audio.matcher import AudioMatch, find_audio_sample_matches
 from partio.cli.commands.audio._auditor import build_interactive_auditor
-from partio.cli.output import _json_flag, bundle_summary, emit, fail
+from partio.cli.output import ExitCode, _json_flag, bundle_summary, emit, fail
 from partio.cli.registry import command
 
 if TYPE_CHECKING:
@@ -271,6 +271,9 @@ def review(
         )
     except (FileNotFoundError, ValueError) as exc:
         fail(exc)
+    except KeyboardInterrupt:
+        emit("Cancelled.", as_json=_json_flag(ctx))
+        raise SystemExit(ExitCode.OK) from None
 
     emit(
         bundle_summary(

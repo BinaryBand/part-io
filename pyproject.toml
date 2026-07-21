@@ -133,6 +133,10 @@ exhaustive_ignores = ["__main__"]
 [tool.vulture]
 paths = ["partio", "tests"]
 ignore_names = [
+    # Key handlers registered via decorator; vulture cannot see the reference.
+    "_on_*",
+    # Mock configuration attribute, always "written but never read" to vulture.
+    "side_effect",
     "hello",
     "model_config",
     "validate_*",

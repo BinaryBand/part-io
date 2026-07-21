@@ -137,7 +137,9 @@ def bootstrap(
     try:
         if not source.exists():
             raise FileNotFoundError(f"Source not found: {source}")  # noqa: TRY301
-        auditor = build_interactive_auditor(source_path=source)
+        auditor = build_interactive_auditor(
+            source_path=source, region_start=region_start, region_end=region_end
+        )
     except (FileNotFoundError, ValueError) as exc:
         fail(exc)
 
@@ -149,14 +151,18 @@ def bootstrap(
         resolution=resolution,
     )
 
-    if max_occurrences == 1:
-        _bootstrap_single(ctx=ctx, source=source, output=output, auditor=auditor, **tuning)
-    else:
-        _bootstrap_multi(
-            ctx=ctx,
-            source=source,
-            output=output,
-            max_occurrences=max_occurrences,
-            auditor=auditor,
-            **tuning,
-        )
+    try:
+        if max_occurrences == 1:
+            _bootstrap_single(ctx=ctx, source=source, output=output, auditor=auditor, **tuning)
+        else:
+            _bootstrap_multi(
+                ctx=ctx,
+                source=source,
+                output=output,
+                max_occurrences=max_occurrences,
+                auditor=auditor,
+                **tuning,
+            )
+    except KeyboardInterrupt:
+        emit("Cancelled.", as_json=_json_flag(ctx))
+        raise SystemExit(ExitCode.OK) from None
