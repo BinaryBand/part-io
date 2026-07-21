@@ -13,13 +13,15 @@ class FeedEpisode:
 
     *audio_url* is the enclosure URL to download; *guid* uniquely identifies the
     episode within its feed; *published* is the publication time when the feed
-    provides one.
+    provides one; *size_bytes* is the enclosure's declared length, when it
+    declares one.
     """
 
     title: str
     audio_url: str
     guid: str
     published: datetime | None
+    size_bytes: int | None = None
 
 
 @dataclass(frozen=True)

@@ -27,6 +27,15 @@ class AudioPathEntry:
     kind: AudioPathKind
 
 
+@dataclass(frozen=True)
+class FeedEntry:
+    """A remembered podcast feed, addressed by its RSS/Atom *url*."""
+
+    id: str
+    url: str
+    label: str
+
+
 class ItemStore(Protocol[T]):
     """CRUD protocol for a collection of remembered items."""
 
@@ -47,4 +56,4 @@ class ItemStore(Protocol[T]):
         ...
 
 
-__all__ = ["AudioPathEntry", "AudioPathKind", "ItemStore"]
+__all__ = ["AudioPathEntry", "AudioPathKind", "FeedEntry", "ItemStore"]

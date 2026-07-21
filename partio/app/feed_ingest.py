@@ -13,6 +13,15 @@ if TYPE_CHECKING:
     from partio.core.models import FeedEpisode
 
 
+def destination_for(episode: FeedEpisode, *, dest_dir: Path) -> Path:
+    """Return where *episode* would land inside *dest_dir*.
+
+    Exposed so callers can tell which episodes are already in the library
+    before planning anything.
+    """
+    return dest_dir / f"{slugify(episode.title)}.mp3"
+
+
 def plan_downloads(
     episodes: list[FeedEpisode],
     *,
@@ -31,7 +40,7 @@ def plan_downloads(
     for episode in episodes:
         if len(plans) >= count:
             break
-        destination_path = dest_dir / f"{slugify(episode.title)}.mp3"
+        destination_path = destination_for(episode, dest_dir=dest_dir)
         if destination_path in existing_paths:
             continue
         plans.append(
@@ -44,4 +53,4 @@ def plan_downloads(
     return plans
 
 
-__all__ = ["plan_downloads"]
+__all__ = ["destination_for", "plan_downloads"]

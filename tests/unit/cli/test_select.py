@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
 
 from rich.console import Console
 
-from partio.cli.select import Option, select_one
+from partio.cli.select import Option, select_many, select_one
 
 CONSOLE = Console()
 
@@ -123,6 +124,140 @@ def test_tty_titles_carry_dimmed_help() -> None:
 
     assert title[0][1].startswith("bootstrap")
     assert "Locate a jingle." in title[1][1]
+
+
+def test_long_titles_do_not_starve_the_metadata_column() -> None:
+    """A very long title is clipped so its date/size metadata still renders."""
+    options = [
+        Option(
+            title="Zohran Mamdani Knows He Has Political Capital. And He Intends to Spend It.",
+            value="a",
+            help="2026-07-19   38.8 MB",
+        )
+    ]
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=True),
+        patch("partio.cli.select.sys.stdout.isatty", return_value=True),
+        patch(
+            "partio.cli.select.shutil.get_terminal_size",
+            return_value=os.terminal_size((110, 24)),
+        ),
+        patch("partio.cli.select.questionary.checkbox") as checkbox,
+    ):
+        checkbox.return_value.ask.return_value = []
+        select_many("Select episodes to download", options, console=CONSOLE)
+
+    title = checkbox.call_args.kwargs["choices"][0].title
+    assert title[0][1].rstrip().endswith("...")  # title clipped
+    assert "2026-07-19   38.8 MB" in title[1][1]  # metadata intact
+    assert len("".join(text for _style, text in title)) <= 110
+
+
+def test_short_rows_keep_their_full_help() -> None:
+    """When everything fits, neither column is truncated."""
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=True),
+        patch("partio.cli.select.sys.stdout.isatty", return_value=True),
+        patch(
+            "partio.cli.select.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 24)),
+        ),
+        patch("partio.cli.select.questionary.select") as select_mock,
+    ):
+        select_mock.return_value.ask.return_value = "audio bootstrap"
+        select_one("Pick a command", _options(), console=CONSOLE)
+
+    title = select_mock.call_args.kwargs["choices"][1].title
+    assert title[0][1].startswith("bootstrap")
+    assert "Locate a jingle." in title[1][1]
+    assert "..." not in title[1][1]
+
+
+def test_multi_select_empty_options_returns_empty_list() -> None:
+    """Nothing to check yields an empty selection, not None (which means cancelled)."""
+    assert select_many("Pick", [], console=CONSOLE) == []
+
+
+def test_multi_select_tty_returns_checked_values() -> None:
+    """On a TTY the questionary checkbox drives the selection."""
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=True),
+        patch("partio.cli.select.sys.stdout.isatty", return_value=True),
+        patch("partio.cli.select.questionary.checkbox") as checkbox,
+    ):
+        checkbox.return_value.ask.return_value = ["audio locate", "library list"]
+        result = select_many("Pick", _options(), console=CONSOLE)
+
+    assert result == ["audio locate", "library list"]
+
+
+def test_multi_select_passes_disabled_reason_through() -> None:
+    """A disabled option reaches questionary with its reason attached."""
+    options = [
+        Option(title="new", value="a"),
+        Option(title="done", value="b", disabled="already in library"),
+    ]
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=True),
+        patch("partio.cli.select.sys.stdout.isatty", return_value=True),
+        patch("partio.cli.select.questionary.checkbox") as checkbox,
+    ):
+        checkbox.return_value.ask.return_value = []
+        select_many("Pick", options, console=CONSOLE)
+
+    choices = checkbox.call_args.kwargs["choices"]
+    assert choices[0].disabled is None
+    assert choices[1].disabled == "already in library"
+
+
+def test_multi_select_fallback_parses_comma_separated_indexes() -> None:
+    """Outside a TTY, comma-separated numbers select the matching rows."""
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=False),
+        patch("partio.cli.select.Prompt.ask", return_value="1, 3"),
+        patch("rich.console.Console.print"),
+    ):
+        result = select_many("Pick", _options(), console=CONSOLE)
+
+    assert result == ["audio bootstrap", "library list"]
+
+
+def test_multi_select_fallback_ignores_junk_and_out_of_range() -> None:
+    """Non-numeric or out-of-range tokens are skipped rather than raising."""
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=False),
+        patch("partio.cli.select.Prompt.ask", return_value="2, nope, 99, "),
+        patch("rich.console.Console.print"),
+    ):
+        result = select_many("Pick", _options(), console=CONSOLE)
+
+    assert result == ["audio locate"]
+
+
+def test_multi_select_fallback_refuses_disabled_rows() -> None:
+    """A disabled row cannot be selected by index in the fallback either."""
+    options = [
+        Option(title="new", value="a"),
+        Option(title="done", value="b", disabled="already in library"),
+    ]
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=False),
+        patch("partio.cli.select.Prompt.ask", return_value="1,2"),
+        patch("rich.console.Console.print"),
+    ):
+        result = select_many("Pick", options, console=CONSOLE)
+
+    assert result == ["a"]
+
+
+def test_multi_select_fallback_cancel_returns_none() -> None:
+    """Ctrl-C at the fallback prompt cancels rather than selecting nothing."""
+    with (
+        patch("partio.cli.select.sys.stdin.isatty", return_value=False),
+        patch("partio.cli.select.Prompt.ask", side_effect=KeyboardInterrupt),
+        patch("rich.console.Console.print"),
+    ):
+        assert select_many("Pick", _options(), console=CONSOLE) is None
 
 
 def test_option_without_help_renders_bare_title() -> None:

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import shutil
 import sys
-import textwrap
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
 
@@ -40,13 +39,18 @@ _STYLE = Style(
 
 _HELP_STYLE = "fg:#6c6c6c"
 _INSTRUCTION = "(arrow keys, type to filter, ctrl-c to quit)"
+_MULTI_INSTRUCTION = "(space toggles, a toggles all, enter confirms, ctrl-c to quit)"
 
 # Width taken by the "? " prefix, the title/help gap, and a right-hand safety margin.
 # Answering echoes "? <message> <title>", so that line -- not the pointer row -- is
 # the widest thing rendered and the one the help must be sized against.
 _ROW_CHROME = 8
-# Never squeeze help below this, even in a very narrow terminal -- drop it instead.
-_MIN_HELP_WIDTH = 16
+# Gap between the title column and the help column.
+_GAP = 3
+# A long title must never squeeze the metadata column out entirely; reserve at
+# least enough for "YYYY-MM-DD   999.9 MB", the widest metadata we render.
+_MIN_HELP_WIDTH = 22
+_MIN_TITLE_WIDTH = 20
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,8 @@ class Option(Generic[T]):
     value: T
     help: str = ""
     group: str | None = None
+    disabled: str | None = None
+    """Reason this row cannot be picked; ``None`` means selectable."""
 
 
 def select_one(
@@ -83,8 +89,7 @@ def select_one(
 
 def _arrow_key_select(message: str, options: Sequence[Option[T]]) -> T | None:
     """Render the questionary arrow-key menu."""
-    width = max(len(option.title) for option in options)
-    help_width = shutil.get_terminal_size().columns - width - len(message) - _ROW_CHROME
+    width, help_width = _column_widths(message, options)
     choices: list[questionary.Choice | questionary.Separator] = []
     last_group: str | None = None
 
@@ -109,16 +114,114 @@ def _arrow_key_select(message: str, options: Sequence[Option[T]]) -> T | None:
     ).ask()
 
 
+def select_many(
+    message: str,
+    options: Sequence[Option[T]],
+    *,
+    console: Console,
+) -> list[T] | None:
+    """Ask the user to check any number of *options*.
+
+    Returns the chosen values in listed order, or ``None`` if the user
+    cancelled.  An empty list means "confirmed, but nothing checked".
+    """
+    if not options:
+        return []
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        return _checkbox_select(message, options)
+    return _numbered_multi_select(message, options, console=console)
+
+
+def _checkbox_select(message: str, options: Sequence[Option[T]]) -> list[T] | None:
+    """Render the questionary checkbox menu."""
+    width, help_width = _column_widths(message, options)
+    choices = [
+        questionary.Choice(
+            title=_title(option, width, help_width),
+            value=option.value,
+            disabled=option.disabled,
+        )
+        for option in options
+    ]
+    return questionary.checkbox(
+        message,
+        choices=choices,
+        style=_STYLE,
+        instruction=_MULTI_INSTRUCTION,
+        use_search_filter=True,
+        use_jk_keys=False,
+    ).ask()
+
+
+def _numbered_multi_select(
+    message: str,
+    options: Sequence[Option[T]],
+    *,
+    console: Console,
+) -> list[T] | None:
+    """Non-TTY fallback: print a numbered list and read comma-separated indexes."""
+    selectable = [option for option in options if option.disabled is None]
+    for index, option in enumerate(options, start=1):
+        label = f"  [bold]{index}[/bold]. [green]{option.title}[/green]"
+        if option.disabled is not None:
+            label = f"  [dim]{index}. {option.title} ({option.disabled})[/dim]"
+        suffix = f"  -- {option.help}" if option.help else ""
+        console.print(f"{label}{suffix}")
+    console.print()
+
+    try:
+        raw = Prompt.ask(f"{message} (comma-separated numbers)", console=console, default="")
+    except (KeyboardInterrupt, EOFError):
+        return None
+
+    chosen: list[T] = []
+    for token in raw.split(","):
+        stripped = token.strip()
+        if not stripped.isdigit():
+            continue
+        position = int(stripped) - 1
+        if 0 <= position < len(options) and options[position] in selectable:
+            chosen.append(options[position].value)
+    return chosen
+
+
+def _column_widths(message: str, options: Sequence[Option[T]]) -> tuple[int, int]:
+    """Split the usable row width into ``(title_width, help_width)``.
+
+    Both columns shrink to fit the terminal, but a long title is capped before
+    the help column is starved -- otherwise episode titles would push their
+    date/size metadata off the row entirely.
+    """
+    longest_title = max(len(option.title) for option in options)
+    available = shutil.get_terminal_size().columns - len(message) - _ROW_CHROME
+    if not any(option.help for option in options):
+        return min(longest_title, max(_MIN_TITLE_WIDTH, available)), 0
+    title_width = min(longest_title, max(_MIN_TITLE_WIDTH, available - _GAP - _MIN_HELP_WIDTH))
+    return title_width, max(0, available - title_width - _GAP)
+
+
+def _clip(text: str, width: int) -> str:
+    """Hard-truncate *text* to *width*, marking the cut with an ellipsis."""
+    if len(text) <= width:
+        return text
+    return text[: max(1, width - 3)] + "..."
+
+
 def _title(option: Option[T], width: int, help_width: int) -> list[tuple[str, str]]:
     """Build the prompt_toolkit formatted title: name + dimmed help.
 
-    The help is shortened to *help_width* so each row stays on one line -- a
-    wrapped row also wraps the echoed answer once the choice is made.
+    Both columns are clipped so each row stays on one line -- a wrapped row
+    also wraps the echoed answer once the choice is made.  Clipping is done by
+    hand rather than with :func:`textwrap.shorten`, which collapses runs of
+    spaces and would break the aligned ``date   size`` metadata column.
     """
-    if not option.help or help_width < _MIN_HELP_WIDTH:
-        return [("", option.title)]
-    help_text = textwrap.shorten(option.help, width=help_width, placeholder="...")
-    return [("", option.title.ljust(width)), (_HELP_STYLE, f"   {help_text}")]
+    title = _clip(option.title, width)
+    if not option.help or help_width <= 0:
+        return [("", title)]
+    return [
+        ("", title.ljust(width)),
+        (_HELP_STYLE, f"{' ' * _GAP}{_clip(option.help, help_width)}"),
+    ]
 
 
 def _numbered_select(
@@ -151,4 +254,4 @@ def _numbered_select(
     return options[int(choice) - 1].value
 
 
-__all__ = ["Option", "select_one"]
+__all__ = ["Option", "select_many", "select_one"]
