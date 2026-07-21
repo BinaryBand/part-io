@@ -10,12 +10,9 @@ from __future__ import annotations
 
 import subprocess
 import time
-from typing import TYPE_CHECKING
+from pathlib import Path
 
-from partio.utils.exec import resolve_executable
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from partio.adapters.process.runner import resolve_executable
 
 _STOP_TIMEOUT_SECONDS = 2.0
 

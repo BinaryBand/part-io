@@ -6,7 +6,7 @@ track: whichever the user picked.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import httpx
 from rich.console import Console
@@ -22,12 +22,8 @@ from rich.progress import (
 
 from partio.adapters.feed import download_file
 from partio.cli.library._cache import remember
+from partio.cli.library._tracks import Track
 from partio.core.ports import AudioPathKind
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from partio.cli.library._tracks import Track
 
 # Progress is drawn on stderr so it never mingles with --json output on stdout.
 console = Console(stderr=True)

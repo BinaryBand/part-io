@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable  # noqa: TC003
-from pathlib import Path  # noqa: TC003
+from collections.abc import Callable
+from pathlib import Path
 from typing import Generic, TypeVar
 
 T = TypeVar("T")

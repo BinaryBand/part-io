@@ -1,0 +1,30 @@
+id: no-io-in-cli-commands
+language: python
+severity: error
+message: "CLI command functions must not perform I/O directly — delegate to adapters."
+note: >
+  The cli layer is the composition root: commands parse arguments, construct
+  adapters, and pass them into core use-case functions. Raw I/O calls (open(),
+  subprocess, HTTP clients, socket, os-level filesystem operations) belong in
+  the adapters layer. If a command needs I/O, define a Protocol port in
+  core/ports.py, implement it in adapters/, and pass the adapter into the
+  command's use-case function.
+rule:
+  all:
+    - kind: call
+      any:
+        - has:
+            field: function
+            regex: '^open$'
+        - has:
+            field: function
+            regex: '^(subprocess|requests|httpx|socket|os)\.[a-zA-Z_]\w*$'
+    - inside:
+        kind: function_definition
+        stopBy: end
+files:
+  # Anchored to the project package (not a floating **/cli/**) so this only
+  # ever scans real CLI command code -- not tests/unit/cli/**, where mocking
+  # os.terminal_size or raising a stubbed httpx.ConnectError is normal test
+  # setup, not production I/O.
+  - 'partio/cli/**'

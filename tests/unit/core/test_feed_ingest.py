@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from partio.app.feed_ingest import destination_for
+from partio.core.feed_ingest import destination_for
 from partio.core.models import FeedEpisode
 
 

@@ -4,7 +4,7 @@ partio finds and extracts recurring jingles/stingers inside long episode recordi
 
 ## 1. Install
 
-Requirements: Python 3.11+, uv, ffmpeg on `PATH`, and Node.js (only needed for the `npx`-based duplicate-code check in the test suite).
+Requirements: Python 3.11+, uv, and ffmpeg on `PATH`.
 
 ```bash
 uv sync --all-groups

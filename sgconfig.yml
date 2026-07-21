@@ -1,2 +1,2 @@
 ruleDirs:
-  - static/rules/ast-grep
+  - static/rules

@@ -1,0 +1,34 @@
+id: no-guarded-imports
+language: python
+severity: error
+message: "Import directly and let failures propagate -- do not guard imports with try/except."
+note: >
+  Guarding an import with try/except hides missing dependencies and causes
+  confusing AttributeErrors later instead of a clear ImportError at startup.
+  Declare the dependency in pyproject.toml instead.
+rule:
+  # Any import statement (plain or from-import), anywhere inside a try_statement
+  # that HAS an except clause -- try body, except, else, or finally. A single
+  # structural rule instead of enumerating exact try-body shapes, so extra
+  # imports, multi-name imports, and fallback imports in the except block all
+  # get caught.
+  #
+  # The `has: except_clause` guard is what makes this rule mean what its message
+  # says. A try/finally swallows nothing -- an ImportError propagates exactly as
+  # it would unguarded -- so it is cleanup, not a guarded import. Without this
+  # guard the rule fires on the legitimate pattern of importing something that
+  # requires setup, with `finally` undoing that setup: e.g. appending a
+  # generated-code directory to sys.path, importing from it, and removing it
+  # again. The fix the rule would demand there (hoist the import out of the try)
+  # leaks the setup on failure -- strictly worse code, demanded by a rule aiming
+  # at something else.
+  all:
+    - any:
+        - kind: import_statement
+        - kind: import_from_statement
+    - inside:
+        kind: try_statement
+        stopBy: end
+        has:
+          kind: except_clause
+          stopBy: end

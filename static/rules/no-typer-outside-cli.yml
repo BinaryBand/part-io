@@ -1,0 +1,19 @@
+id: no-typer-outside-cli
+language: python
+severity: error
+message: "Import typer only from the cli layer — move this import to a cli/ module."
+note: >
+  Typer is the sanctioned CLI framework and may only be imported inside the
+  cli/ package (the composition root). Other layers must not depend on it.
+  If you need to format output in core or adapters, return structured data
+  and let cli format it.
+rule:
+  any:
+    - kind: import_statement
+      has:
+        kind: dotted_name
+        regex: '^typer($|\.)'
+    - kind: import_from_statement
+      regex: '^from\s+typer\s'
+ignores:
+  - '**/cli/**'

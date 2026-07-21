@@ -1,0 +1,17 @@
+id: no-type-checking-guard
+language: python
+severity: error
+message: "Do not guard code with `if TYPE_CHECKING:` -- import directly and let ty resolve it."
+note: >
+  Deferring imports (or any code) to an `if TYPE_CHECKING:` branch hides the
+  dependency from anything that isn't a type checker and splits the module's
+  real imports across two places. Import directly at module level instead.
+rule:
+  kind: if_statement
+  has:
+    field: condition
+    any:
+      - kind: identifier
+        regex: ^TYPE_CHECKING$
+      - kind: attribute
+        regex: \.TYPE_CHECKING$

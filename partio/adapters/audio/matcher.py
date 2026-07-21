@@ -22,7 +22,7 @@ import itertools
 from array import array
 from dataclasses import dataclass
 from functools import cache
-from pathlib import Path  # noqa: TC003
+from pathlib import Path
 
 import numpy as np
 

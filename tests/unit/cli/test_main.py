@@ -109,7 +109,7 @@ def test_esc_during_arg_walkthrough_redisplays_the_menu() -> None:
             "partio.cli.main.select_one",
             side_effect=["audio bootstrap", "feed list", _QUIT],
         ) as pick,
-        patch("partio.cli.prompting.prompt_for_args", side_effect=[GO_BACK, []]) as walk,
+        patch("partio.cli.main.prompt_for_args", side_effect=[GO_BACK, []]) as walk,
         patch("partio.cli.main.app") as app_mock,
         patch("partio.cli.main.Console.print"),
         pytest.raises(typer_mod.Exit),
@@ -127,7 +127,7 @@ def test_finished_command_returns_to_the_menu() -> None:
     """A command that runs to completion reopens the menu instead of exiting."""
     with (
         patch("partio.cli.main.select_one", side_effect=["feed list", "feed list", _QUIT]) as pick,
-        patch("partio.cli.prompting.prompt_for_args", return_value=[]),
+        patch("partio.cli.main.prompt_for_args", return_value=[]),
         patch("partio.cli.main.app") as app_mock,
         patch("partio.cli.main.Console.print"),
         pytest.raises(typer_mod.Exit),
@@ -142,7 +142,7 @@ def test_command_that_exits_returns_to_the_menu() -> None:
     """SystemExit from a command (output.fail, "nothing to do") is not fatal."""
     with (
         patch("partio.cli.main.select_one", side_effect=["feed list", _QUIT]) as pick,
-        patch("partio.cli.prompting.prompt_for_args", return_value=[]),
+        patch("partio.cli.main.prompt_for_args", return_value=[]),
         patch("partio.cli.main.app", side_effect=SystemExit(ExitCode.USER_ERROR)) as app_mock,
         patch("partio.cli.main.Console.print"),
         pytest.raises(typer_mod.Exit),
@@ -157,7 +157,7 @@ def test_ctrl_c_inside_a_command_still_stops_partio() -> None:
     """Abort is the one interrupt the menu loop does not swallow."""
     with (
         patch("partio.cli.main.select_one", return_value="feed list"),
-        patch("partio.cli.prompting.prompt_for_args", return_value=[]),
+        patch("partio.cli.main.prompt_for_args", return_value=[]),
         patch("partio.cli.main.app", side_effect=typer_mod.Abort()),
         patch("partio.cli.main.Console.print"),
         pytest.raises(typer_mod.Abort),
@@ -179,7 +179,7 @@ def test_cancelling_the_walkthrough_quits() -> None:
     """ctrl-c during the walkthrough exits rather than looping forever."""
     with (
         patch("partio.cli.main.select_one", return_value="audio bootstrap"),
-        patch("partio.cli.prompting.prompt_for_args", return_value=None),
+        patch("partio.cli.main.prompt_for_args", return_value=None),
         patch("partio.cli.main.Console.print"),
         pytest.raises(typer_mod.Exit),
     ):

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "partio"
 TESTS = ROOT / "tests"
 # The mirrored, per-layer unit tests live under tests/unit/, leaving the rest of
-# tests/ (e.g. tests/infrastructure/, tests/integration/) free for test
+# tests/ (e.g. tests/architecture/, tests/integration/) free for test
 # categories the mirror check does not police.
 UNIT_TESTS = TESTS / "unit"
 
@@ -73,6 +73,7 @@ def test_astgrep() -> None:
 
     Installed via the `ast-grep-cli` dev dependency (declared in
     pyproject.toml), which provides both the `ast-grep` and `sg` binaries.
+    Rules live under static/rules/, one file per rule.
     """
     result = _run(["ast-grep", "scan", "--config", str(ROOT / "sgconfig.yml"), str(ROOT)])
     assert result.returncode == 0, (
@@ -117,8 +118,8 @@ def test_tests_mirror_package() -> None:
     requires ``tests/unit/<path>/test_<name>.py`` (a package ``__init__.py`` maps
     to ``test_<dir>.py``). Pure namespace shells (no top-level def/class) and the
     entries in MIRROR_EXEMPT are skipped, so a test is required only once a
-    module actually carries logic. Other tests/ subtrees (integration,
-    infrastructure, ...) are free-form and not checked here.
+    module actually carries logic. Other tests/ subtrees (architecture,
+    integration, ...) are free-form and not checked here.
     """
     offenders: list[str] = []
     for path in sorted(PACKAGE.rglob("*.py")):

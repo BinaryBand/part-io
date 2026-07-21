@@ -7,23 +7,48 @@ import pytest
 from partio.cli.library import _cache as cache_module
 from partio.cli.library import _feeds as feeds_module
 from partio.cli.library import refresh
-from partio.utils.coverage import cleanup_coverage_temp_files
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = REPO_ROOT / "static"
 
 
+def _cleanup_coverage_temp_files(root: Path | None = None) -> int:
+    """Delete top-level ``.coverage.*`` files from *root* and return count.
+
+    This intentionally avoids recursive traversal to prevent runaway cleanup
+    behavior in large workspaces.
+    """
+    workspace_root = root or Path.cwd()
+    removed = 0
+
+    for candidate in workspace_root.iterdir():
+        if not candidate.name.startswith(".coverage."):
+            continue
+
+        # Only remove files/symlinks; never recurse into directories.
+        if not (candidate.is_file() or candidate.is_symlink()):
+            continue
+
+        try:
+            candidate.unlink()
+            removed += 1
+        except OSError:
+            continue
+
+    return removed
+
+
 def pytest_sessionstart(session):
     """Remove stale coverage temp files before tests start."""
     _ = session
-    cleanup_coverage_temp_files()
+    _cleanup_coverage_temp_files()
 
 
 def pytest_sessionfinish(session, exitstatus):
     """Clean up coverage temp files after test session completes."""
     _ = session
     _ = exitstatus
-    cleanup_coverage_temp_files()
+    _cleanup_coverage_temp_files()
 
 
 @pytest.fixture(autouse=True)

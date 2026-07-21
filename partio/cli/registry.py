@@ -15,6 +15,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from partio.cli import commands
+
 
 @dataclass(frozen=True)
 class CommandEntry:
@@ -70,8 +72,6 @@ def discover() -> list[CommandEntry]:
     ``no-guarded-imports`` ast-grep rule).  A missing or broken command
     module fails loudly at startup.
     """
-    from partio.cli import commands
-
     for info in pkgutil.walk_packages(commands.__path__, f"{commands.__name__}."):
         importlib.import_module(info.name)
     return get_commands()

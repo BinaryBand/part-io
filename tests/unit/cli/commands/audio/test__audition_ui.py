@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from partio.cli.commands.audio import _audition_ui
 from partio.cli.commands.audio._audition_ui import AnsweredSpan, _Playback, _screen, run_audition
+from partio.cli.commands.audio._section_bar import GLYPH_CLIP, GLYPH_NO, GLYPH_PLAYHEAD
 
 CLIP_START = 30.0
 CLIP_DURATION = 10.0
@@ -198,8 +199,6 @@ def test_screen_fits_the_terminal_width() -> None:
 
 def test_screen_aligns_the_playhead_with_the_bar() -> None:
     """The playhead marker sits in the same column as the clip it points at."""
-    from partio.cli.commands.audio._section_bar import GLYPH_CLIP, GLYPH_PLAYHEAD
-
     with patch.object(
         _audition_ui.shutil, "get_terminal_size", return_value=os.terminal_size((100, 24))
     ):
@@ -215,8 +214,6 @@ def test_screen_aligns_the_playhead_with_the_bar() -> None:
 
 def test_screen_renders_answered_history() -> None:
     """Previously answered spans appear as shading on the bar."""
-    from partio.cli.commands.audio._section_bar import GLYPH_NO
-
     text = _screen_text(answered=[AnsweredSpan(start=0.0, end=20.0, answer=False)])
 
     assert GLYPH_NO in text

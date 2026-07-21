@@ -15,8 +15,6 @@ PRINT_ALLOWED_PATHS = {
 CORE_DIRS = [
     ROOT / "partio" / "adapters",
     ROOT / "partio" / "core",
-    ROOT / "partio" / "app",
-    ROOT / "partio" / "lib",
 ]
 
 

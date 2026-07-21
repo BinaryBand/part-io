@@ -11,18 +11,15 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import httpx
 
 from partio.adapters.feed import fetch_feed_content, parse_feed
-from partio.app.feed_ingest import destination_for
 from partio.cli.library._cache import cached
 from partio.cli.library._feeds import feeds
+from partio.core.feed_ingest import destination_for
+from partio.core.models import FeedEpisode
 from partio.core.ports import AudioPathKind
-
-if TYPE_CHECKING:
-    from partio.core.models import FeedEpisode
 
 DOWNLOAD_DIR = Path("static") / "downloads"
 

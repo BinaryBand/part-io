@@ -14,18 +14,15 @@ from __future__ import annotations
 
 import shutil
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import Generic, TypeVar
 
 import questionary
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.styles import Style
+from rich.console import Console
 from rich.prompt import Prompt
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from rich.console import Console
 
 T = TypeVar("T")
 
@@ -34,6 +31,7 @@ class GoBack:
     """Sentinel type for the "step back one screen" answer."""
 
     def __repr__(self) -> str:
+        """Render as GO_BACK for debugging/logging."""
         return "GO_BACK"
 
     def __bool__(self) -> bool:

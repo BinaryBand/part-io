@@ -196,6 +196,9 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# import-linter cache
+.import_linter_cache/
+
 # PyPI configuration file
 .pypirc
 

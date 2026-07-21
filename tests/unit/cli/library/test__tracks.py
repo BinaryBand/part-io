@@ -231,6 +231,7 @@ def test_the_default_read_asks_the_server_for_only_its_budget(monkeypatch, tmp_p
     budgets: list[int | None] = []
 
     def _fetch(url, *, max_bytes=None):
+        _ = url
         budgets.append(max_bytes)
         return _rss([f"Ep {n}" for n in range(40)])
 

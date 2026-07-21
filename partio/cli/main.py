@@ -8,12 +8,14 @@ numbered picker for bare invocation.
 from __future__ import annotations
 
 import contextlib
+from importlib.metadata import version as pkg_version
 from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from partio.cli.prompting import prompt_for_args
 from partio.cli.registry import CommandEntry, discover
 from partio.cli.select import GoBack, Option, select_one
 
@@ -97,9 +99,6 @@ def _show_picker() -> None:
     options.append(Option(title="quit", value=_QUIT, help="Exit partio."))
     labels = [_label_for(entry) for entry in commands]
 
-    # Imported here so the picker only pays for prompting when it is used.
-    from partio.cli.prompting import prompt_for_args
-
     while True:
         selected = select_one("Pick a command", options, console=console)
         if selected is None or isinstance(selected, GoBack) or selected == _QUIT:
@@ -123,7 +122,7 @@ def _show_picker() -> None:
 
 
 @app.callback(invoke_without_command=True)
-def main(
+def _callback(
     ctx: typer.Context,
     version: Annotated[
         bool,
@@ -139,10 +138,13 @@ def main(
     ctx.obj["json"] = json_output
 
     if version:
-        from importlib.metadata import version as pkg_version
-
         console.print(f"partio {pkg_version('partio')}")
         raise typer.Exit(code=0)
 
     if ctx.invoked_subcommand is None:
         _show_picker()
+
+
+def main() -> None:
+    """Run the command-line interface."""
+    app()

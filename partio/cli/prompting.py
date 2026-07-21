@@ -10,18 +10,16 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
 import questionary
 import typer
 from rich.console import Console
 
 from partio.cli.library import MARK_LEGEND, Track, ensure_local, has_more, tracks
+from partio.cli.registry import CommandEntry
 from partio.cli.select import GO_BACK, GoBack, Option, bind_back, select_one
 from partio.core.ports import AudioPathKind
-
-if TYPE_CHECKING:
-    from partio.cli.registry import CommandEntry
 
 console = Console()
 

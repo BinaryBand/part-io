@@ -8,12 +8,9 @@ prompt_toolkit and I/O so the layout can be unit-tested directly.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import groupby
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 GLYPH_BASE = "─"  # unexplored region
 GLYPH_NO = "░"  # answered "no"

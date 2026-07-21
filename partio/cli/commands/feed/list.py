@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 from itertools import groupby
-from typing import TYPE_CHECKING
 
-import typer  # noqa: TC002
+import typer
 from rich.console import Console
 
-from partio.cli.library import MARK_LEGEND, feeds, tracks
+from partio.cli.library import MARK_LEGEND, Track, feeds, tracks
 from partio.cli.output import ExitCode, _json_flag, emit
 from partio.cli.registry import command
 
 # The spinner is drawn on stderr so it never mingles with --json output.
 console = Console(stderr=True)
-
-if TYPE_CHECKING:
-    from partio.cli.library import Track
 
 # A long episode title must not push its date/size column off the line.
 _MAX_LABEL_WIDTH = 60

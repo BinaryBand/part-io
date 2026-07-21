@@ -1,10 +1,9 @@
 [project]
 name = "partio"
 version = "0.1.0"
-description = "Task orchestration and lint automation toolkit for Python repositories."
+description = "Audio jingle-matching toolkit: locate and extract recurring jingles/stingers inside long episode recordings."
 readme = "README.md"
 license = "MIT"
-license-files = ["LICENSE"]
 authors = [{ name = "partio Contributors" }]
 requires-python = ">=3.11"
 dependencies = [
@@ -16,122 +15,96 @@ dependencies = [
     "httpx>=0.27.0,<1.0.0",
     "questionary>=2.0.0,<3.0.0",
 ]
-keywords = ["python", "cli", "automation", "lint", "tasks"]
+keywords = ["python", "cli", "audio", "podcast"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
 ]
 
 [project.scripts]
-"partio" = "partio.cli.main:app"
-
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["partio"]
-
-[dependency-groups]
-dev = [
-    "ruff>=0.15.10,<0.16.0",
-    "semgrep>=1.122.0,<2.0.0",
-    "vulture>=2.14,<3.0",
-    "pytest>=9.0.3,<10.0.0",
-    "pytest-cov>=5.0.0,<7.0.0",
-    "ty>=0.0.32,<0.0.33",
-    "lizard>=1.22.1,<2.0.0",
-    "import-linter>=2.0,<3.0",
-    "hypothesis>=6.156.6,<7.0.0",
-]
+"partio" = "partio.cli.main:main"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "tests/architecture", "tests/integration", "tests/unit"]
-pythonpath = ["."]
-markers = ["e2e: end-to-end tests requiring external systems"]
-addopts = "-m 'not e2e'"
-
-[tool.coverage.run]
-parallel = false
-data_file = ".coverage"
-omit = ["*/__init__.py"]
-
-[tool.coverage.report]
-precision = 2
+minversion = "9.1"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# importlib mode lets tests/ mirror the package layout without duplicate
+# test-module basenames across layer subdirectories colliding on import.
+addopts = "-v --tb=short --import-mode=importlib"
 
 [tool.ruff]
-target-version = "py311"
 line-length = 100
+# target-version is intentionally unset: ruff derives it from requires-python
+# (>=3.11 -> py311). The pinned .python-version fixes the interpreter that
+# actually resolves, so the target is stated once, in one place.
 
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-    # Comma formatting style — ruff's opinion diverges from stdlib; not worth churn.
-    "COM812", "COM819",
-    # Allow commented-out code in docs/examples.
-    "ERA001",
+    # Docstring rules that conflict with the google convention set below.
+    "D203", # one-blank-line-before-class (conflicts with D211)
+    "D213", # multi-line-summary-second-line (conflicts with D212)
+    # Rules that conflict with `ruff format`.
+    "COM812", # missing-trailing-comma
+    "ISC001", # single-line-implicit-string-concatenation
+    # Deliberate policy opt-outs.
+    "CPY001", # missing-copyright-notice -- not wanted on internal projects
     # Exception messages use f-strings intentionally; suppressing the noise.
-    "TRY003", "EM102", "EM101",
+    "TRY003", "EM101", "EM102",
+    # The flake8-type-checking "move this into an `if TYPE_CHECKING:` block"
+    # rules, all three of them. MUST stay ignored: static/rules/
+    # no-type-checking-guard.yml forbids that block outright and is enforced by
+    # tests/test_lint.py::test_astgrep, so leaving these on puts ruff and
+    # ast-grep in a deadlock. Imports live at module level, in one place,
+    # visible to every reader and tool -- not only to a type checker.
+    "TC001", # typing-only-first-party-import
+    "TC002", # typing-only-third-party-import
+    "TC003", # typing-only-standard-library-import
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately assert, shell out, touch private members, use magic
+# values, and skip docstrings/annotations.
+"tests/**" = ["S", "PLR2004", "ANN", "D", "INP001", "SLF001"]
+# The CLI layer is the one place print() is a legitimate output channel, and
+# Typer's idioms are intentional: callables as argument/option defaults (B008),
+# boolean flags as parameters (FBT001/FBT002), and one parameter per CLI
+# option -- a command with many options legitimately has many parameters
+# (PLR0913).
+"partio/cli/**" = ["T20", "B008", "FBT001", "FBT002", "PLR0913"]
+# Root-level pytest hook: no package to belong to, untyped pytest config
+# object, and deliberate hardcoded subprocess calls.
+"conftest.py" = ["D103", "ANN001", "ARG001", "INP001", "S603", "S607"]
+# Subprocess call is deliberate; executable is validated by resolve_executable.
+"partio/adapters/process/runner.py" = ["S603"]
+# Package init files need no docstring.
+"partio/__init__.py" = ["D104"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-[tool.ruff.lint.per-file-ignores]
-"**/cli/**/*.py" = ["D", "T20", "PLR0913", "FBT002", "TC003", "PLC0415"]
-"**/core/**/*.py" = ["D"]
-"**/conftest.py" = ["D", "ANN", "ARG", "INP001"]
-# Tests use `assert` idiomatically — S101 is expected.
-"tests/**/*.py" = ["S101", "PLR2004", "ANN", "D", "INP001", "SLF001", "ARG001", "ARG005"]
-# Subprocess calls in test infrastructure are intentional and hardcoded.
-"conftest.py" = ["S603", "S607"]
-"tests/test_lint.py" = ["S603"]
-# Git helper script runs subprocess with hardcoded commands — intentional and safe.
-"_git_helper.py" = ["S603"]
-# Subprocess call is deliberate; executable is validated by resolve_executable.
-"partio/utils/exec.py" = ["S603"]
-# Package init files need no docstring.
-"partio/__init__.py" = ["D104"]
-"partio/app/__init__.py" = ["D104"]
+[tool.ruff.lint.mccabe]
+max-complexity = 8
 
-[tool.ty.environment]
-python = ".venv"
-python-version = "3.11"
-extra-paths = []
-root = ["."]
+[tool.ruff.lint.pylint]
+max-args = 5
+max-branches = 10
+max-returns = 5
+max-statements = 40
 
-[tool.ty.src]
-include = ["partio", "tests"]
-
-[tool.ty.terminal]
-error-on-warning = true
-output-format = "full"
-
-
-[tool.importlinter]
-root_package = "partio"
-
-[[tool.importlinter.contracts]]
-name = "Standard layered layout"
-type = "layers"
-containers = ["partio"]
-layers = [
-    "cli",
-    "app",
-    "adapters",
-    "core",
-    "utils",
-]
-exhaustive = true
-exhaustive_ignores = ["__main__"]
+[tool.ty]
+# ty runs at its default strictness, and those defaults ARE the policy here:
+# every function is fully annotated (enforced by ANN) so the checker has real
+# signatures to work with.
 
 [tool.vulture]
+min_confidence = 80
 paths = ["partio", "tests"]
+ignore_decorators = ["@pytest.fixture", "@pytest.mark.*"]
 ignore_names = [
     # Key handlers registered via decorator; vulture cannot see the reference.
     "_on_*",
@@ -151,4 +124,47 @@ ignore_names = [
     "my_arg",
     "pytest_sessionstart",
     "pytest_sessionfinish",
+]
+
+[tool.importlinter]
+root_package = "partio"
+
+[[tool.importlinter.contracts]]
+# The one standard layout, enforced everywhere. `exhaustive = true` means any
+# top-level package that is NOT one of these three is a contract violation, so
+# the directory structure is mandatory rather than merely conventional. Imports
+# may only point downward: cli -> adapters -> core. cli is the composition
+# root: it constructs concrete adapters and passes them into core's use-case
+# functions, so no dedicated orchestration layer is needed.
+name = "Standard layered layout"
+type = "layers"
+containers = ["partio"]
+layers = [
+    "cli",
+    "adapters",
+    "core",
+]
+exhaustive = true
+exhaustive_ignores = ["__main__"]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.11"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# Flat layout: the importable package lives at the project root (partio/),
+# not under src/, so point the build backend at the root instead of its
+# default "src".
+module-root = ""
+
+[dependency-groups]
+# Pinned to a series (not `>=`) so the ruleset stays reproducible across
+# machines; ty is pinned exactly since every ty release is still 0.0.x.
+dev = [
+    "ruff==0.15.*",
+    "ty==0.0.59",
+    "pytest==9.1.*",
+    "import-linter==2.13.*",
+    "vulture==2.16.*",
+    "ast-grep-cli==0.44.*",
 ]

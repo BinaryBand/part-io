@@ -9,9 +9,13 @@ from unittest.mock import patch
 import typer
 from prompt_toolkit.key_binding import KeyBindings
 
-from partio.cli.prompting import _ask, prompt_for_args, required_options
+from partio.cli.library import Track
+from partio.cli.library import _tracks as tracks_module
+from partio.cli.prompting import _CUSTOM_PATH_CHOICE, _ask, prompt_for_args, required_options
 from partio.cli.registry import CommandEntry
 from partio.cli.select import GO_BACK
+from partio.core.models import FeedEpisode
+from partio.core.ports import AudioPathKind
 
 # -- stub command functions for introspection tests --------------------------
 
@@ -29,7 +33,7 @@ def _stub_search(
     """Stub search command."""
 
 
-def _stub_all_types(
+def _stub_all_types(  # noqa: PLR0913 - one param per supported type, by design
     ctx: typer.Context,
     name: Annotated[str, typer.Option("--name", help="A name.")],
     count: Annotated[int, typer.Option("--count", help="A count.")],
@@ -236,10 +240,6 @@ def test_ask_propagates_go_back_from_a_number_prompt() -> None:
 
 def _track(label: str, path: str, *, kind=None, group="Show A", remote=True):
     """A library row, remote (undownloaded) unless told otherwise."""
-    from partio.cli.library import Track
-    from partio.core.models import FeedEpisode
-    from partio.core.ports import AudioPathKind
-
     episode = (
         FeedEpisode(title=label, audio_url=f"https://x/{label}.mp3", guid=label, published=None)
         if remote
@@ -265,8 +265,6 @@ def _picker(available, *, chosen, downloaded="static/downloads/b.mp3"):
 
 def test_prompt_path_offers_the_whole_library_to_the_picker() -> None:
     """Every track becomes a row, marked and grouped under the feed it came from."""
-    from partio.cli.library import _tracks as tracks_module
-
     available = [
         _track("Ep A", "static/downloads/a.mp3"),
         _track("Ep B", "static/downloads/b.mp3"),
@@ -313,8 +311,6 @@ def test_a_failed_download_reopens_the_picker() -> None:
 
 def test_sample_prompts_ask_the_library_for_samples() -> None:
     """--sample must not offer whole episodes, so the kind is passed through."""
-    from partio.core.ports import AudioPathKind
-
     tracks_patch, select_patch, fetch_patch = _picker([_track("Ep A", "a.mp3")], chosen=None)
     with tracks_patch as tracks_mock, select_patch, fetch_patch:
         _ask(Path, "--sample")
@@ -324,8 +320,6 @@ def test_sample_prompts_ask_the_library_for_samples() -> None:
 
 def test_source_prompts_ask_the_library_for_sources() -> None:
     """--source likewise narrows to source recordings."""
-    from partio.core.ports import AudioPathKind
-
     tracks_patch, select_patch, fetch_patch = _picker([_track("Ep A", "a.mp3")], chosen=None)
     with tracks_patch as tracks_mock, select_patch, fetch_patch:
         _ask(Path, "--source")
@@ -355,8 +349,6 @@ def test_prompt_path_empty_library_asks_for_a_path() -> None:
 
 def test_prompt_path_custom_falls_back_to_free_text() -> None:
     """Choosing "enter a path manually" prompts for a typed path."""
-    from partio.cli.prompting import _CUSTOM_PATH_CHOICE
-
     with (
         patch("partio.cli.prompting.tracks", return_value=[_track("Ep A", "a.mp3")]),
         patch("partio.cli.prompting.select_one", return_value=_CUSTOM_PATH_CHOICE),
@@ -369,8 +361,6 @@ def test_prompt_path_custom_falls_back_to_free_text() -> None:
 
 def test_esc_at_the_manual_path_prompt_returns_to_the_picker() -> None:
     """esc while typing a path reopens the library picker, not the previous arg."""
-    from partio.cli.prompting import _CUSTOM_PATH_CHOICE
-
     available = [_track("Ep A", "a.mp3")]
     # First pass: pick "manual", press esc. Second pass: pick the library row.
     with (

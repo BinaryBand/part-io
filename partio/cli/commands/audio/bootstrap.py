@@ -10,20 +10,18 @@ then writes a canonical seed clip. The seed feeds ``audio_locate`` /
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 import typer
 
 from partio.adapters.audio.clips import audio_duration_seconds, extract_audio_clip
-from partio.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
 from partio.cli.commands.audio._auditor import build_interactive_auditor
 from partio.cli.library import remember
 from partio.cli.output import ExitCode, _json_flag, emit, fail, seed_written
-from partio.core.ports import AudioPathKind
-
-if TYPE_CHECKING:
-    from partio.core.ports.audio import AuditorFn
 from partio.cli.registry import command
+from partio.core.audio_bootstrap import locate_jingle_span, locate_jingle_spans
+from partio.core.ports import AudioPathKind
+from partio.core.ports.audio import AuditorFn
 
 
 def _write_seed(source: Path, output: Path, onset: float, offset: float) -> None:

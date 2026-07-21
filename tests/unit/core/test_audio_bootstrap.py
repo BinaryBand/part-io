@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from partio.app.audio_bootstrap import locate_jingle_span, locate_jingle_spans
-from partio.core.ports.audio import AuditorFn  # noqa: TC001
+from partio.core.audio_bootstrap import locate_jingle_span, locate_jingle_spans
+from partio.core.ports.audio import AuditorFn
 
 AuditorCall = tuple[float, float, str]
 

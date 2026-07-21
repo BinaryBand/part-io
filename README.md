@@ -6,13 +6,12 @@ An audio jingle-matching toolkit: locate and extract recurring jingles/stingers 
 
 - Cold-start jingle discovery via human-in-the-loop tiled scanning and bisection.
 - Spectral-feature reference matching to find a known jingle across episodes.
-- Architecture and boundary enforcement with Semgrep.
+- Architecture and boundary enforcement via ruff, ty, import-linter, vulture, and ast-grep.
 
 ## Requirements
 
 - Python 3.11+
 - uv
-- Node.js (for `npx`-based CPD duplicate-code checks in the test suite)
 - ffmpeg (for audio decoding/extraction)
 
 ## Installation
@@ -23,29 +22,24 @@ uv sync --all-groups
 
 ## Common Commands
 
-Run tests (includes lint/type/architecture checks via `tests/integration/test_lint.py`):
+Run tests (includes lint/type/architecture checks via `tests/test_lint.py`):
 
 ```bash
 uv run pytest
 ```
 
-Run architecture/security checks:
+Run the CLI:
 
 ```bash
-uv run semgrep scan --config config/semgrep partio tests --error
-```
-
-Run the audio review bundle CLI:
-
-```bash
-uv run partio-audio-review
+uv run partio
 ```
 
 ## Project Layout
 
-- `partio/` application package.
-- `config/` lint and Semgrep policy configuration.
-- `tests/` architecture, integration, and unit tests.
+- `partio/` application package, in three layers: `cli/` (Typer entry points) ->
+  `adapters/` (I/O implementations) -> `core/` (pure business logic and ports).
+- `tests/` architecture, integration, and unit tests (`tests/unit/` mirrors
+  `partio/` 1:1).
 
 ## License
 

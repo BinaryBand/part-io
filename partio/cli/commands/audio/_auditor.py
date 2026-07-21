@@ -10,16 +10,12 @@ auditor stays scriptable.
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from partio.adapters.audio.clips import play_audio_segment
 from partio.cli.commands.audio._audition_ui import AnsweredSpan, run_audition
 from partio.cli.output import emit
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from partio.core.ports.audio import AuditorFn
+from partio.core.ports.audio import AuditorFn
 
 # Context shown around the clip when the caller has no search region to frame.
 _CONTEXT_SECONDS = 30.0

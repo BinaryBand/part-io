@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
-from partio.utils.text import slugify
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from partio.core.models import FeedEpisode
+from partio.core.models import FeedEpisode
+from partio.core.text import slugify
 
 
 def destination_for(episode: FeedEpisode, *, dest_dir: Path) -> Path:

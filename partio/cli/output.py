@@ -11,10 +11,9 @@ import json
 import sys
 from enum import IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import NoReturn
 
-if TYPE_CHECKING:
-    import typer
+import typer
 
 
 class ExitCode(IntEnum):

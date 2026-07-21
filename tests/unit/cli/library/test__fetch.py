@@ -72,6 +72,7 @@ def test_a_failed_download_returns_none_rather_than_exiting(monkeypatch, tmp_pat
     """A flaky network costs a retry at the prompt, not the whole session."""
 
     def _boom(*, url, destination_path, on_progress=None):
+        _ = (url, destination_path, on_progress)
         raise httpx.ConnectError("no network")
 
     monkeypatch.setattr(_fetch, "download_file", _boom)

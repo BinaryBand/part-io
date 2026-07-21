@@ -9,8 +9,9 @@ the question always refers to the highlighted clip, which never moves.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.formatted_text import FormattedText
@@ -19,7 +20,7 @@ from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 
-from partio.adapters.audio.playback import start_audio_segment
+from partio.adapters.audio.playback import PlaybackHandle, start_audio_segment
 from partio.cli.commands.audio._section_bar import (
     AnsweredSpan,
     bar_cells,
@@ -27,12 +28,6 @@ from partio.cli.commands.audio._section_bar import (
     format_timestamp,
     playhead_row,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
-    from pathlib import Path
-
-    from partio.adapters.audio.playback import PlaybackHandle
 
 _SCRUB_SECONDS = 2.0
 # How far before the clip the cursor may be dragged, for lead-in context.

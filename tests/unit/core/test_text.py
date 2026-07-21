@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from partio.utils.text import slugify
+from partio.core.text import slugify
 
 
 @pytest.mark.parametrize(

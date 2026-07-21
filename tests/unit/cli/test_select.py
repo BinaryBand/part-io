@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock, patch
 
+import questionary
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 
@@ -92,8 +93,6 @@ def test_tty_cancel_returns_none() -> None:
 
 def test_tty_inserts_group_separators() -> None:
     """Each new group contributes a separator heading above its rows."""
-    import questionary
-
     with (
         patch("partio.cli.select.sys.stdin.isatty", return_value=True),
         patch("partio.cli.select.sys.stdout.isatty", return_value=True),
