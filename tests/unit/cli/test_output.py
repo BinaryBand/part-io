@@ -10,6 +10,7 @@ import pytest
 from partio.cli.output import (
     ExitCode,
     bundle_summary,
+    cut_summary,
     emit,
     fail,
     locate_result,
@@ -158,3 +159,17 @@ def test_seed_written_integer_times() -> None:
     """Integer seconds are padded to three decimal places."""
     result = seed_written(Path("out.mp3"), 1, 2)
     assert result == "jingle 1.000s -> 2.000s written to out.mp3"
+
+
+def test_cut_summary() -> None:
+    """Cut summary reports the removed span, kept length, and output path."""
+    lines = cut_summary(
+        output_path=Path("static/downloads/ep_cut.mp3"),
+        removed_start=100.0,
+        removed_end=166.0,
+        total_seconds=600.0,
+    )
+    assert len(lines) == 3
+    assert lines[0] == "Removed 66.000s (100.000s -> 166.000s)"
+    assert lines[1] == "Kept 534.000s of 600.000s"
+    assert lines[2] == "Wrote static/downloads/ep_cut.mp3"

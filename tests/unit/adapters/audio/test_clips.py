@@ -9,9 +9,11 @@ import pytest
 from partio.adapters.audio import clips
 from partio.adapters.audio.clips import (
     audio_duration_seconds,
+    cut_segments,
     extract_audio_clip,
     play_audio_segment,
 )
+from partio.core.audio_cut import KeepSegment
 
 
 class _MockCompletedProcess:
@@ -150,4 +152,58 @@ def test_extract_audio_clip_raises_on_nonzero_returncode(monkeypatch) -> None:
             destination_path=Path("/out/clip.mp3"),
             start_seconds=0.0,
             duration_seconds=1.0,
+        )
+
+
+def test_cut_segments_builds_trim_concat_filter(monkeypatch) -> None:
+    """cut_segments should build one ffmpeg pass trimming and concatenating spans."""
+    captured: list[list[str]] = []
+
+    def _mock_run_resolved(cmd: list[str], **_kwargs) -> _MockCompletedProcess:
+        captured.append(cmd)
+        return _MockCompletedProcess(0)
+
+    monkeypatch.setattr(clips, "run_resolved", _mock_run_resolved)
+
+    cut_segments(
+        source_path=Path("/media/episode.mp3"),
+        destination_path=Path("/out/edited.mp3"),
+        keep_segments=[KeepSegment(0.0, 100.0), KeepSegment(166.0, 600.0)],
+    )
+
+    assert len(captured) == 1
+    cmd = captured[0]
+    assert cmd[0] == "ffmpeg"
+    filter_index = cmd.index("-filter_complex")
+    graph = cmd[filter_index + 1]
+    assert "atrim=start=0.000:end=100.000" in graph
+    assert "atrim=start=166.000:end=600.000" in graph
+    assert "concat=n=2:v=0:a=1[out]" in graph
+    map_index = cmd.index("-map")
+    assert cmd[map_index + 1] == "[out]"
+    assert "libmp3lame" in cmd
+    assert str(Path("/out/edited.mp3")) in cmd
+
+
+def test_cut_segments_rejects_empty_segments(monkeypatch) -> None:
+    """No segments to keep is a ValueError before invoking ffmpeg."""
+    monkeypatch.setattr(clips, "run_resolved", lambda *_a, **_k: _MockCompletedProcess(0))
+
+    with pytest.raises(ValueError, match="at least one segment"):
+        cut_segments(
+            source_path=Path("/media/episode.mp3"),
+            destination_path=Path("/out/edited.mp3"),
+            keep_segments=[],
+        )
+
+
+def test_cut_segments_raises_on_nonzero_returncode(monkeypatch) -> None:
+    """A non-zero ffmpeg returncode should raise ValueError."""
+    monkeypatch.setattr(clips, "run_resolved", lambda *_a, **_k: _MockCompletedProcess(1))
+
+    with pytest.raises(ValueError, match="ffmpeg failed to write cut"):
+        cut_segments(
+            source_path=Path("/media/episode.mp3"),
+            destination_path=Path("/out/edited.mp3"),
+            keep_segments=[KeepSegment(0.0, 10.0)],
         )

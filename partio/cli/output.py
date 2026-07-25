@@ -106,3 +106,20 @@ def bundle_summary(
 def seed_written(output: Path, onset: float, offset: float) -> str:
     """Format the seed-clip write confirmation."""
     return f"jingle {onset:.3f}s -> {offset:.3f}s written to {output}"
+
+
+def cut_summary(
+    *,
+    output_path: Path,
+    removed_start: float,
+    removed_end: float,
+    total_seconds: float,
+) -> list[str]:
+    """Format the multi-line ``audio cut`` summary."""
+    removed = removed_end - removed_start
+    kept = total_seconds - removed
+    return [
+        f"Removed {removed:.3f}s ({removed_start:.3f}s -> {removed_end:.3f}s)",
+        f"Kept {kept:.3f}s of {total_seconds:.3f}s",
+        f"Wrote {output_path}",
+    ]

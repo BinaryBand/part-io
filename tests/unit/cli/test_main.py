@@ -81,6 +81,7 @@ def test_registry_contains_all_commands() -> None:
         ("audio", "locate"),
         ("audio", "review"),
         ("audio", "bootstrap"),
+        ("audio", "cut"),
         ("feed", "add"),
         ("feed", "list"),
         ("feed", "remove"),
