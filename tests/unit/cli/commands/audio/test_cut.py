@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from partio.adapters.audio.matcher import BestMatch
+from partio.adapters.audio.matcher import AudioMatch, BestMatch
 from partio.cli.commands.audio import cut as audio_cut
 from partio.core.audio_cut import KeepSegment
 
@@ -132,3 +132,63 @@ def test_audio_cut_refuses_existing_output(monkeypatch, capsys, tmp_path) -> Non
 def test_audio_cut_default_output_helper() -> None:
     """The default output path appends _cut before the suffix."""
     assert audio_cut._default_output_path(Path("/media/ep.mp3")) == Path("/media/ep_cut.mp3")
+
+
+def _patch_all_matches(
+    monkeypatch, *, openings: list[AudioMatch], closings: list[AudioMatch]
+) -> None:
+    def _find(*, source_path, sample_path, score_threshold, step_seconds, dedupe_overlap):  # noqa: ARG001
+        return openings if sample_path.name == "open.mp3" else closings
+
+    monkeypatch.setattr(audio_cut, "find_audio_sample_matches", _find)
+
+
+def test_audio_cut_all_removes_every_break(monkeypatch, capsys, tmp_path) -> None:
+    """--all pairs each opening with the next closing and removes every break."""
+    source, opening, closing = _make_sources(tmp_path)
+    _patch_all_matches(
+        monkeypatch,
+        openings=[AudioMatch(100.0, 105.0, 5.0, 0.9), AudioMatch(300.0, 305.0, 5.0, 0.9)],
+        closings=[AudioMatch(160.0, 166.0, 6.0, 0.9), AudioMatch(360.0, 366.0, 6.0, 0.9)],
+    )
+    monkeypatch.setattr(audio_cut, "audio_duration_seconds", lambda _p: 600.0)
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(audio_cut, "cut_segments", lambda **kwargs: captured.update(kwargs))
+
+    out_path = tmp_path / "edited.mp3"
+    audio_cut.cut(
+        source=source, opening=opening, closing=closing, output=out_path, all_breaks=True, ctx=None
+    )
+
+    assert captured["keep_segments"] == [
+        KeepSegment(0.0, 100.0),
+        KeepSegment(166.0, 300.0),
+        KeepSegment(366.0, 600.0),
+    ]
+    output = capsys.readouterr().out
+    assert "Removed 2 break(s), 132.000s total:" in output
+    assert "1. 100.000s -> 166.000s" in output
+    assert "2. 300.000s -> 366.000s" in output
+
+
+def test_audio_cut_all_no_breaks(monkeypatch, capsys, tmp_path) -> None:
+    """--all with no pairable jingles exits NO_RESULT and does not cut."""
+    source, opening, closing = _make_sources(tmp_path)
+    _patch_all_matches(
+        monkeypatch,
+        openings=[],
+        closings=[AudioMatch(160.0, 166.0, 6.0, 0.9)],
+    )
+    monkeypatch.setattr(audio_cut, "audio_duration_seconds", lambda _p: 600.0)
+    monkeypatch.setattr(
+        audio_cut,
+        "cut_segments",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not cut")),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        audio_cut.cut(source=source, opening=opening, closing=closing, all_breaks=True, ctx=None)
+
+    assert excinfo.value.code == 1
+    assert "No ad breaks found" in capsys.readouterr().out

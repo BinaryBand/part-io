@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from partio.core.audio_cut import KeepSegment, plan_cut
+from partio.core.audio_cut import KeepSegment, RemovedSpan, plan_cut, plan_multi_cut
 
 
 def test_plan_cut_keeps_before_and_after() -> None:
@@ -114,3 +114,88 @@ def test_plan_cut_rejects_negative_start() -> None:
             closing_end=25.0,
             total_seconds=100.0,
         )
+
+
+def test_removed_span_duration() -> None:
+    """duration_seconds reflects the span length."""
+    assert RemovedSpan(100.0, 166.0).duration_seconds == 66.0
+
+
+def test_plan_multi_cut_pairs_two_breaks() -> None:
+    """Two opening/closing pairs yield two removed spans and three keeps."""
+    removed, segments = plan_multi_cut(
+        openings=[(100.0, 105.0), (300.0, 305.0)],
+        closings=[(160.0, 166.0), (360.0, 366.0)],
+        total_seconds=600.0,
+    )
+
+    assert removed == [RemovedSpan(100.0, 166.0), RemovedSpan(300.0, 366.0)]
+    assert segments == [
+        KeepSegment(0.0, 100.0),
+        KeepSegment(166.0, 300.0),
+        KeepSegment(366.0, 600.0),
+    ]
+
+
+def test_plan_multi_cut_ignores_extra_opening_inside_break() -> None:
+    """A second opening detected inside a break does not start a new break."""
+    removed, _segments = plan_multi_cut(
+        openings=[(100.0, 105.0), (120.0, 125.0)],
+        closings=[(160.0, 166.0)],
+        total_seconds=600.0,
+    )
+
+    assert removed == [RemovedSpan(100.0, 166.0)]
+
+
+def test_plan_multi_cut_ignores_unmatched_closings() -> None:
+    """A closing with no preceding opening is ignored."""
+    removed, _segments = plan_multi_cut(
+        openings=[(200.0, 205.0)],
+        closings=[(50.0, 56.0), (260.0, 266.0)],
+        total_seconds=600.0,
+    )
+
+    assert removed == [RemovedSpan(200.0, 266.0)]
+
+
+def test_plan_multi_cut_dangling_opening_is_not_a_break() -> None:
+    """An opening with no later closing produces no break."""
+    removed, segments = plan_multi_cut(
+        openings=[(100.0, 105.0), (500.0, 505.0)],
+        closings=[(160.0, 166.0)],
+        total_seconds=600.0,
+    )
+
+    assert removed == [RemovedSpan(100.0, 166.0)]
+    assert segments == [KeepSegment(0.0, 100.0), KeepSegment(166.0, 600.0)]
+
+
+def test_plan_multi_cut_no_pairs_keeps_everything() -> None:
+    """With no pairable jingles, nothing is removed and the whole file is kept."""
+    removed, segments = plan_multi_cut(
+        openings=[],
+        closings=[(10.0, 16.0)],
+        total_seconds=600.0,
+    )
+
+    assert removed == []
+    assert segments == [KeepSegment(0.0, 600.0)]
+
+
+def test_plan_multi_cut_clamps_closing_past_end() -> None:
+    """A closing that runs past the total duration is clamped."""
+    removed, segments = plan_multi_cut(
+        openings=[(580.0, 585.0)],
+        closings=[(595.0, 610.0)],
+        total_seconds=600.0,
+    )
+
+    assert removed == [RemovedSpan(580.0, 600.0)]
+    assert segments == [KeepSegment(0.0, 580.0)]
+
+
+def test_plan_multi_cut_rejects_non_positive_total() -> None:
+    """A non-positive total duration is rejected."""
+    with pytest.raises(ValueError, match="total_seconds must be positive"):
+        plan_multi_cut(openings=[(1.0, 2.0)], closings=[(3.0, 4.0)], total_seconds=0.0)

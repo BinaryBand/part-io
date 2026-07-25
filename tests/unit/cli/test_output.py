@@ -15,6 +15,7 @@ from partio.cli.output import (
     fail,
     locate_result,
     match_line,
+    multi_cut_summary,
     no_match,
     seed_written,
 )
@@ -173,3 +174,17 @@ def test_cut_summary() -> None:
     assert lines[0] == "Removed 66.000s (100.000s -> 166.000s)"
     assert lines[1] == "Kept 534.000s of 600.000s"
     assert lines[2] == "Wrote static/downloads/ep_cut.mp3"
+
+
+def test_multi_cut_summary() -> None:
+    """Multi-cut summary lists each break plus totals and the output path."""
+    lines = multi_cut_summary(
+        output_path=Path("static/downloads/ep_cut.mp3"),
+        removed=[(100.0, 166.0), (300.0, 366.0)],
+        total_seconds=600.0,
+    )
+    assert lines[0] == "Removed 2 break(s), 132.000s total:"
+    assert lines[1] == "  1. 100.000s -> 166.000s (66.000s)"
+    assert lines[2] == "  2. 300.000s -> 366.000s (66.000s)"
+    assert lines[3] == "Kept 468.000s of 600.000s"
+    assert lines[4] == "Wrote static/downloads/ep_cut.mp3"

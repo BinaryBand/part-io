@@ -26,6 +26,19 @@ class KeepSegment:
         return self.end_seconds - self.start_seconds
 
 
+@dataclass(frozen=True)
+class RemovedSpan:
+    """A contiguous span of source audio to drop, in seconds."""
+
+    start_seconds: float
+    end_seconds: float
+
+    @property
+    def duration_seconds(self) -> float:
+        """Length of the removed span in seconds."""
+        return self.end_seconds - self.start_seconds
+
+
 def _validate_span(label: str, start: float, end: float, total_seconds: float) -> None:
     if start < 0:
         raise ValueError(f"{label} start must be non-negative, got {start}")
@@ -71,4 +84,73 @@ def plan_cut(
     return [segment for segment in candidates if segment.duration_seconds > 0]
 
 
-__all__ = ["KeepSegment", "plan_cut"]
+def _keep_from_removed(removed: list[RemovedSpan], total_seconds: float) -> list[KeepSegment]:
+    """Return the complement of *removed* over ``[0, total_seconds]``."""
+    segments: list[KeepSegment] = []
+    cursor = 0.0
+    for span in removed:
+        if span.start_seconds > cursor:
+            segments.append(KeepSegment(cursor, span.start_seconds))
+        cursor = max(cursor, span.end_seconds)
+    if cursor < total_seconds:
+        segments.append(KeepSegment(cursor, total_seconds))
+    return segments
+
+
+def _pair_breaks(
+    openings: list[tuple[float, float]],
+    closings: list[tuple[float, float]],
+    total_seconds: float,
+) -> list[RemovedSpan]:
+    """Bracket each opening jingle with the next closing jingle after it.
+
+    Openings and closings are matched greedily in time order: each break runs
+    from an opening's start to the end of the first closing that begins at or
+    after that opening ends. Openings that fall inside an already-formed break
+    (extra detections of the same stinger) and closings with no preceding
+    opening are ignored.
+    """
+    sorted_openings = sorted(openings)
+    sorted_closings = sorted(closings)
+    breaks: list[RemovedSpan] = []
+    closing_index = 0
+    guard = 0.0
+
+    for open_start, open_end in sorted_openings:
+        if breaks and open_start < guard:
+            continue
+        while closing_index < len(sorted_closings) and sorted_closings[closing_index][0] < open_end:
+            closing_index += 1
+        if closing_index >= len(sorted_closings):
+            break
+        close_end = min(sorted_closings[closing_index][1], total_seconds)
+        breaks.append(RemovedSpan(max(open_start, 0.0), close_end))
+        guard = close_end
+        closing_index += 1
+
+    return breaks
+
+
+def plan_multi_cut(
+    *,
+    openings: list[tuple[float, float]],
+    closings: list[tuple[float, float]],
+    total_seconds: float,
+) -> tuple[list[RemovedSpan], list[KeepSegment]]:
+    """Plan removal of every ad break bracketed by an opening/closing jingle pair.
+
+    Each element of *openings* / *closings* is a ``(start_seconds, end_seconds)``
+    match. Returns the removed spans (in time order) and the surviving keep
+    segments. An empty removed list means no opening jingle could be paired with
+    a later closing jingle, so the caller should treat it as "no result" rather
+    than writing a full copy.
+
+    Raises ``ValueError`` when the total duration is non-positive.
+    """
+    if total_seconds <= 0:
+        raise ValueError(f"total_seconds must be positive, got {total_seconds}")
+    removed = _pair_breaks(openings, closings, total_seconds)
+    return removed, _keep_from_removed(removed, total_seconds)
+
+
+__all__ = ["KeepSegment", "RemovedSpan", "plan_cut", "plan_multi_cut"]

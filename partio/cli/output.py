@@ -123,3 +123,22 @@ def cut_summary(
         f"Kept {kept:.3f}s of {total_seconds:.3f}s",
         f"Wrote {output_path}",
     ]
+
+
+def multi_cut_summary(
+    *,
+    output_path: Path,
+    removed: list[tuple[float, float]],
+    total_seconds: float,
+) -> list[str]:
+    """Format the multi-line ``audio cut --all`` summary."""
+    total_removed = sum(end - start for start, end in removed)
+    kept = total_seconds - total_removed
+    lines = [f"Removed {len(removed)} break(s), {total_removed:.3f}s total:"]
+    lines.extend(
+        f"  {index}. {start:.3f}s -> {end:.3f}s ({end - start:.3f}s)"
+        for index, (start, end) in enumerate(removed, start=1)
+    )
+    lines.append(f"Kept {kept:.3f}s of {total_seconds:.3f}s")
+    lines.append(f"Wrote {output_path}")
+    return lines
