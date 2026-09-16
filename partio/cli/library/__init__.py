@@ -12,6 +12,7 @@ list: it is written here and by ``audio bootstrap``, and no command exposes it.
 """
 
 from partio.cli.library._cache import cached, remember
+from partio.cli.library._cut_rules import cut_rule_store, cut_rules
 from partio.cli.library._feeds import feed_store, feeds
 from partio.cli.library._fetch import ensure_local
 from partio.cli.library._tracks import MARK_LEGEND, Track, has_more, refresh, tracks
@@ -20,6 +21,8 @@ __all__ = [
     "MARK_LEGEND",
     "Track",
     "cached",
+    "cut_rule_store",
+    "cut_rules",
     "ensure_local",
     "feed_store",
     "feeds",

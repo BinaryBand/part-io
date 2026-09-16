@@ -36,10 +36,8 @@ uv run partio
 
 ## Project Layout
 
-- `partio/` application package, in three layers: `cli/` (Typer entry points) ->
-  `adapters/` (I/O implementations) -> `core/` (pure business logic and ports).
-- `tests/` architecture, integration, and unit tests (`tests/unit/` mirrors
-  `partio/` 1:1).
+- `partio/` application package, in three layers: `cli/` (Typer entry points) -> `adapters/` (I/O implementations) -> `core/` (pure business logic and ports).
+- `tests/` architecture, integration, and unit tests (`tests/unit/` mirrors `partio/` 1:1).
 
 ## License
 

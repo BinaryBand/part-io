@@ -8,7 +8,9 @@ import pytest
 
 from partio.adapters.audio.matcher import AudioMatch, BestMatch
 from partio.cli.commands.audio import cut as audio_cut
+from partio.cli.output import ExitCode
 from partio.core.audio_cut import KeepSegment
+from partio.core.ports import CutRuleEntry
 
 
 def _make_sources(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -192,3 +194,73 @@ def test_audio_cut_all_no_breaks(monkeypatch, capsys, tmp_path) -> None:
 
     assert excinfo.value.code == 1
     assert "No ad breaks found" in capsys.readouterr().out
+
+
+# -- --rule resolution --------------------------------------------------------
+
+
+def test_audio_cut_resolves_jingles_from_a_saved_rule(monkeypatch, tmp_path) -> None:
+    """--rule supplies both jingles without --opening/--closing being passed."""
+    source, opening, closing = _make_sources(tmp_path)
+    entry = CutRuleEntry(id="r1", label="demo", opening_path=opening, closing_path=closing)
+    monkeypatch.setattr(audio_cut, "cut_rules", lambda: [entry])
+    _patch_matches(
+        monkeypatch,
+        opening=BestMatch(10.0, 12.0, 2.0, 0.9, 4.0),
+        closing=BestMatch(30.0, 33.0, 3.0, 0.9, 4.0),
+    )
+    monkeypatch.setattr(audio_cut, "audio_duration_seconds", lambda _p: 100.0)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(audio_cut, "cut_segments", lambda **kwargs: captured.update(kwargs))
+
+    audio_cut.cut(source=source, rule="demo", ctx=None)
+
+    assert captured["keep_segments"] == [KeepSegment(0.0, 10.0), KeepSegment(33.0, 100.0)]
+
+
+def test_audio_cut_rule_by_id_also_resolves(monkeypatch, tmp_path) -> None:
+    """A rule can also be referenced by its id, not just its label."""
+    source, opening, closing = _make_sources(tmp_path)
+    entry = CutRuleEntry(id="r1", label="demo", opening_path=opening, closing_path=closing)
+    monkeypatch.setattr(audio_cut, "cut_rules", lambda: [entry])
+    _patch_matches(
+        monkeypatch,
+        opening=BestMatch(10.0, 12.0, 2.0, 0.9, 4.0),
+        closing=BestMatch(30.0, 33.0, 3.0, 0.9, 4.0),
+    )
+    monkeypatch.setattr(audio_cut, "audio_duration_seconds", lambda _p: 100.0)
+    monkeypatch.setattr(audio_cut, "cut_segments", lambda **_kwargs: None)
+
+    audio_cut.cut(source=source, rule="r1", ctx=None)
+
+
+def test_audio_cut_rule_and_explicit_opening_is_ambiguous(tmp_path) -> None:
+    """Combining --rule with --opening/--closing is rejected rather than guessed at."""
+    source, opening, _closing = _make_sources(tmp_path)
+
+    with pytest.raises(SystemExit) as excinfo:
+        audio_cut.cut(source=source, opening=opening, rule="demo", ctx=None)
+
+    assert excinfo.value.code == ExitCode.USER_ERROR
+
+
+def test_audio_cut_unknown_rule_fails(monkeypatch, capsys, tmp_path) -> None:
+    """An unknown --rule points at `rule list` instead of failing silently."""
+    source, _opening, _closing = _make_sources(tmp_path)
+    monkeypatch.setattr(audio_cut, "cut_rules", list)
+
+    with pytest.raises(SystemExit) as excinfo:
+        audio_cut.cut(source=source, rule="nope", ctx=None)
+
+    assert excinfo.value.code == ExitCode.USER_ERROR
+    assert "rule list" in capsys.readouterr().err
+
+
+def test_audio_cut_incomplete_jingle_pair_fails(tmp_path) -> None:
+    """One of --opening/--closing without the other is a user error."""
+    source, opening, _closing = _make_sources(tmp_path)
+
+    with pytest.raises(SystemExit) as excinfo:
+        audio_cut.cut(source=source, opening=opening, ctx=None)
+
+    assert excinfo.value.code == ExitCode.USER_ERROR

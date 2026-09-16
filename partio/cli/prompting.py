@@ -148,18 +148,24 @@ def _ask_number(
     return cast(answer)
 
 
+_SOURCE_PROMPTS = {"source"}
+_SAMPLE_PROMPTS = {"sample", "opening", "closing"}
+
+
 def _kind_for(prompt_text: str) -> AudioPathKind | None:
     """The library kind a prompt wants, inferred from its flag name.
 
-    The audio commands name their options after the thing they take --
-    ``--source`` / ``--sample`` -- which is exactly the ``AudioPathKind``
-    vocabulary, so the mapping needs no separate table. Any other flag name
-    yields ``None``, meaning "offer everything".
+    Most audio options are named after the ``AudioPathKind`` vocabulary
+    directly (``--source`` / ``--sample``); a jingle-pair option like
+    ``--opening`` / ``--closing`` also wants a sample, just under a more
+    specific name. Any other flag name yields ``None``, meaning "offer
+    everything".
     """
-    try:
-        return AudioPathKind(prompt_text)
-    except ValueError:
-        return None
+    if prompt_text in _SOURCE_PROMPTS:
+        return AudioPathKind.SOURCE
+    if prompt_text in _SAMPLE_PROMPTS:
+        return AudioPathKind.SAMPLE
+    return None
 
 
 def _prompt_path(prompt_text: str, *, full: bool = False) -> str | GoBack | None:
@@ -201,6 +207,21 @@ def _prompt_path(prompt_text: str, *, full: bool = False) -> str | GoBack | None
     local = ensure_local(chosen)
     # A download that failed leaves no path to hand on, so ask again.
     return str(local) if local is not None else _prompt_path(prompt_text, full=full)
+
+
+def prompt_sample_path(prompt_text: str) -> Path | None:
+    """Prompt for a sample path via the library picker, for a command body.
+
+    A thin public wrapper around :func:`_prompt_path` for commands (like
+    ``audio cut``) that need the same library-aware picker outside of
+    :func:`prompt_for_args`'s required-option walkthrough. Cancelling --
+    ``esc`` or ``ctrl-c`` -- returns ``None`` either way, since there is no
+    earlier screen to step back to.
+    """
+    result = _prompt_path(prompt_text)
+    if result is None or isinstance(result, GoBack):
+        return None
+    return Path(result)
 
 
 def _track_options(available: list[Track], *, expandable: bool) -> list[Option[Track | str]]:

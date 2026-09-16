@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from partio.core.ports.store import AudioPathEntry, AudioPathKind
+from partio.core.ports.store import AudioPathEntry, AudioPathKind, CutRuleEntry
 
 
 def test_audio_path_kind_values() -> None:
@@ -18,5 +18,14 @@ def test_audio_path_kind_values() -> None:
 def test_audio_path_entry_is_frozen() -> None:
     """AudioPathEntry instances must be immutable."""
     entry = AudioPathEntry(id="abc", path=Path("x.mp3"), label="x", kind=AudioPathKind.SOURCE)
+    with pytest.raises(AttributeError):
+        entry.label = "y"  # ty: ignore[invalid-assignment]
+
+
+def test_cut_rule_entry_is_frozen() -> None:
+    """CutRuleEntry instances must be immutable."""
+    entry = CutRuleEntry(
+        id="abc", label="Show", opening_path=Path("open.mp3"), closing_path=Path("close.mp3")
+    )
     with pytest.raises(AttributeError):
         entry.label = "y"  # ty: ignore[invalid-assignment]

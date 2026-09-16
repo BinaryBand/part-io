@@ -6,6 +6,9 @@ start of the opening jingle to the end of the closing one -- both stingers
 included. Pass ``--all`` to instead find every occurrence above ``--threshold``
 and remove each opening/closing pair, which suits episodes with several
 mid-rolls sharing the same stingers. The surviving audio is written to a new MP3.
+
+The jingle pair can be named once with ``partio rule add`` and reused via
+``--rule`` instead of retyping ``--opening``/``--closing`` every time.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.console import Console
 
 from partio.adapters.audio.clips import audio_duration_seconds, cut_segments
 from partio.adapters.audio.matcher import (
@@ -22,9 +26,16 @@ from partio.adapters.audio.matcher import (
     find_audio_sample_matches,
     find_best_sample_match,
 )
+from partio.cli.library import cut_rules
 from partio.cli.output import ExitCode, _json_flag, cut_summary, emit, fail, multi_cut_summary
+from partio.cli.prompting import prompt_sample_path
 from partio.cli.registry import command
+from partio.cli.select import GoBack, Option, select_one
 from partio.core.audio_cut import plan_cut, plan_multi_cut
+from partio.core.ports import CutRuleEntry
+
+console = Console(stderr=True)
+_MANUAL_CHOICE = "manual"
 
 
 def _default_output_path(source: Path) -> Path:
@@ -160,6 +171,62 @@ def _cut_all_breaks(
     )
 
 
+def _find_rule(ref: str) -> CutRuleEntry | None:
+    """Look up a saved rule by id or by label."""
+    for entry in cut_rules():
+        if ref in (entry.id, entry.label):
+            return entry
+    return None
+
+
+def _prompt_jingles(ctx: typer.Context) -> tuple[Path, Path]:
+    """Interactively resolve opening/closing jingles: a saved rule, or by hand."""
+    as_json = _json_flag(ctx)
+    saved = cut_rules()
+    if saved:
+        options: list[Option[CutRuleEntry | str]] = [
+            Option(
+                title=entry.label,
+                value=entry,
+                help=f"{entry.opening_path} / {entry.closing_path}",
+                group="saved rules",
+            )
+            for entry in saved
+        ]
+        options.append(Option(title="enter jingles manually", value=_MANUAL_CHOICE))
+        chosen = select_one("Pick a cut rule", options, console=console)
+        if chosen is None or isinstance(chosen, GoBack):
+            emit("Cancelled.", as_json=as_json)
+            raise SystemExit(ExitCode.OK)
+        if isinstance(chosen, CutRuleEntry):
+            return chosen.opening_path, chosen.closing_path
+
+    opening = prompt_sample_path("opening")
+    closing = prompt_sample_path("closing")
+    if opening is None or closing is None:
+        emit("Cancelled.", as_json=as_json)
+        raise SystemExit(ExitCode.OK)
+    return opening, closing
+
+
+def _resolve_jingles(
+    *, ctx: typer.Context, opening: Path | None, closing: Path | None, rule: str | None
+) -> tuple[Path, Path]:
+    """Resolve the opening/closing jingles from --rule, explicit paths, or a prompt."""
+    if rule is not None:
+        if opening is not None or closing is not None:
+            fail(ValueError("Pass --rule on its own, or --opening/--closing -- not both."))
+        entry = _find_rule(rule)
+        if entry is None:
+            fail(ValueError(f"No cut rule {rule!r}. List saved rules with `partio rule list`."))
+        return entry.opening_path, entry.closing_path
+    if opening is not None and closing is not None:
+        return opening, closing
+    if opening is not None or closing is not None:
+        fail(ValueError("Provide both --opening and --closing, or use --rule."))
+    return _prompt_jingles(ctx)
+
+
 @command("audio", "cut", help="Remove ad breaks bounded by an opening and closing jingle.")
 def cut(
     ctx: typer.Context,
@@ -168,13 +235,17 @@ def cut(
         typer.Option("--source", prompt="Source audio file", help="Episode to edit."),
     ],
     opening: Annotated[
-        Path,
-        typer.Option("--opening", prompt="Opening jingle", help="Jingle that starts a break."),
-    ],
+        Path | None,
+        typer.Option("--opening", help="Jingle that starts a break (or use --rule)."),
+    ] = None,
     closing: Annotated[
-        Path,
-        typer.Option("--closing", prompt="Closing jingle", help="Jingle that ends a break."),
-    ],
+        Path | None,
+        typer.Option("--closing", help="Jingle that ends a break (or use --rule)."),
+    ] = None,
+    rule: Annotated[
+        str | None,
+        typer.Option("--rule", help="Saved cut rule (id or name) providing the jingle pair."),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option(help="Destination MP3 (default: <source>_cut.mp3 beside the source)."),
@@ -200,12 +271,15 @@ def cut(
     ] = False,
 ) -> None:
     """Remove ad breaks bounded by an opening and closing jingle."""
+    resolved_opening, resolved_closing = _resolve_jingles(
+        ctx=ctx, opening=opening, closing=closing, rule=rule
+    )
     if all_breaks:
         _cut_all_breaks(
             ctx=ctx,
             source=source,
-            opening=opening,
-            closing=closing,
+            opening=resolved_opening,
+            closing=resolved_closing,
             output=output,
             step_seconds=step_seconds,
             threshold=threshold,
@@ -216,8 +290,8 @@ def cut(
     _cut_single_break(
         ctx=ctx,
         source=source,
-        opening=opening,
-        closing=closing,
+        opening=resolved_opening,
+        closing=resolved_closing,
         output=output,
         step_seconds=step_seconds,
         min_prominence=min_prominence,

@@ -36,6 +36,16 @@ class FeedEntry:
     label: str
 
 
+@dataclass(frozen=True)
+class CutRuleEntry:
+    """A saved opening/closing jingle pair, reusable by ``audio cut --rule``."""
+
+    id: str
+    label: str
+    opening_path: Path
+    closing_path: Path
+
+
 class ItemStore(Protocol[T]):
     """CRUD protocol for a collection of remembered items."""
 
@@ -56,4 +66,4 @@ class ItemStore(Protocol[T]):
         ...
 
 
-__all__ = ["AudioPathEntry", "AudioPathKind", "FeedEntry", "ItemStore"]
+__all__ = ["AudioPathEntry", "AudioPathKind", "CutRuleEntry", "FeedEntry", "ItemStore"]

@@ -11,7 +11,13 @@ from prompt_toolkit.key_binding import KeyBindings
 
 from partio.cli.library import Track
 from partio.cli.library import _tracks as tracks_module
-from partio.cli.prompting import _CUSTOM_PATH_CHOICE, _ask, prompt_for_args, required_options
+from partio.cli.prompting import (
+    _CUSTOM_PATH_CHOICE,
+    _ask,
+    prompt_for_args,
+    prompt_sample_path,
+    required_options,
+)
 from partio.cli.registry import CommandEntry
 from partio.cli.select import GO_BACK
 from partio.core.models import FeedEpisode
@@ -327,6 +333,16 @@ def test_source_prompts_ask_the_library_for_sources() -> None:
     tracks_mock.assert_called_once_with(AudioPathKind.SOURCE, full=False)
 
 
+def test_opening_and_closing_prompts_ask_the_library_for_samples() -> None:
+    """--opening/--closing (a cut rule's jingle pair) also narrow to samples."""
+    for flag in ("--opening", "--closing"):
+        tracks_patch, select_patch, fetch_patch = _picker([_track("Ep A", "a.mp3")], chosen=None)
+        with tracks_patch as tracks_mock, select_patch, fetch_patch:
+            _ask(Path, flag)
+
+        tracks_mock.assert_called_once_with(AudioPathKind.SAMPLE, full=False)
+
+
 def test_unknown_flag_names_are_not_narrowed() -> None:
     """A path flag that is not a kind name offers everything."""
     tracks_patch, select_patch, fetch_patch = _picker([_track("Ep A", "a.mp3")], chosen=None)
@@ -395,3 +411,38 @@ def test_esc_at_the_picker_steps_back() -> None:
         assert _ask(Path, "--source") is GO_BACK
 
     fetch_mock.assert_not_called()
+
+
+# -- prompt_sample_path -------------------------------------------------------
+
+
+def test_prompt_sample_path_returns_a_path() -> None:
+    """A chosen track's path comes back wrapped as a Path."""
+    available = [_track("Ep A", "a.mp3", kind=AudioPathKind.SAMPLE)]
+    tracks_patch, select_patch, fetch_patch = _picker(available, chosen=available[0])
+    with tracks_patch, select_patch, fetch_patch:
+        result = prompt_sample_path("opening")
+
+    assert result == Path("static/downloads/b.mp3")
+
+
+def test_prompt_sample_path_cancelled_returns_none() -> None:
+    """ctrl-c collapses to None, same as GO_BACK -- there is nowhere to step back to."""
+    with (
+        patch("partio.cli.prompting.tracks", return_value=[]),
+        patch("partio.cli.prompting.questionary.path") as path_mock,
+    ):
+        path_mock.return_value.application.key_bindings = KeyBindings()
+        path_mock.return_value.ask.return_value = None
+        assert prompt_sample_path("opening") is None
+
+
+def test_prompt_sample_path_go_back_returns_none() -> None:
+    """GO_BACK is not a real path, so it also collapses to None."""
+    with (
+        patch("partio.cli.prompting.tracks", return_value=[]),
+        patch("partio.cli.prompting.questionary.path") as path_mock,
+    ):
+        path_mock.return_value.application.key_bindings = KeyBindings()
+        path_mock.return_value.ask.return_value = GO_BACK
+        assert prompt_sample_path("opening") is None

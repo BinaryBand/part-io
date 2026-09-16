@@ -85,6 +85,9 @@ def test_registry_contains_all_commands() -> None:
         ("feed", "add"),
         ("feed", "list"),
         ("feed", "remove"),
+        ("rule", "add"),
+        ("rule", "list"),
+        ("rule", "remove"),
     }
 
 
