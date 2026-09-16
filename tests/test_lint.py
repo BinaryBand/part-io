@@ -45,8 +45,17 @@ def test_ruff_format() -> None:
 
 
 def test_ty_check() -> None:
-    """ty check must produce zero diagnostics."""
-    result = _run(["ty", "check", str(ROOT)])
+    """ty check must produce zero diagnostics.
+
+    Scoped to PACKAGE and TESTS rather than ROOT: unlike ruff, ty resolves
+    every third-party import against a single Python environment for
+    whatever path it's given, with no per-directory nested-config/venv
+    discovery. gui/server is a sibling Python project with its own venv and
+    its own equivalent gate (`cd gui/server && uv run pytest`) -- pointing
+    this ty invocation at ROOT would make it fail to resolve gui/server's
+    own dependencies (fastapi, uvicorn) against this project's venv.
+    """
+    result = _run(["ty", "check", str(PACKAGE), str(TESTS)])
     assert result.returncode == 0, (
         f"ty check failed (exit {result.returncode}):\n\n{result.stdout}\n{result.stderr}"
     )

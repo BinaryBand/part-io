@@ -1,0 +1,7 @@
+# Flutter/Dart build artifacts. .venv/, build/, __pycache__/ are already
+# covered by the repo root .gitignore (its entries match at any depth).
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+app/linux/flutter/ephemeral/
+app/.fvm/
